@@ -1,0 +1,4 @@
+date,ticker,aum
+# Optional manual override. Example:
+# 2026-06-12,TQQQ,30000000000
+# 2026-06-12,SOXL,15000000000
