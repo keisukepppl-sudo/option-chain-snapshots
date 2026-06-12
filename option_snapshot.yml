@@ -1,0 +1,40 @@
+name: Option Chain Snapshot
+
+on:
+  schedule:
+    # 06:30 JST = 21:30 UTC previous day
+    - cron: "30 21 * * 1-5"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  snapshot:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Run option snapshot
+        run: |
+          python option_snapshot_auto.py --tickers QQQ SPY SOXX SMH MU DRAM --max-expiries 10 --data-dir option_chain_snapshots --log option_snapshot_log.txt
+
+      - name: Commit snapshot files
+        run: |
+          git config user.name "github-actions"
+          git config user.email "github-actions@github.com"
+          git add option_chain_snapshots option_snapshot_log.txt
+          git commit -m "Update option chain snapshots" || echo "No changes to commit"
+          git push
