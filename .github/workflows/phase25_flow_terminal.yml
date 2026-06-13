@@ -1,0 +1,29 @@
+name: Phase 2.5 Flow Terminal
+
+on:
+  schedule:
+    - cron: "0 22 * * 1-5"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  phase25-flow:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - run: |
+          python -m pip install --upgrade pip
+          pip install yfinance pandas numpy scipy tabulate
+      - run: |
+          python phase25_flow_terminal.py --outdir daily_flow_outputs --snapshot-dir option_chain_snapshots --manual-aum manual_etf_aum.csv
+      - run: |
+          git config user.name "github-actions"
+          git config user.email "github-actions@github.com"
+          git add daily_flow_outputs
+          git commit -m "Update phase 2.5 flow outputs" || echo "No changes to commit"
+          git push
