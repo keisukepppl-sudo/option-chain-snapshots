@@ -1,8 +1,9 @@
 thresholds:
   min_price: 5.0
   min_avg_volume_50d: 500000
-  min_market_cap: 300000000
-  breakout_volume_multiple: 1.5
+  min_market_cap: 0
+  breakout_lookback_days: 20
+  breakout_volume_multiple: 1.2
   near_breakout_pct: 0.05
   defensive_down_day_threshold: -0.005
   min_down_days: 5
@@ -11,26 +12,54 @@ thresholds:
 
 notify:
   enabled: true
+  mode: production_momentum
   universe: russell1000
   universe_cache: cache/russell1000_iwb_holdings.csv
   discord_webhook_env: STOCK
   alert_ranks:
     - S
     - A
-    - B
+  production_momentum:
+    rs_min: 98
+    breakout_lookback_days: 20
+    volume_multiple_min: 1.2
+    volume_flag_high: 2.0
+    volume_flag_extreme: 3.0
+    min_price: 5.0
+    min_avg_volume_50d: 500000
+    market_cap_warning_threshold: 2000000000
+    gap_warning_pct: 0.15
+    iv_warning_threshold: 1.0
+    dte_min: 45
+    dte_max: 100
+    dte_target: 60
+    vertical_upper_pcts:
+      - 0.15
+      - 0.20
+    option_liquidity:
+      enabled: true
+      min_open_interest: 50
+      min_volume: 0
+      max_relative_spread: 0.30
+      max_spread_abs: 1.00
+    exit_rules:
+      profit_take: 1.25
+      time_stop_days: 10
+      time_stop_underlying_gain: 0.05
+      time_stop_theme_note: "Apply after human confirms Semiconductor / Software theme."
   rule:
-    standard_rs_min: 95
-    breakout_rs_min: 95
-    accumulation_min: 30
-    vcp_min: 50
-    distance_to_pivot_max: 0.12
+    standard_rs_min: 98
+    breakout_rs_min: 98
+    accumulation_min: 0
+    vcp_min: 0
+    distance_to_pivot_max: 0.00
   filters:
-    min_avg_volume_50d: 2000000
-    min_price: 10.0
-    min_market_cap_proxy: 2000000000
+    min_avg_volume_50d: 500000
+    min_price: 5.0
+    min_market_cap_proxy: 0
   backtest_reference:
-    source: "Russell1000, 2024-01-01 to 2026-06-13, 20-trading-day cooldown"
-    signals: 159
-    hit_rate_10pct_20d: 0.515723
-    hit_rate_15pct_20d: 0.402516
-    hit_rate_20pct_20d: 0.264151
+    source: "OOS 2025+, RS>98 + 20D high breakout + volume, 60DTE ATM/+20%"
+    test_pf: 2.39
+    test_avg_return: 0.286
+    test_win_rate: 0.525
+    test_hit_rate_100pct: 0.20
