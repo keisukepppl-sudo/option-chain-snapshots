@@ -2,3 +2,7 @@ yfinance
 pandas
 numpy
 scipy
+PyYAML
+pytest
+requests
+beautifulsoup4
