@@ -52,6 +52,7 @@ def scan_universe(
             trend = evaluate_trend_template(history)
             breakout = detect_breakout(
                 history,
+                lookback_max=int(thresholds.breakout_lookback_days),
                 volume_multiple=thresholds.breakout_volume_multiple,
                 near_pct=thresholds.near_breakout_pct,
             )
