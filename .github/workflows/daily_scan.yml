@@ -2,11 +2,10 @@ name: Daily Russell1000 Scanner
 
 on:
   schedule:
-    # 02:30 JST / 04:30 JST intraday checks.
     # GitHub Actions cron uses UTC.
-    - cron: "30 17 * * 1-5"
-    - cron: "30 19 * * 1-5"
-    - cron: "0 22 * * 1-5"
+    - cron: "30 17 * * 1-5"  # 02:30 JST
+    - cron: "30 19 * * 1-5"  # 04:30 JST
+    - cron: "0 22 * * 1-5"   # 07:00 JST
   workflow_dispatch:
 
 jobs:
