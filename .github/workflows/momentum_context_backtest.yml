@@ -1,0 +1,62 @@
+name: Momentum Context Backtest
+
+on:
+  workflow_dispatch:
+    inputs:
+      period:
+        description: "yfinance period, e.g. 3y or 5y"
+        required: false
+        default: "5y"
+      max_tickers:
+        description: "Optional ticker limit for quick smoke tests; leave empty for full Russell1000"
+        required: false
+        default: ""
+      fetch_market_caps:
+        description: "Fetch current market-cap proxy via yfinance fast_info"
+        type: boolean
+        required: false
+        default: false
+  push:
+    paths:
+      - "backtests/equity_context_backtest.py"
+      - ".github/workflows/momentum_context_backtest.yml"
+
+jobs:
+  backtest:
+    runs-on: ubuntu-latest
+    timeout-minutes: 360
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: |
+          pip install -r requirements.txt
+          pip install tabulate
+
+      - name: Run momentum context backtest
+        run: |
+          ARGS="--period ${{ github.event.inputs.period || '5y' }}"
+          if [ -n "${{ github.event.inputs.max_tickers }}" ]; then
+            ARGS="$ARGS --max-tickers ${{ github.event.inputs.max_tickers }}"
+          fi
+          if [ "${{ github.event.inputs.fetch_market_caps }}" = "true" ]; then
+            ARGS="$ARGS --fetch-market-caps"
+          fi
+          echo "Running: python backtests/equity_context_backtest.py $ARGS"
+          python backtests/equity_context_backtest.py $ARGS
+
+      - name: Upload backtest artifacts
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: momentum-context-backtest
+          path: |
+            output/backtests/**/*.csv
+            output/backtests/**/*.md
+          if-no-files-found: warn
