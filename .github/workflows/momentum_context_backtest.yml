@@ -1,5 +1,7 @@
 name: Momentum Context Backtest
 
+# Triggered by push to this workflow/script path or manually from Actions.
+
 on:
   workflow_dispatch:
     inputs:
