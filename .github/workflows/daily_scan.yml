@@ -3,9 +3,14 @@ name: Daily Russell1000 Scanner
 on:
   schedule:
     # GitHub Actions cron uses UTC.
+    - cron: "30 14 * * 1-5"  # 23:30 JST
+    - cron: "30 15 * * 1-5"  # 00:30 JST
+    - cron: "30 16 * * 1-5"  # 01:30 JST
     - cron: "30 17 * * 1-5"  # 02:30 JST
+    - cron: "30 18 * * 1-5"  # 03:30 JST
     - cron: "30 19 * * 1-5"  # 04:30 JST
     - cron: "0 22 * * 1-5"   # 07:00 JST
+    - cron: "0 2 * * 1-5"    # 11:00 JST
   workflow_dispatch:
 
 jobs:
@@ -28,7 +33,7 @@ jobs:
       - name: Run daily scanner
         env:
           STOCK: ${{ secrets.STOCK }}
-          PUSHOVER_ENABLED: ${{ secrets.PUSHOVER_ENABLED }}
+          PUSHOVER_ENABLED: ${{ (github.event.schedule == '30 17 * * 1-5' || github.event.schedule == '30 19 * * 1-5') && secrets.PUSHOVER_ENABLED || 'false' }}
           PUSHOVER_APP_TOKEN: ${{ secrets.PUSHOVER_APP_TOKEN }}
           PUSHOVER_USER_KEY: ${{ secrets.PUSHOVER_USER_KEY }}
           SCANNER_SCHEDULE_UTC: ${{ github.event.schedule }}
