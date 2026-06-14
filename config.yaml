@@ -1,0 +1,36 @@
+thresholds:
+  min_price: 5.0
+  min_avg_volume_50d: 500000
+  min_market_cap: 300000000
+  breakout_volume_multiple: 1.5
+  near_breakout_pct: 0.05
+  defensive_down_day_threshold: -0.005
+  min_down_days: 5
+  vcp_volume_dry_up_multiple: 0.70
+  tight_close_pct: 0.05
+
+notify:
+  enabled: true
+  universe: russell1000
+  universe_cache: cache/russell1000_iwb_holdings.csv
+  discord_webhook_env: STOCK
+  alert_ranks:
+    - S
+    - A
+    - B
+  rule:
+    standard_rs_min: 95
+    breakout_rs_min: 95
+    accumulation_min: 30
+    vcp_min: 50
+    distance_to_pivot_max: 0.12
+  filters:
+    min_avg_volume_50d: 2000000
+    min_price: 10.0
+    min_market_cap_proxy: 2000000000
+  backtest_reference:
+    source: "Russell1000, 2024-01-01 to 2026-06-13, 20-trading-day cooldown"
+    signals: 159
+    hit_rate_10pct_20d: 0.515723
+    hit_rate_15pct_20d: 0.402516
+    hit_rate_20pct_20d: 0.264151
