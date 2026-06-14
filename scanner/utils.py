@@ -15,6 +15,7 @@ class Thresholds:
     min_price: float = 5.0
     min_avg_volume_50d: float = 500_000.0
     min_market_cap: float = 300_000_000.0
+    breakout_lookback_days: int = 20
     breakout_volume_multiple: float = 1.5
     near_breakout_pct: float = 0.05
     defensive_down_day_threshold: float = -0.005
