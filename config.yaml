@@ -11,6 +11,7 @@ thresholds:
 
 notify:
   enabled: true
+  mode: production_momentum
   universe: russell1000
   universe_cache: cache/russell1000_iwb_holdings.csv
   discord_webhook_env: STOCK
@@ -34,3 +35,49 @@ notify:
     hit_rate_10pct_20d: 0.515723
     hit_rate_15pct_20d: 0.402516
     hit_rate_20pct_20d: 0.264151
+  production:
+    rs_min: 98
+    breakout_lookback_days: 20
+    s_volume_multiple_min: 1.2
+    a_volume_multiple_min: 1.2
+    volume_strong_flag: 2.0
+    volume_extreme_flag: 3.0
+    danger_market_cap: 2000000000
+    danger_gap_pct: 0.15
+    danger_iv: 1.00
+    earnings_check_gap_pct: 0.08
+    option_liquidity:
+      enabled: true
+      min_dte: 45
+      max_dte: 100
+      min_open_interest_per_leg: 100
+      max_spread_pct: 0.35
+
+market_dashboard:
+  us_market:
+    - QQQ
+    - SPY
+    - MU
+    - DRAM
+  option_chain_tickers:
+    - QQQ
+    - SPY
+    - MU
+    - DRAM
+  vol_surface_tickers:
+    - QQQ
+    - SPY
+    - MU
+    - DRAM
+  korea_market:
+    KOSPI: "^KS11"
+    KOSPI200: "^KS200"
+    Samsung Electronics: "005930.KS"
+    SK Hynix: "000660.KS"
+  korea_leveraged_etfs:
+    KODEX Leverage:
+      ticker: "122630.KS"
+      leverage: 2.0
+    KODEX 200 Futures Inverse 2X:
+      ticker: "252670.KS"
+      leverage: -2.0
