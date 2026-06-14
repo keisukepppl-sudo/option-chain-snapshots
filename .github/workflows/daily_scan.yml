@@ -1,0 +1,38 @@
+name: Daily Russell1000 Scanner
+
+on:
+  schedule:
+    # Around 07:00 JST after the US regular close.
+    # 22:00 UTC is 07:00 JST.
+    - cron: "0 22 * * 1-5"
+  workflow_dispatch:
+
+jobs:
+  scan:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Run daily scanner
+        env:
+          STOCK: ${{ secrets.STOCK }}
+        run: python scanner_notify.py
+
+      - name: Upload scanner CSV
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: russell1000-daily-scan
+          path: scanner_alerts/**/*.csv
+          if-no-files-found: ignore
