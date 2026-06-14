@@ -1,12 +1,12 @@
 # Option Chain Snapshot via GitHub Actions
 
-This repository automatically saves option-chain snapshots and now includes a Russell1000 Minervini-style scanner notification workflow.
+This repository automatically saves option-chain snapshots and includes a Russell1000 production momentum scanner notification workflow.
 
 ## Files
 
 - `option_snapshot_auto.py`: option-chain snapshot script
 - `daily_flow_engine.py`: market-flow helper reports
-- `scanner_notify.py`: daily Russell1000 scanner notification runner
+- `scanner_notify.py`: daily Russell1000 production momentum notification runner
 - `discord_alert.py`: Discord Webhook sender
 - `scanner/`: modular scanner calculations
 - `config.yaml`: scanner and notification thresholds
@@ -14,50 +14,65 @@ This repository automatically saves option-chain snapshots and now includes a Ru
 - `.github/workflows/option_snapshot.yml`: option snapshot schedule
 - `.github/workflows/daily_scan.yml`: Russell1000 scanner notification schedule
 
-## Russell1000 Discord Scanner
+## Production Momentum Scanner
 
-This scanner is for candidate discovery and decision support only. It does not place orders, connect to a brokerage API, or make automated trading decisions. A human must review the chart, option chain liquidity, spread width, earnings date, IV, and risk/reward before any trade decision.
+This scanner is for candidate discovery and decision support only. It does not place orders, connect to a brokerage API, or make automated trading decisions. A human must review the chart, option chain liquidity, spread width, earnings date, IV, theme, valuation, and risk/reward before any trade decision.
 
-Daily notification rule:
+Current production notification rule:
 
 - Universe: Russell1000 via current iShares IWB holdings
-- Trend Template PASS
-- Standard RS >= 95
-- Breakout RS >= 95
-- Accumulation >= 30
-- VCP >= 50
-- Distance to Pivot <= 12%
-- Defensive RS: no condition
+- RS >= 98
+- Close > prior 20-day High
+- Volume Multiple >= 1.2
+- Market Cap is **not** an exclusion filter
+- Option Liquidity is checked after the initial candidate filter
 
-Additional notification filters:
+Why Market Cap is display-only:
 
-- 50-day average volume >= 2,000,000 shares
-- Price >= $10
-- Market-cap proxy >= $2B
+- Phase 11 OOS validation showed the old 2B-20B preference did not hold in 2025+.
+- Therefore Market Cap is shown as context, not used as a hard filter.
+- Buckets shown: `<2B`, `2B-20B`, `20B-50B`, `50B-200B`, `200B+`, `Unknown`.
 
-Discord message behavior:
+Discord notification behavior:
 
-- If signals exist, candidates are sent to Discord.
+- `S級`: production momentum candidate with option liquidity OK.
+- `A級`: production momentum candidate requiring human review because option liquidity is weak, unavailable, or unchecked.
 - If no signals exist, Discord receives exactly `No signals today`.
-- Signals are grouped in this order:
-
-```text
-🔥 S Rank
-🚨 A Rank
-⚠️ B Rank
-```
 
 Notification fields:
 
 - Ticker
 - Rank
-- Total Score
-- Standard RS
-- Breakout RS
-- Accumulation
-- VCP
-- Distance to Pivot
+- RS / Breakout RS
+- Close / prior 20-day High pivot
+- Volume Multiple
 - 50-day average volume
+- Market Cap and Market Cap Bucket
+- Gap % when available
+- Option Liquidity
+- IV
+- Suggested 60DTE ATM/+15% and ATM/+20% call vertical candidates
+- Exit rule display
+- Risk flags
+
+Risk flags:
+
+- Gap > 15%
+- Market Cap < 2B or unknown
+- Volume >= 2x
+- Volume >= 3x
+- Option Liquidity weak
+- IV > 100%
+
+Suggested option structure:
+
+- Default: 60DTE ATM/+15% and 60DTE ATM/+20% call vertical candidates.
+- If IV >= 100%, ATM/+15% is emphasized and ATM/+20% becomes secondary.
+
+Exit rule shown in notification:
+
+- Basic profit take: +125% option P/L.
+- If the human review confirms Semiconductor / Software theme: 10 trading days after entry, exit if the underlying has not gained at least +5%.
 
 ## GitHub Actions Setup
 
