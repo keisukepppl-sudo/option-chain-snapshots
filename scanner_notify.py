@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 import time
 import warnings
 from dataclasses import asdict
@@ -58,7 +59,19 @@ def thresholds_from_config(config: dict[str, Any]) -> Thresholds:
     raw["min_price"] = notify_filters.get("min_price", raw["min_price"])
     raw["min_avg_volume_50d"] = notify_filters.get("min_avg_volume_50d", raw["min_avg_volume_50d"])
     raw["min_market_cap"] = notify_filters.get("min_market_cap_proxy", raw["min_market_cap"])
+    prod = production_config(config)
+    if config.get("notify", {}).get("mode") == "production_momentum":
+        raw["breakout_lookback_days"] = prod.get("breakout_lookback_days", raw.get("breakout_lookback_days", 20))
+        raw["breakout_volume_multiple"] = prod.get("volume_multiple_min", raw["breakout_volume_multiple"])
+        raw["min_price"] = prod.get("min_price", raw["min_price"])
+        raw["min_avg_volume_50d"] = prod.get("min_avg_volume_50d", raw["min_avg_volume_50d"])
+        raw["min_market_cap"] = 0
     return Thresholds(**raw)
+
+
+def production_config(config: dict[str, Any]) -> dict[str, Any]:
+    notify = config.get("notify", {})
+    return notify.get("production_momentum", {}) or {}
 
 
 def clean_ticker(ticker: str) -> str:
@@ -180,7 +193,201 @@ def fetch_market_caps(tickers: list[str]) -> dict[str, float]:
     return market_caps
 
 
+def market_cap_bucket(value: Any) -> str:
+    if value is None or pd.isna(value):
+        return "Unknown"
+    v = float(value)
+    if v < 2_000_000_000:
+        return "<2B"
+    if v < 20_000_000_000:
+        return "2B-20B"
+    if v < 50_000_000_000:
+        return "20B-50B"
+    if v < 200_000_000_000:
+        return "50B-200B"
+    return "200B+"
+
+
 def select_alert_candidates(results: pd.DataFrame, config: dict[str, Any]) -> pd.DataFrame:
+    if config.get("notify", {}).get("mode") == "production_momentum":
+        return select_production_momentum_candidates(results, config)
+    return select_legacy_alert_candidates(results, config)
+
+
+def select_production_momentum_candidates(results: pd.DataFrame, config: dict[str, Any]) -> pd.DataFrame:
+    prod = production_config(config)
+    if results.empty:
+        return results.copy()
+    required = [
+        "ticker",
+        "close",
+        "pivot",
+        "standard_rs_score",
+        "breakout_rs_score",
+        "breakout_today",
+        "volume_multiple",
+        "avg_volume_50d",
+        "market_cap",
+    ]
+    missing = [col for col in required if col not in results.columns]
+    if missing:
+        raise ValueError(f"scanner results missing columns: {', '.join(missing)}")
+
+    rs_min = float(prod.get("rs_min", 98))
+    volume_min = float(prod.get("volume_multiple_min", 1.2))
+    min_price = float(prod.get("min_price", 5.0))
+    min_avg_volume = float(prod.get("min_avg_volume_50d", 500_000))
+
+    mask = (
+        (results["standard_rs_score"] >= rs_min)
+        & (results["breakout_rs_score"] >= rs_min)
+        & (results["breakout_today"].astype(bool))
+        & (results["volume_multiple"] >= volume_min)
+        & (results["close"] >= min_price)
+        & (results["avg_volume_50d"] >= min_avg_volume)
+    )
+    out = results[mask].copy()
+    if out.empty:
+        return out
+
+    out["market_cap_bucket"] = out["market_cap"].map(market_cap_bucket)
+    out["volume_2x_flag"] = out["volume_multiple"] >= float(prod.get("volume_flag_high", 2.0))
+    out["volume_3x_flag"] = out["volume_multiple"] >= float(prod.get("volume_flag_extreme", 3.0))
+    out["gap_pct"] = compute_gap_pct(out)
+    out["gap_warning"] = out["gap_pct"].abs() >= float(prod.get("gap_warning_pct", 0.15))
+    out["market_cap_warning"] = out["market_cap"].isna() | (out["market_cap"] < float(prod.get("market_cap_warning_threshold", 2_000_000_000)))
+    out["risk_flags"] = out.apply(lambda r: ", ".join(build_risk_flags(r, prod)) or "None", axis=1)
+    out["alert_rank"] = "A"
+    out["option_liquidity"] = "Unchecked"
+    out["option_liquidity_ok"] = False
+    out["iv"] = math.nan
+    out["suggested_verticals"] = build_vertical_label(prod)
+    out["exit_rule"] = build_exit_rule_label(prod)
+
+    rank_order = {"S": 0, "A": 1}
+    out["rank_order"] = out["alert_rank"].map(rank_order).fillna(99)
+    return out.sort_values(
+        ["rank_order", "standard_rs_score", "volume_multiple"],
+        ascending=[True, False, False],
+    ).drop(columns=["rank_order"])
+
+
+def compute_gap_pct(df: pd.DataFrame) -> pd.Series:
+    if "open" in df.columns and "prev_close" in df.columns:
+        return pd.to_numeric(df["open"], errors="coerce") / pd.to_numeric(df["prev_close"], errors="coerce") - 1.0
+    return pd.Series([math.nan] * len(df), index=df.index)
+
+
+def build_risk_flags(row: pd.Series, prod: dict[str, Any]) -> list[str]:
+    flags: list[str] = []
+    if bool(row.get("gap_warning", False)):
+        flags.append("Gap>15%")
+    if row.get("market_cap_bucket") in {"<2B", "Unknown"}:
+        flags.append("MarketCapCheck")
+    if bool(row.get("volume_2x_flag", False)):
+        flags.append("Volume>=2x")
+    if bool(row.get("volume_3x_flag", False)):
+        flags.append("Volume>=3x")
+    return flags
+
+
+def build_vertical_label(prod: dict[str, Any]) -> str:
+    pcts = prod.get("vertical_upper_pcts", [0.15, 0.20])
+    labels = [f"60DTE ATM/+{int(float(p) * 100)}%" for p in pcts]
+    return " | ".join(labels)
+
+
+def build_exit_rule_label(prod: dict[str, Any]) -> str:
+    exits = prod.get("exit_rules", {})
+    profit = float(exits.get("profit_take", 1.25))
+    days = int(exits.get("time_stop_days", 10))
+    gain = float(exits.get("time_stop_underlying_gain", 0.05))
+    return f"+{profit * 100:.0f}% profit take; {days}D +{gain * 100:.0f}% underlying time-stop after human theme check"
+
+
+def enrich_option_liquidity(candidates: pd.DataFrame, config: dict[str, Any]) -> pd.DataFrame:
+    prod = production_config(config)
+    liquidity_cfg = prod.get("option_liquidity", {})
+    if candidates.empty or not liquidity_cfg.get("enabled", True):
+        if not candidates.empty:
+            candidates["option_liquidity_ok"] = True
+            candidates["option_liquidity"] = "Skipped"
+            candidates["alert_rank"] = "S"
+        return candidates
+
+    import yfinance as yf
+
+    rows = []
+    for _, row in candidates.iterrows():
+        r = row.copy()
+        try:
+            liq = evaluate_option_liquidity(
+                ticker=str(row["ticker"]),
+                spot=float(row["close"]),
+                yf_module=yf,
+                prod=prod,
+            )
+            for k, v in liq.items():
+                r[k] = v
+        except Exception as exc:
+            r["option_liquidity_ok"] = False
+            r["option_liquidity"] = f"Error: {exc}"
+        r["alert_rank"] = "S" if bool(r.get("option_liquidity_ok", False)) else "A"
+        risk_flags = build_risk_flags(r, prod)
+        if not bool(r.get("option_liquidity_ok", False)):
+            risk_flags.append("OptionLiquidityWeak")
+        iv_val = r.get("iv")
+        if iv_val is not None and not pd.isna(iv_val) and float(iv_val) >= float(prod.get("iv_warning_threshold", 1.0)):
+            risk_flags.append("IV>100%")
+            r["suggested_verticals"] = "60DTE ATM/+15% emphasized | ATM/+20% secondary"
+        r["risk_flags"] = ", ".join(risk_flags) or "None"
+        rows.append(r)
+        time.sleep(0.05)
+    out = pd.DataFrame(rows)
+    rank_order = {"S": 0, "A": 1}
+    out["rank_order"] = out["alert_rank"].map(rank_order).fillna(99)
+    return out.sort_values(["rank_order", "standard_rs_score", "volume_multiple"], ascending=[True, False, False]).drop(columns=["rank_order"])
+
+
+def evaluate_option_liquidity(ticker: str, spot: float, yf_module: Any, prod: dict[str, Any]) -> dict[str, Any]:
+    tk = yf_module.Ticker(ticker)
+    today = pd.Timestamp.utcnow().tz_localize(None).normalize()
+    expiries = []
+    for exp in getattr(tk, "options", []) or []:
+        exp_dt = pd.to_datetime(exp)
+        dte = int((exp_dt - today).days)
+        if int(prod.get("dte_min", 45)) <= dte <= int(prod.get("dte_max", 100)):
+            expiries.append((abs(dte - int(prod.get("dte_target", 60))), dte, exp))
+    if not expiries:
+        return {"option_liquidity_ok": False, "option_liquidity": "No 45-100DTE chain", "iv": math.nan}
+    _, dte, exp = sorted(expiries)[0]
+    chain = tk.option_chain(exp)
+    calls = chain.calls.copy()
+    if calls.empty:
+        return {"option_liquidity_ok": False, "option_liquidity": "No calls", "iv": math.nan}
+    calls["strike_distance"] = (calls["strike"] - spot).abs()
+    atm = calls.sort_values("strike_distance").iloc[0]
+    bid = float(atm.get("bid", 0) or 0)
+    ask = float(atm.get("ask", 0) or 0)
+    mid = (bid + ask) / 2 if ask > 0 else 0
+    rel_spread = (ask - bid) / mid if mid > 0 else math.inf
+    oi = float(atm.get("openInterest", 0) or 0)
+    vol = float(atm.get("volume", 0) or 0)
+    iv = float(atm.get("impliedVolatility", math.nan))
+    cfg = prod.get("option_liquidity", {})
+    ok = (
+        bid > 0
+        and ask > 0
+        and rel_spread <= float(cfg.get("max_relative_spread", 0.30))
+        and (ask - bid) <= float(cfg.get("max_spread_abs", 1.00))
+        and oi >= float(cfg.get("min_open_interest", 50))
+        and vol >= float(cfg.get("min_volume", 0))
+    )
+    label = f"{'OK' if ok else 'Weak'}: {exp} {dte}DTE ATM {atm['strike']:.2f}, spread {rel_spread:.0%}, OI {oi:.0f}, vol {vol:.0f}"
+    return {"option_liquidity_ok": bool(ok), "option_liquidity": label, "iv": iv, "option_expiry": exp, "option_dte": dte}
+
+
+def select_legacy_alert_candidates(results: pd.DataFrame, config: dict[str, Any]) -> pd.DataFrame:
     notify = config.get("notify", {})
     rule = notify.get("rule", {})
     filters = notify.get("filters", {})
@@ -200,7 +407,6 @@ def select_alert_candidates(results: pd.DataFrame, config: dict[str, Any]) -> pd
     missing = [col for col in required if col not in results.columns]
     if missing:
         raise ValueError(f"scanner results missing columns: {', '.join(missing)}")
-
     mask = (
         results["trend_passed"].astype(bool)
         & (results["standard_rs_score"] >= rule.get("standard_rs_min", 95))
@@ -258,9 +464,11 @@ def format_pct(value: Any) -> str:
 def build_discord_message(candidates: pd.DataFrame, csv_path: Path, config: dict[str, Any], limit: int = 10) -> str:
     if candidates.empty:
         return "No signals today"
+    if config.get("notify", {}).get("mode") == "production_momentum":
+        return build_production_message(candidates, csv_path, config, limit)
 
-    sections = ["\U0001f6a8 Daily Scanner Alert"]
-    headings = [("S", "\U0001f525 S Rank"), ("A", "\U0001f6a8 A Rank"), ("B", "\u26a0\ufe0f B Rank")]
+    sections = ["🚨 Daily Scanner Alert"]
+    headings = [("S", "🔥 S Rank"), ("A", "🚨 A Rank"), ("B", "⚠️ B Rank")]
     shown = 0
     for rank, heading in headings:
         group = candidates[candidates["rank"] == rank].head(max(0, limit - shown))
@@ -275,6 +483,69 @@ def build_discord_message(candidates: pd.DataFrame, csv_path: Path, config: dict
     if len(candidates) > shown:
         sections.append(f"... plus {len(candidates) - shown} more signals in `{csv_path}`")
     return "\n\n".join(sections)
+
+
+def build_production_message(candidates: pd.DataFrame, csv_path: Path, config: dict[str, Any], limit: int = 10) -> str:
+    prod = production_config(config)
+    ref = config.get("notify", {}).get("backtest_reference", {})
+    sections = [
+        "🚨 Production Momentum Alert",
+        f"Rule: RS>={prod.get('rs_min', 98)} | Close > prior {prod.get('breakout_lookback_days', 20)}D High | Volume>={prod.get('volume_multiple_min', 1.2)}x | MarketCap displayed only",
+        f"OOS reference: PF {ref.get('test_pf', 'N/A')} | Avg {format_pct(ref.get('test_avg_return'))} | Win {format_pct(ref.get('test_win_rate'))}",
+        "Regime: RS98 breadth rising/falling = N/A in this run",
+    ]
+    headings = [("S", "🔥 S級: Option Liquidity OK"), ("A", "🚨 A級 / Review: Liquidity unchecked or weak")]
+    shown = 0
+    rank_col = "alert_rank" if "alert_rank" in candidates.columns else "rank"
+    for rank, heading in headings:
+        group = candidates[candidates[rank_col] == rank].head(max(0, limit - shown))
+        if group.empty:
+            continue
+        sections.append(heading)
+        for _, row in group.iterrows():
+            sections.append(_format_production_candidate_block(row))
+            shown += 1
+        if shown >= limit:
+            break
+    if len(candidates) > shown:
+        sections.append(f"... plus {len(candidates) - shown} more signals in `{csv_path}`")
+    return "\n\n".join(sections)
+
+
+def _format_production_candidate_block(row: pd.Series) -> str:
+    flags = row.get("risk_flags", "None")
+    return (
+        "{ticker}\n"
+        "Rank: {rank}\n"
+        "RS: {rs:.0f} | Breakout RS: {breakout_rs:.0f}\n"
+        "Close/Pivot: {close:.2f} / {pivot:.2f}\n"
+        "Volume Multiple: {vol_mult:.2f}x | Avg Vol: {avg_vol}\n"
+        "Market Cap: {mcap} ({bucket})\n"
+        "Gap: {gap}\n"
+        "Option Liquidity: {liq}\n"
+        "IV: {iv}\n"
+        "Suggested: {verticals}\n"
+        "Exit: {exit_rule}\n"
+        "Flags: {flags}\n"
+        "--------------------------------"
+    ).format(
+        ticker=row["ticker"],
+        rank=row.get("alert_rank", row.get("rank", "A")),
+        rs=float(row["standard_rs_score"]),
+        breakout_rs=float(row["breakout_rs_score"]),
+        close=float(row["close"]),
+        pivot=float(row["pivot"]),
+        vol_mult=float(row["volume_multiple"]),
+        avg_vol=format_number(row["avg_volume_50d"]),
+        mcap=format_number(row.get("market_cap")),
+        bucket=row.get("market_cap_bucket", market_cap_bucket(row.get("market_cap"))),
+        gap=format_pct(row.get("gap_pct")),
+        liq=row.get("option_liquidity", "Unchecked"),
+        iv=format_pct(row.get("iv")),
+        verticals=row.get("suggested_verticals", "60DTE ATM/+15% | ATM/+20%"),
+        exit_rule=row.get("exit_rule", "+125% profit take"),
+        flags=flags,
+    )
 
 
 def _format_candidate_block(row: pd.Series) -> str:
@@ -315,6 +586,8 @@ def run(config: dict[str, Any], outdir: Path, period: str) -> tuple[pd.DataFrame
     thresholds = thresholds_from_config(config)
     results = scan_universe(histories, benchmark, market_caps=market_caps, thresholds=thresholds)
     candidates = select_alert_candidates(results, config)
+    if notify.get("mode") == "production_momentum":
+        candidates = enrich_option_liquidity(candidates, config)
     csv_path = save_candidates(candidates, outdir / today_str())
     return candidates, csv_path
 
