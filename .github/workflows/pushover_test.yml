@@ -1,0 +1,42 @@
+name: Pushover Test
+
+on:
+  workflow_dispatch:
+    inputs:
+      priority:
+        description: "Pushover test priority"
+        required: true
+        default: "normal"
+        type: choice
+        options:
+          - normal
+          - high
+          - emergency
+      message:
+        description: "Optional custom message"
+        required: false
+        default: ""
+
+jobs:
+  pushover-test:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Send Pushover test notification
+        env:
+          PUSHOVER_ENABLED: ${{ secrets.PUSHOVER_ENABLED }}
+          PUSHOVER_APP_TOKEN: ${{ secrets.PUSHOVER_APP_TOKEN }}
+          PUSHOVER_USER_KEY: ${{ secrets.PUSHOVER_USER_KEY }}
+        run: python scripts/pushover_test.py --priority "${{ inputs.priority }}" --message "${{ inputs.message }}"

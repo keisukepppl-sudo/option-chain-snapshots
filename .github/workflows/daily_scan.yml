@@ -3,14 +3,11 @@ name: Daily Russell1000 Scanner
 on:
   schedule:
     # GitHub Actions cron uses UTC.
-    - cron: "30 14 * * 1-5"  # 23:30 JST
-    - cron: "30 15 * * 1-5"  # 00:30 JST
-    - cron: "30 16 * * 1-5"  # 01:30 JST
-    - cron: "30 17 * * 1-5"  # 02:30 JST
-    - cron: "30 18 * * 1-5"  # 03:30 JST
-    - cron: "30 19 * * 1-5"  # 04:30 JST
-    - cron: "0 22 * * 1-5"   # 07:00 JST
-    - cron: "0 2 * * 1-5"    # 11:00 JST
+    - cron: "30 13 * * 1-5"  # intraday_scan_2230_jst / 22:30 JST
+    - cron: "0 14 * * 1-5"   # intraday_scan_2300_jst / 23:00 JST
+    - cron: "15 19 * * 1-5"  # pre_close_scan_0415_jst / 04:15 JST
+    - cron: "25 19 * * 1-5"  # pre_close_scan_0425_jst / 04:25 JST
+    - cron: "35 19 * * 1-5"  # pre_close_scan_0435_jst / 04:35 JST
   workflow_dispatch:
 
 jobs:
@@ -33,16 +30,18 @@ jobs:
       - name: Run daily scanner
         env:
           STOCK: ${{ secrets.STOCK }}
-          PUSHOVER_ENABLED: ${{ github.event.schedule == '30 19 * * 1-5' && secrets.PUSHOVER_ENABLED || 'false' }}
+          PUSHOVER_ENABLED: ${{ secrets.PUSHOVER_ENABLED }}
           PUSHOVER_APP_TOKEN: ${{ secrets.PUSHOVER_APP_TOKEN }}
           PUSHOVER_USER_KEY: ${{ secrets.PUSHOVER_USER_KEY }}
           SCANNER_SCHEDULE_UTC: ${{ github.event.schedule }}
-        run: python scanner_notify.py
+        run: python scripts/production_scanner_entry.py
 
       - name: Upload scanner CSV
         uses: actions/upload-artifact@v4
         if: always()
         with:
           name: russell1000-daily-scan
-          path: scanner_alerts/**/*.csv
+          path: |
+            scanner_alerts/**/*.csv
+            scanner_alerts/**/*.json
           if-no-files-found: ignore
