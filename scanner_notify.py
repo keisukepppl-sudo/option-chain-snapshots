@@ -248,11 +248,19 @@ def fetch_intraday_snapshots(tickers: list[str], interval: str = "5m") -> dict[s
             if today.empty:
                 continue
             latest = today.iloc[-1]
+            today_volume = today["Volume"].fillna(0)
+            vwap_denominator = float(today_volume.sum())
+            intraday_vwap = (
+                float((today["Close"].astype(float) * today_volume).sum() / vwap_denominator)
+                if vwap_denominator > 0
+                else math.nan
+            )
             snapshots[ticker] = {
                 "latest_price": float(latest["Close"]),
                 "intraday_open": float(today["Open"].dropna().iloc[0]) if not today["Open"].dropna().empty else math.nan,
                 "intraday_high": float(today["High"].max()),
-                "intraday_volume": float(today["Volume"].fillna(0).sum()),
+                "intraday_volume": vwap_denominator,
+                "intraday_vwap": intraday_vwap,
                 "latest_price_date": latest_ts.date().isoformat(),
                 "latest_price_time": latest_ts.isoformat(),
                 "session_fraction": session_fraction_from_timestamp(latest_ts),
@@ -329,14 +337,18 @@ def breakout_metrics(history: pd.DataFrame, intraday: dict[str, Any] | None = No
     volume = float(intraday["intraday_volume"]) if intraday and pd.notna(intraday.get("intraday_volume")) else float(df["Volume"].iloc[-1])
     fraction = float(intraday.get("session_fraction", 1.0)) if intraday else 1.0
     pace = volume / (avg_volume_50d * fraction) if avg_volume_50d and fraction > 0 else math.nan
+    gap_pct = open_price / prev_close - 1.0 if prev_close > 0 else math.nan
     return {
         "latest_price": latest_price,
         "close": latest_price,
         "intraday_high": intraday.get("intraday_high") if intraday else math.nan,
+        "intraday_open": open_price,
+        "intraday_vwap": intraday.get("intraday_vwap") if intraday else math.nan,
         "prior_20d_high": prior20_high,
         "breakout_price": latest_price,
         "breakout_date": intraday.get("latest_price_date") if intraday else pd.Timestamp(df.index[-1]).date().isoformat(),
-        "gap_pct": open_price / prev_close - 1.0 if prev_close > 0 else math.nan,
+        "gap_pct": gap_pct,
+        "gap_up_pct": gap_pct,
         "volume": volume,
         "avg_volume_50d": avg_volume_50d,
         "volume_multiple": pace if intraday else volume / avg_volume_50d if avg_volume_50d else math.nan,
@@ -402,6 +414,55 @@ def is_emergency_gap_excluded(row: dict[str, Any], threshold: float = 0.15) -> b
     return pd.notna(row.get("gap_pct")) and float(row["gap_pct"]) >= threshold
 
 
+def gap_pct_value(row: dict[str, Any]) -> float:
+    return float(row["gap_pct"]) if pd.notna(row.get("gap_pct")) else math.nan
+
+
+def is_high_gap_caution(row: dict[str, Any]) -> bool:
+    gap = gap_pct_value(row)
+    return pd.notna(gap) and 0.15 <= gap < 0.20
+
+
+def is_extreme_gap(row: dict[str, Any]) -> bool:
+    gap = gap_pct_value(row)
+    return pd.notna(gap) and gap >= 0.20
+
+
+def price_above_vwap(row: dict[str, Any]) -> bool:
+    price = row.get("latest_price", row.get("close"))
+    vwap = row.get("intraday_vwap")
+    return pd.notna(price) and pd.notna(vwap) and float(price) > float(vwap)
+
+
+def not_fading_from_open(row: dict[str, Any]) -> bool:
+    price = row.get("latest_price", row.get("close"))
+    open_price = row.get("intraday_open")
+    return pd.notna(price) and pd.notna(open_price) and float(price) >= float(open_price)
+
+
+def breakout_still_valid(row: dict[str, Any]) -> bool:
+    price = row.get("latest_price", row.get("close"))
+    prior = row.get("prior_20d_high")
+    return pd.notna(price) and pd.notna(prior) and float(price) > float(prior)
+
+
+def high_gap_exception_ok(row: pd.Series, config: dict[str, Any]) -> bool:
+    data = row.to_dict()
+    return bool(
+        is_high_gap_caution(data)
+        and (row.get("alert_rank") == "A" or is_strong_b(row, config, ignore_gap=True))
+        and near_intraday_high(data)
+        and price_above_vwap(data)
+        and not_fading_from_open(data)
+        and float(row.get("volume_multiple", 0) or 0) >= 1.2
+        and float(row.get("standard_rs_score", 0) or 0) >= 98
+        and breakout_still_valid(data)
+        and not is_healthcare_or_biotech(data)
+        and bool(row.get("option_liquidity_ok", False))
+        and not is_extreme_iv(data, config)
+    )
+
+
 def base_exclusion(row: dict[str, Any], config: dict[str, Any]) -> bool:
     if is_healthcare_or_biotech(row):
         return True
@@ -428,8 +489,10 @@ def risk_flags(row: dict[str, Any], config: dict[str, Any]) -> str:
     flags: list[str] = []
     if is_healthcare_or_biotech(row):
         flags.append("Biotech/Healthcare")
-    if is_emergency_gap_excluded(row):
-        flags.append("Gap >= 15%: Emergency excluded")
+    if is_extreme_gap(row):
+        flags.append("Gap >= 20%: Emergency excluded")
+    elif is_high_gap_caution(row):
+        flags.append("HIGH GAP CAUTION: consider smaller size")
     elif pd.notna(row.get("gap_pct")) and float(row["gap_pct"]) > float(production_config(config).get("danger_gap_pct", 0.15)):
         flags.append("Gap > 15%")
     if not bool(row.get("option_liquidity_ok", False)):
@@ -512,6 +575,8 @@ def candidate_block(row: pd.Series) -> str:
         f"RS: {float(row.get('standard_rs_score', 0)):.1f}\n"
         f"Volume Pace: {float(row.get('volume_multiple', 0)):.2f}x\n"
         f"Near Intraday High: {'Yes' if near_intraday_high(row.to_dict()) else 'No'}\n"
+        f"Above VWAP: {'Yes' if price_above_vwap(row.to_dict()) else 'No'}\n"
+        f"Not Fading From Open: {'Yes' if not_fading_from_open(row.to_dict()) else 'No'}\n"
         f"Sector: {row.get('sector_proxy', 'N/A')}\n"
         f"Theme: {row.get('theme', 'N/A')}\n"
         f"Conviction Tier: {row.get('conviction_tier', 'N/A')}\n"
@@ -561,12 +626,12 @@ def build_message(candidates: pd.DataFrame, csv_path: Path, schedule_utc: str, l
     hidden = len(candidates) - len(visible)
     if hidden > 0:
         sections.append(f"{hidden} C tier candidates saved to CSV/research log only.")
-    sections.append("Exit: Day10 +5%未達なら撤退 / +125%利確 or Day20")
+    sections.append("Exit: Day10 underlying +5% not reached -> exit / +125% take profit or Day20")
     sections.append(f"CSV: `{csv_path}`")
     return "\n\n".join(sections)
 
 
-def is_strong_b(row: pd.Series, config: dict[str, Any]) -> bool:
+def is_strong_b(row: pd.Series, config: dict[str, Any], ignore_gap: bool = False) -> bool:
     data = row.to_dict()
     return bool(
         row.get("alert_rank") == "B"
@@ -574,7 +639,7 @@ def is_strong_b(row: pd.Series, config: dict[str, Any]) -> bool:
         and near_intraday_high(data)
         and bool(row.get("option_liquidity_ok", False))
         and not is_healthcare_or_biotech(data)
-        and not is_emergency_gap_excluded(data)
+        and (ignore_gap or not is_emergency_gap_excluded(data))
         and not is_extreme_iv(data, config)
     )
 
@@ -583,8 +648,10 @@ def is_emergency_candidate(row: pd.Series, schedule_utc: str, config: dict[str, 
     if schedule_utc != PUSHOVER_EMERGENCY_SCHEDULE:
         return False
     data = row.to_dict()
-    if is_emergency_gap_excluded(data):
+    if is_extreme_gap(data):
         return False
+    if is_high_gap_caution(data):
+        return high_gap_exception_ok(row, config)
     rank = row.get("alert_rank")
     if rank in {"S", "A"}:
         return bool(
@@ -603,14 +670,17 @@ def select_pushover_candidates(candidates: pd.DataFrame, schedule_utc: str, conf
 
 
 def build_pushover_message(candidates: pd.DataFrame, csv_path: Path, limit: int = 8) -> str:
-    lines = ["04:30 Breakout Emergency", "Exit: Day10 +5%未達なら撤退 / +125%利確 or Day20"]
+    lines = ["04:30 Breakout Emergency", "Exit: Day10 underlying +5% not reached -> exit / +125% take profit or Day20"]
     for _, row in candidates.head(limit).iterrows():
         size = "S/A: review immediately" if row.get("alert_rank") in {"S", "A"} else "Strong B: smaller size only"
+        caution = " | HIGH GAP CAUTION: consider smaller size" if is_high_gap_caution(row.to_dict()) else ""
         lines.append(
             f"{row.get('alert_rank')} | {row.get('ticker')} {row.get('company_name') or ''} | Price {float(row.get('latest_price', row.get('close', 0))):.2f} | "
             f"RS {float(row.get('standard_rs_score', 0)):.1f} | Vol {float(row.get('volume_multiple', 0)):.2f}x | "
-            f"NearHigh {'Yes' if near_intraday_high(row.to_dict()) else 'No'} | Sector {row.get('sector_proxy', 'N/A')} | Theme {row.get('theme', 'N/A')} | "
+            f"NearHigh {'Yes' if near_intraday_high(row.to_dict()) else 'No'} | AboveVWAP {'Yes' if price_above_vwap(row.to_dict()) else 'No'} | "
+            f"NotFading {'Yes' if not_fading_from_open(row.to_dict()) else 'No'} | Sector {row.get('sector_proxy', 'N/A')} | Theme {row.get('theme', 'N/A')} | "
             f"Gap {format_pct(row.get('gap_pct'))} | IV {format_pct(row.get('option_iv'))} | {size} | Warnings {row.get('danger_flags', 'None')}"
+            f"{caution}"
         )
     if len(candidates) > limit:
         lines.append(f"... plus {len(candidates) - limit} more. CSV: {csv_path}")
