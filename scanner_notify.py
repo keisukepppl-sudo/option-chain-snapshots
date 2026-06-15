@@ -32,8 +32,7 @@ INTRADAY_DIGEST_SCHEDULES = {
     "30 18 * * 1-5",
     "30 19 * * 1-5",
 }
-PUSHOVER_A_SCHEDULES = {"30 17 * * 1-5", "30 19 * * 1-5"}
-PUSHOVER_B_SCHEDULES = {"30 19 * * 1-5"}
+PUSHOVER_EMERGENCY_SCHEDULE = "30 19 * * 1-5"  # 04:30 JST only.
 POST_MARKET_REVIEW_SCHEDULE = "0 2 * * 1-5"
 POST_CLOSE_SCHEDULE = "0 22 * * 1-5"
 
@@ -54,6 +53,7 @@ SEMICONDUCTOR_TICKERS = {
 AI_INFRA_TICKERS = {"NVDA", "AMD", "AVGO", "SMCI", "DELL", "HPE", "VRT", "ETN", "ANET", "MRVL", "CIEN", "MU", "PWR", "EME"}
 SPACE_TICKERS = {"RKLB", "ASTS", "LUNR", "RDW", "IRDM", "SPIR", "PL"}
 BIOTECH_KEYWORDS = ["BIO", "BIOTECH", "THERAPEUTICS", "PHARMA", "PHARMACEUTICAL", "GENE", "ONCOLOGY", "MEDICINE"]
+HEALTHCARE_SECTORS = {"Health Care", "Healthcare", "Biotech"}
 
 
 def today_str() -> str:
@@ -82,14 +82,10 @@ def production_config(config: dict[str, Any]) -> dict[str, Any]:
 def thresholds_from_config(config: dict[str, Any]) -> Thresholds:
     raw = dict(asdict(DEFAULT_THRESHOLDS))
     raw.update(config.get("thresholds", {}))
-    notify = config.get("notify", {})
-    if notify.get("mode") == "production_momentum":
+    if config.get("notify", {}).get("mode") == "production_momentum":
         raw["min_market_cap"] = 0
-    else:
-        filters = notify.get("filters", {})
-        raw["min_price"] = filters.get("min_price", raw["min_price"])
-        raw["min_avg_volume_50d"] = filters.get("min_avg_volume_50d", raw["min_avg_volume_50d"])
-        raw["min_market_cap"] = filters.get("min_market_cap_proxy", raw["min_market_cap"])
+        raw["min_avg_volume_50d"] = 0
+        raw["min_price"] = 0
     return Thresholds(**raw)
 
 
@@ -108,7 +104,6 @@ def parse_blackrock_holdings(portfolio_id: str) -> pd.DataFrame:
     response.raise_for_status()
     warnings.filterwarnings("ignore", category=XMLParsedAsHTMLWarning)
     soup = BeautifulSoup(response.text, "html.parser")
-
     parsed_rows: list[list[str]] = []
     for row in soup.find_all(["ss:row", "row"]):
         values = []
@@ -116,7 +111,6 @@ def parse_blackrock_holdings(portfolio_id: str) -> pd.DataFrame:
             data = cell.find(["ss:data", "data"])
             values.append(data.get_text(strip=True) if data else "")
         parsed_rows.append(values)
-
     header_idx = None
     for idx, row in enumerate(parsed_rows):
         if row[:4] == ["Ticker", "Name", "Sector", "Asset Class"]:
@@ -124,7 +118,6 @@ def parse_blackrock_holdings(portfolio_id: str) -> pd.DataFrame:
             break
     if header_idx is None:
         raise RuntimeError("Could not locate BlackRock holdings header")
-
     header = parsed_rows[header_idx]
     holdings: list[dict[str, Any]] = []
     for row in parsed_rows[header_idx + 1 :]:
@@ -133,21 +126,12 @@ def parse_blackrock_holdings(portfolio_id: str) -> pd.DataFrame:
         if len(row) < len(header):
             row = row + [""] * (len(header) - len(row))
         rec = dict(zip(header, row[: len(header)]))
-        if rec.get("Asset Class") != "Equity":
-            continue
-        if rec.get("Location") not in {"United States", ""}:
+        if rec.get("Asset Class") != "Equity" or rec.get("Location") not in {"United States", ""}:
             continue
         symbol = clean_ticker(rec.get("Ticker", ""))
         if not symbol or symbol == "--" or " " in symbol:
             continue
-        holdings.append(
-            {
-                "ticker": symbol,
-                "name": rec.get("Name", ""),
-                "sector": rec.get("Sector", ""),
-                "holding_weight_pct": pd.to_numeric(rec.get("Weight (%)"), errors="coerce"),
-            }
-        )
+        holdings.append({"ticker": symbol, "name": rec.get("Name", ""), "sector": rec.get("Sector", "")})
     return pd.DataFrame(holdings).drop_duplicates("ticker").sort_values("ticker")
 
 
@@ -166,20 +150,14 @@ def load_company_metadata(cache_path: Path | None = None) -> dict[str, dict[str,
     if not cache_path or not cache_path.exists():
         return {}
     raw = pd.read_csv(cache_path)
-    if "ticker" not in raw.columns:
-        return {}
     name_col = "name" if "name" in raw.columns else "Name" if "Name" in raw.columns else None
     sector_col = "sector" if "sector" in raw.columns else "Sector" if "Sector" in raw.columns else None
-    out: dict[str, dict[str, str]] = {}
+    meta: dict[str, dict[str, str]] = {}
     for _, row in raw.iterrows():
         ticker = clean_ticker(row.get("ticker", ""))
-        if not ticker:
-            continue
-        out[ticker] = {
-            "name": str(row.get(name_col, "")) if name_col else "",
-            "sector": str(row.get(sector_col, "")) if sector_col else "",
-        }
-    return out
+        if ticker:
+            meta[ticker] = {"name": str(row.get(name_col, "")) if name_col else "", "sector": str(row.get(sector_col, "")) if sector_col else ""}
+    return meta
 
 
 def fetch_histories(tickers: list[str], period: str) -> dict[str, pd.DataFrame]:
@@ -215,9 +193,9 @@ def fetch_market_caps(tickers: list[str]) -> dict[str, float]:
             print(f"Fetching market caps {idx}-{min(idx + 49, len(tickers))} / {len(tickers)}", flush=True)
         try:
             fast = yf.Ticker(ticker).fast_info or {}
-            market_cap = fast.get("marketCap", fast.get("market_cap"))
-            if market_cap:
-                market_caps[ticker] = float(market_cap)
+            cap = fast.get("marketCap", fast.get("market_cap"))
+            if cap:
+                market_caps[ticker] = float(cap)
         except Exception:
             pass
         time.sleep(0.03)
@@ -226,10 +204,7 @@ def fetch_market_caps(tickers: list[str]) -> dict[str, float]:
 
 def session_fraction_from_timestamp(timestamp: pd.Timestamp) -> float:
     ts = pd.Timestamp(timestamp)
-    if ts.tzinfo is None:
-        ts = ts.tz_localize("America/New_York")
-    else:
-        ts = ts.tz_convert("America/New_York")
+    ts = ts.tz_localize("America/New_York") if ts.tzinfo is None else ts.tz_convert("America/New_York")
     start = ts.normalize() + pd.Timedelta(hours=9, minutes=30)
     end = ts.normalize() + pd.Timedelta(hours=16)
     if ts <= start:
@@ -243,9 +218,10 @@ def fetch_intraday_snapshots(tickers: list[str], interval: str = "5m") -> dict[s
     import yfinance as yf
 
     snapshots: dict[str, dict[str, Any]] = {}
-    for i in range(0, len(tickers), CHUNK_SIZE):
-        chunk = sorted(set(tickers))[i : i + CHUNK_SIZE]
-        print(f"Downloading intraday latest {i + 1}-{i + len(chunk)} / {len(set(tickers))}", flush=True)
+    unique = sorted(set(tickers))
+    for i in range(0, len(unique), CHUNK_SIZE):
+        chunk = unique[i : i + CHUNK_SIZE]
+        print(f"Downloading intraday latest {i + 1}-{i + len(chunk)} / {len(unique)}", flush=True)
         try:
             raw = yf.download(chunk, period="5d", interval=interval, auto_adjust=False, progress=False, threads=True, group_by="ticker", timeout=45)
         except Exception:
@@ -311,7 +287,7 @@ def classify_theme(ticker: str, name: str = "", sector: str = "") -> str:
         return "Space"
     if any(keyword in blob for keyword in BIOTECH_KEYWORDS):
         return "Biotech"
-    if sector == "Health Care":
+    if sector in HEALTHCARE_SECTORS:
         return "Healthcare"
     if "SOFTWARE" in blob or "CLOUD" in blob:
         return "Cloud Software"
@@ -335,14 +311,6 @@ def format_pct(value: Any) -> str:
     return f"{float(value) * 100:.1f}%"
 
 
-def format_iv(value: Any) -> str:
-    return format_pct(value)
-
-
-def bool_flag(value: Any) -> str:
-    return "Yes" if bool(value) else "No"
-
-
 def breakout_metrics(history: pd.DataFrame, intraday: dict[str, Any] | None = None) -> dict[str, Any]:
     df = history.copy().dropna(subset=["Close"])
     if len(df) < 51:
@@ -362,8 +330,8 @@ def breakout_metrics(history: pd.DataFrame, intraday: dict[str, Any] | None = No
     fraction = float(intraday.get("session_fraction", 1.0)) if intraday else 1.0
     pace = volume / (avg_volume_50d * fraction) if avg_volume_50d and fraction > 0 else math.nan
     return {
-        "close": latest_price,
         "latest_price": latest_price,
+        "close": latest_price,
         "intraday_high": intraday.get("intraday_high") if intraday else math.nan,
         "prior_20d_high": prior20_high,
         "breakout_price": latest_price,
@@ -372,17 +340,15 @@ def breakout_metrics(history: pd.DataFrame, intraday: dict[str, Any] | None = No
         "volume": volume,
         "avg_volume_50d": avg_volume_50d,
         "volume_multiple": pace if intraday else volume / avg_volume_50d if avg_volume_50d else math.nan,
-        "volume_pace_multiple": pace,
         "latest_price_time": intraday.get("latest_price_time") if intraday else "",
         "breakout20": bool(latest_price > prior20_high),
     }
 
 
 def option_liquidity_for(ticker: str, spot: float, config: dict[str, Any]) -> dict[str, Any]:
-    prod = production_config(config)
-    cfg = prod.get("option_liquidity", {})
+    cfg = production_config(config).get("option_liquidity", {})
     if not cfg.get("enabled", True):
-        return {"option_liquidity": "skipped", "option_liquidity_ok": True, "option_iv": math.nan}
+        return {"option_liquidity": "skipped", "option_liquidity_ok": True, "option_iv": math.nan, "option_liquidity_reason": "skipped"}
     try:
         import yfinance as yf
 
@@ -390,9 +356,8 @@ def option_liquidity_for(ticker: str, spot: float, config: dict[str, Any]) -> di
         today = pd.Timestamp.utcnow().tz_localize(None).normalize()
         expiries = []
         for exp in getattr(tk, "options", []) or []:
-            exp_dt = pd.to_datetime(exp)
-            dte = int((exp_dt - today).days)
-            if int(cfg.get("min_dte", cfg.get("dte_min", 45))) <= dte <= int(cfg.get("max_dte", cfg.get("dte_max", 100))):
+            dte = int((pd.to_datetime(exp) - today).days)
+            if int(cfg.get("min_dte", 45)) <= dte <= int(cfg.get("max_dte", 100)):
                 expiries.append((abs(dte - 60), dte, exp))
         if not expiries:
             return {"option_liquidity": "unavailable", "option_liquidity_ok": False, "option_liquidity_reason": "no 45-100DTE chain", "option_iv": math.nan}
@@ -408,34 +373,69 @@ def option_liquidity_for(ticker: str, spot: float, config: dict[str, Any]) -> di
         spread = (ask - bid) / mid if mid > 0 else math.inf
         oi = float(atm.get("openInterest", 0) or 0)
         iv = float(atm.get("impliedVolatility", math.nan))
-        ok = bid > 0 and ask > 0 and spread <= float(cfg.get("max_spread_pct", cfg.get("max_relative_spread", 0.35))) and oi >= float(cfg.get("min_open_interest_per_leg", cfg.get("min_open_interest", 100)))
-        return {
-            "option_liquidity": "liquid" if ok else "insufficient",
-            "option_liquidity_ok": bool(ok),
-            "option_liquidity_reason": "ok" if ok else "wide spread or low OI",
-            "option_iv": iv,
-            "option_expiry": exp,
-            "option_dte": dte,
-        }
+        ok = bid > 0 and ask > 0 and spread <= float(cfg.get("max_spread_pct", 0.35)) and oi >= float(cfg.get("min_open_interest_per_leg", 100))
+        return {"option_liquidity": "liquid" if ok else "insufficient", "option_liquidity_ok": bool(ok), "option_liquidity_reason": "ok" if ok else "wide spread or low OI", "option_iv": iv, "option_expiry": exp, "option_dte": dte}
     except Exception as exc:
         return {"option_liquidity": "unavailable", "option_liquidity_ok": False, "option_liquidity_reason": str(exc), "option_iv": math.nan}
 
 
-def danger_flags(row: dict[str, Any], config: dict[str, Any]) -> str:
-    prod = production_config(config)
+def near_intraday_high(row: dict[str, Any], max_distance: float = 0.01) -> bool:
+    high = row.get("intraday_high")
+    price = row.get("latest_price", row.get("close"))
+    if high is None or pd.isna(high):
+        return True
+    if price is None or pd.isna(price) or float(high) <= 0:
+        return False
+    return (float(high) - float(price)) / float(high) <= max_distance
+
+
+def is_healthcare_or_biotech(row: dict[str, Any]) -> bool:
+    return str(row.get("theme", "")) in {"Biotech", "Healthcare"} or str(row.get("sector_proxy", "")) in {"Biotech", "Healthcare"}
+
+
+def is_extreme_iv(row: dict[str, Any], config: dict[str, Any]) -> bool:
+    severe = float(production_config(config).get("pushover", {}).get("severe_iv", 1.20))
+    return pd.notna(row.get("option_iv")) and float(row["option_iv"]) >= severe
+
+
+def base_exclusion(row: dict[str, Any], config: dict[str, Any]) -> bool:
+    if is_healthcare_or_biotech(row):
+        return True
+    if pd.notna(row.get("gap_pct")) and float(row["gap_pct"]) >= 0.20:
+        return True
+    if is_extreme_iv(row, config):
+        return True
+    return False
+
+
+def tier_for(row: dict[str, Any], config: dict[str, Any]) -> str:
+    if base_exclusion(row, config) or not bool(row.get("option_liquidity_ok", False)):
+        return "C"
+    volume = float(row.get("volume_multiple", 0) or 0)
+    near_high = near_intraday_high(row)
+    if volume >= 2.0 and near_high:
+        return "S"
+    if volume >= 1.5:
+        return "A"
+    if volume >= 1.2:
+        return "B"
+    return "C"
+
+
+def risk_flags(row: dict[str, Any], config: dict[str, Any]) -> str:
     flags: list[str] = []
-    if pd.notna(row.get("gap_pct")) and float(row["gap_pct"]) > float(prod.get("danger_gap_pct", 0.15)):
+    if is_healthcare_or_biotech(row):
+        flags.append("Biotech/Healthcare")
+    if pd.notna(row.get("gap_pct")) and float(row["gap_pct"]) >= 0.20:
+        flags.append("Gap >= 20%")
+    elif pd.notna(row.get("gap_pct")) and float(row["gap_pct"]) > float(production_config(config).get("danger_gap_pct", 0.15)):
         flags.append("Gap > 15%")
-    if pd.isna(row.get("market_cap")):
-        flags.append("Market Cap unknown")
-    elif float(row["market_cap"]) < float(prod.get("danger_market_cap", 2_000_000_000)):
-        flags.append("Market Cap < 2B")
-    if row.get("option_liquidity") in {"insufficient", "unavailable", "not_checked"}:
-        flags.append(f"Option Liquidity {row.get('option_liquidity')}")
-    if pd.notna(row.get("option_iv")) and float(row["option_iv"]) > float(prod.get("danger_iv", 1.00)):
-        flags.append("IV > 100")
-    if pd.notna(row.get("gap_pct")) and float(row["gap_pct"]) > float(prod.get("earnings_check_gap_pct", 0.08)):
-        flags.append("Earnings check required")
+    if not bool(row.get("option_liquidity_ok", False)):
+        flags.append("Option Liquidity NG")
+    if is_extreme_iv(row, config):
+        flags.append("Extreme IV")
+    if not near_intraday_high(row):
+        flags.append("Not near intraday high")
     return ", ".join(flags) if flags else "None"
 
 
@@ -443,7 +443,7 @@ def select_candidates(results: pd.DataFrame, histories: dict[str, pd.DataFrame],
     prod = production_config(config)
     rows: list[dict[str, Any]] = []
     rs_min = float(prod.get("rs_min", 98))
-    vol_min = float(prod.get("s_volume_multiple_min", prod.get("volume_multiple_min", 1.2)))
+    volume_min = float(prod.get("s_volume_multiple_min", prod.get("volume_multiple_min", 1.2)))
     for _, base in results.iterrows():
         ticker = str(base.get("ticker", "")).upper()
         if ticker not in histories:
@@ -455,7 +455,7 @@ def select_candidates(results: pd.DataFrame, histories: dict[str, pd.DataFrame],
             metrics = breakout_metrics(histories[ticker], intraday.get(ticker))
         except Exception:
             continue
-        if not metrics["breakout20"] or not pd.notna(metrics.get("volume_multiple")) or float(metrics["volume_multiple"]) < vol_min:
+        if not metrics["breakout20"] or not pd.notna(metrics.get("volume_multiple")) or float(metrics["volume_multiple"]) < volume_min:
             continue
         meta = metadata.get(ticker, {})
         row = base.to_dict()
@@ -466,14 +466,15 @@ def select_candidates(results: pd.DataFrame, histories: dict[str, pd.DataFrame],
         row["sector_proxy"] = row["theme"] if row["theme"] in {"Semiconductor", "AI Infrastructure", "Space", "Biotech", "Healthcare"} else row["source_sector"] or "Unknown"
         row["market_cap_bucket"] = market_cap_bucket(row.get("market_cap"))
         row.update(option_liquidity_for(ticker, float(row["close"]), config))
-        row["alert_rank"] = "S" if row.get("option_liquidity_ok") else "A"
-        row["conviction_tier"] = "A Tier" if row["alert_rank"] == "S" else "B Tier"
-        row["danger_flags"] = danger_flags(row, config)
-        rows.append(row)
+        row["alert_rank"] = tier_for(row, config)
+        row["conviction_tier"] = {"S": "S Tier", "A": "A Tier", "B": "B Tier"}.get(row["alert_rank"], "C Tier")
+        row["danger_flags"] = risk_flags(row, config)
+        if row["alert_rank"] != "C":
+            rows.append(row)
     out = pd.DataFrame(rows)
     if out.empty:
         return out
-    order = {"S": 0, "A": 1}
+    order = {"S": 0, "A": 1, "B": 2}
     out["rank_order"] = out["alert_rank"].map(order).fillna(99)
     return out.sort_values(["rank_order", "standard_rs_score", "volume_multiple"], ascending=[True, False, False]).drop(columns=["rank_order"])
 
@@ -495,25 +496,27 @@ def schedule_kind(schedule_utc: str) -> str:
     return "manual"
 
 
-def candidate_block(row: pd.Series, digest: bool = False) -> str:
+def candidate_block(row: pd.Series) -> str:
     price = row.get("latest_price", row.get("close", math.nan))
     prior = row.get("prior_20d_high", math.nan)
     breakout_pct = price / prior - 1.0 if pd.notna(price) and pd.notna(prior) and prior > 0 else math.nan
-    action = "Consider immediately / Emergency eligible" if row.get("alert_rank") == "S" else "Monitor / 04:30 confirmation candidate"
+    rank = row.get("alert_rank", "B")
+    action = {"S": "Consider immediately / 04:30 Emergency eligible", "A": "Priority review / 04:30 Emergency eligible", "B": "Monitor / strong B may alert at 04:30"}.get(rank, "No alert")
     return (
         f"{row.get('ticker')} - {row.get('company_name') or 'N/A'}\n"
-        f"Rank: {row.get('alert_rank', 'A')}\n"
+        f"Tier: {rank}\n"
         f"Price: {float(price):.2f}\n"
         f"Prior 20D High: {float(prior):.2f}\n"
         f"Breakout %: {format_pct(breakout_pct)}\n"
         f"RS: {float(row.get('standard_rs_score', 0)):.1f}\n"
         f"Volume Pace: {float(row.get('volume_multiple', 0)):.2f}x\n"
+        f"Near Intraday High: {'Yes' if near_intraday_high(row.to_dict()) else 'No'}\n"
         f"Sector: {row.get('sector_proxy', 'N/A')}\n"
         f"Theme: {row.get('theme', 'N/A')}\n"
         f"Conviction Tier: {row.get('conviction_tier', 'N/A')}\n"
         f"Gap: {format_pct(row.get('gap_pct'))}\n"
         f"Market Cap: {format_number(row.get('market_cap'))} ({row.get('market_cap_bucket', 'Unknown')})\n"
-        f"IV: {format_iv(row.get('option_iv'))}\n"
+        f"IV: {format_pct(row.get('option_iv'))}\n"
         f"Option Liquidity: {row.get('option_liquidity', 'N/A')} ({row.get('option_liquidity_reason', 'N/A')})\n"
         f"Suggested Vertical: 60DTE ATM/+15% and ATM/+20% Call Vertical\n"
         f"Warning Flags: {row.get('danger_flags', 'None')}\n"
@@ -522,7 +525,7 @@ def candidate_block(row: pd.Series, digest: bool = False) -> str:
     )
 
 
-def build_message(candidates: pd.DataFrame, csv_path: Path, config: dict[str, Any], schedule_utc: str, limit: int = 10) -> str:
+def build_message(candidates: pd.DataFrame, csv_path: Path, schedule_utc: str, limit: int = 10) -> str:
     kind = schedule_kind(schedule_utc)
     if candidates.empty:
         if kind == "intraday_digest":
@@ -532,22 +535,22 @@ def build_message(candidates: pd.DataFrame, csv_path: Path, config: dict[str, An
         return "No signals today"
     if kind == "post_market_review":
         title = "Post-Market Breakout Review"
-        subtitle = "Discord only. Review earnings quality, guidance, theme, valuation, IV, and option spreads."
+        subtitle = "Discord only. C tier is excluded. Review earnings, guidance, theme, valuation, IV, and option spread."
     elif kind == "intraday_digest":
         title = "Intraday Breakout Digest"
-        subtitle = "RS98 + latest intraday price > prior 20D high + intraday volume pace >= 1.2x. Discord digest; Pushover only for strict Emergency candidates."
+        subtitle = "Discord: S/A/B only. C tier hidden. Pushover Emergency: 04:30 JST only."
     else:
         title = "Production Momentum Alert"
-        subtitle = "RS98 + prior 20D high breakout + volume. Candidate discovery only."
+        subtitle = "RS98 + intraday breakout + volume pace. Candidate discovery only."
     sections = [title, subtitle]
     shown = 0
-    for rank, heading in [("S", "A Tier / Emergency Eligible"), ("A", "B Tier / Monitor")]:
+    for rank, heading in [("S", "S Tier"), ("A", "A Tier"), ("B", "B Tier")]:
         group = candidates[candidates["alert_rank"] == rank].head(max(0, limit - shown))
         if group.empty:
             continue
         sections.append(heading)
         for _, row in group.iterrows():
-            sections.append(candidate_block(row, digest=kind == "intraday_digest"))
+            sections.append(candidate_block(row))
             shown += 1
         if shown >= limit:
             break
@@ -558,40 +561,50 @@ def build_message(candidates: pd.DataFrame, csv_path: Path, config: dict[str, An
     return "\n\n".join(sections)
 
 
+def is_strong_b(row: pd.Series, config: dict[str, Any]) -> bool:
+    data = row.to_dict()
+    return bool(
+        row.get("alert_rank") == "B"
+        and float(row.get("volume_multiple", 0) or 0) >= 1.2
+        and near_intraday_high(data)
+        and bool(row.get("option_liquidity_ok", False))
+        and not is_healthcare_or_biotech(data)
+        and (pd.isna(row.get("gap_pct")) or float(row.get("gap_pct")) < 0.20)
+        and not is_extreme_iv(data, config)
+    )
+
+
 def is_emergency_candidate(row: pd.Series, schedule_utc: str, config: dict[str, Any]) -> bool:
-    theme = str(row.get("theme", ""))
-    sector = str(row.get("sector_proxy", ""))
-    if theme in {"Biotech", "Healthcare"} or sector in {"Biotech", "Healthcare"}:
+    if schedule_utc != PUSHOVER_EMERGENCY_SCHEDULE:
         return False
-    if not bool(row.get("option_liquidity_ok", False)):
-        return False
-    if pd.notna(row.get("option_iv")) and float(row["option_iv"]) >= float(production_config(config).get("pushover", {}).get("severe_iv", 1.20)):
-        return False
-    if pd.notna(row.get("gap_pct")) and float(row["gap_pct"]) >= 0.20:
-        return False
-    if schedule_utc in PUSHOVER_A_SCHEDULES and row.get("alert_rank") == "S":
-        return True
-    if schedule_utc in PUSHOVER_B_SCHEDULES and row.get("alert_rank") == "A" and float(row.get("volume_multiple", 0)) >= 1.5:
-        return True
-    return False
+    rank = row.get("alert_rank")
+    if rank in {"S", "A"}:
+        data = row.to_dict()
+        return bool(
+            bool(row.get("option_liquidity_ok", False))
+            and not is_healthcare_or_biotech(data)
+            and (pd.isna(row.get("gap_pct")) or float(row.get("gap_pct")) < 0.20)
+            and not is_extreme_iv(data, config)
+        )
+    return is_strong_b(row, config)
 
 
 def select_pushover_candidates(candidates: pd.DataFrame, schedule_utc: str, config: dict[str, Any]) -> pd.DataFrame:
-    if candidates.empty or schedule_utc == POST_MARKET_REVIEW_SCHEDULE:
+    if candidates.empty or schedule_utc != PUSHOVER_EMERGENCY_SCHEDULE:
         return candidates.iloc[0:0].copy()
     rows = [row for _, row in candidates.iterrows() if is_emergency_candidate(row, schedule_utc, config)]
     return pd.DataFrame(rows)
 
 
 def build_pushover_message(candidates: pd.DataFrame, csv_path: Path, limit: int = 8) -> str:
-    lines = ["Breakout emergency signal detected", "Exit: Day10 +5%未達なら撤退 / +125%利確 or Day20"]
+    lines = ["04:30 Breakout Emergency", "Exit: Day10 +5%未達なら撤退 / +125%利確 or Day20"]
     for _, row in candidates.head(limit).iterrows():
+        size = "S/A: review immediately" if row.get("alert_rank") in {"S", "A"} else "Strong B: smaller size only"
         lines.append(
-            f"{row.get('ticker')} {row.get('company_name') or ''} | Price {float(row.get('latest_price', row.get('close', 0))):.2f} | "
+            f"{row.get('alert_rank')} | {row.get('ticker')} {row.get('company_name') or ''} | Price {float(row.get('latest_price', row.get('close', 0))):.2f} | "
             f"RS {float(row.get('standard_rs_score', 0)):.1f} | Vol {float(row.get('volume_multiple', 0)):.2f}x | "
-            f"Sector {row.get('sector_proxy', 'N/A')} | Theme {row.get('theme', 'N/A')} | "
-            f"Tier {row.get('conviction_tier', 'N/A')} | Gap {format_pct(row.get('gap_pct'))} | IV {format_iv(row.get('option_iv'))} | "
-            f"Vertical 60DTE ATM/+15% and ATM/+20% | Warnings {row.get('danger_flags', 'None')}"
+            f"NearHigh {'Yes' if near_intraday_high(row.to_dict()) else 'No'} | Sector {row.get('sector_proxy', 'N/A')} | Theme {row.get('theme', 'N/A')} | "
+            f"Gap {format_pct(row.get('gap_pct'))} | IV {format_pct(row.get('option_iv'))} | {size} | Warnings {row.get('danger_flags', 'None')}"
         )
     if len(candidates) > limit:
         lines.append(f"... plus {len(candidates) - limit} more. CSV: {csv_path}")
@@ -622,7 +635,7 @@ def run(config: dict[str, Any], outdir: Path, period: str) -> tuple[pd.DataFrame
             intraday = fetch_intraday_snapshots(rs_candidates["ticker"].astype(str).tolist(), interval=prod.get("intraday", {}).get("interval", "5m"))
         candidates = select_candidates(results, histories, config, metadata, intraday)
     else:
-        candidates = results.iloc[0:0].copy()
+        candidates = results[results.get("rank", "C").isin(["S", "A", "B"])].copy() if "rank" in results.columns else results.iloc[0:0].copy()
     csv_path = save_candidates(candidates, outdir / today_str())
     return candidates, csv_path
 
@@ -639,7 +652,7 @@ def main() -> None:
     config = load_config(Path(args.config))
     candidates, csv_path = run(config, Path(args.outdir), period=args.period)
     schedule_utc = os.environ.get("SCANNER_SCHEDULE_UTC", "")
-    message = build_message(candidates, csv_path, config, schedule_utc, limit=args.message_limit)
+    message = build_message(candidates, csv_path, schedule_utc, limit=args.message_limit)
     print(message)
 
     if args.no_notify or not config.get("notify", {}).get("enabled", True):
@@ -648,13 +661,14 @@ def main() -> None:
 
     pushover_candidates = select_pushover_candidates(candidates, schedule_utc, config)
     if (
-        config.get("notify", {}).get("mode") == "production_momentum"
+        schedule_utc == PUSHOVER_EMERGENCY_SCHEDULE
+        and config.get("notify", {}).get("mode") == "production_momentum"
         and pushover_enabled()
         and os.environ.get("PUSHOVER_APP_TOKEN")
         and os.environ.get("PUSHOVER_USER_KEY")
         and not pushover_candidates.empty
     ):
-        send_pushover_emergency(build_pushover_message(pushover_candidates, csv_path), title="A\u7d1a Breakout Alert")
+        send_pushover_emergency(build_pushover_message(pushover_candidates, csv_path), title="04:30 Breakout Alert")
 
 
 if __name__ == "__main__":
