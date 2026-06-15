@@ -398,10 +398,12 @@ def is_extreme_iv(row: dict[str, Any], config: dict[str, Any]) -> bool:
     return pd.notna(row.get("option_iv")) and float(row["option_iv"]) >= severe
 
 
+def is_emergency_gap_excluded(row: dict[str, Any], threshold: float = 0.15) -> bool:
+    return pd.notna(row.get("gap_pct")) and float(row["gap_pct"]) >= threshold
+
+
 def base_exclusion(row: dict[str, Any], config: dict[str, Any]) -> bool:
     if is_healthcare_or_biotech(row):
-        return True
-    if pd.notna(row.get("gap_pct")) and float(row["gap_pct"]) >= 0.20:
         return True
     if is_extreme_iv(row, config):
         return True
@@ -426,8 +428,8 @@ def risk_flags(row: dict[str, Any], config: dict[str, Any]) -> str:
     flags: list[str] = []
     if is_healthcare_or_biotech(row):
         flags.append("Biotech/Healthcare")
-    if pd.notna(row.get("gap_pct")) and float(row["gap_pct"]) >= 0.20:
-        flags.append("Gap >= 20%")
+    if is_emergency_gap_excluded(row):
+        flags.append("Gap >= 15%: Emergency excluded")
     elif pd.notna(row.get("gap_pct")) and float(row["gap_pct"]) > float(production_config(config).get("danger_gap_pct", 0.15)):
         flags.append("Gap > 15%")
     if not bool(row.get("option_liquidity_ok", False)):
@@ -469,8 +471,7 @@ def select_candidates(results: pd.DataFrame, histories: dict[str, pd.DataFrame],
         row["alert_rank"] = tier_for(row, config)
         row["conviction_tier"] = {"S": "S Tier", "A": "A Tier", "B": "B Tier"}.get(row["alert_rank"], "C Tier")
         row["danger_flags"] = risk_flags(row, config)
-        if row["alert_rank"] != "C":
-            rows.append(row)
+        rows.append(row)
     out = pd.DataFrame(rows)
     if out.empty:
         return out
@@ -527,7 +528,8 @@ def candidate_block(row: pd.Series) -> str:
 
 def build_message(candidates: pd.DataFrame, csv_path: Path, schedule_utc: str, limit: int = 10) -> str:
     kind = schedule_kind(schedule_utc)
-    if candidates.empty:
+    visible = candidates[candidates["alert_rank"].isin(["S", "A", "B"])].copy() if not candidates.empty and "alert_rank" in candidates.columns else candidates
+    if visible.empty:
         if kind == "intraday_digest":
             return "No intraday breakout candidates"
         if kind == "post_market_review":
@@ -545,7 +547,7 @@ def build_message(candidates: pd.DataFrame, csv_path: Path, schedule_utc: str, l
     sections = [title, subtitle]
     shown = 0
     for rank, heading in [("S", "S Tier"), ("A", "A Tier"), ("B", "B Tier")]:
-        group = candidates[candidates["alert_rank"] == rank].head(max(0, limit - shown))
+        group = visible[visible["alert_rank"] == rank].head(max(0, limit - shown))
         if group.empty:
             continue
         sections.append(heading)
@@ -554,8 +556,11 @@ def build_message(candidates: pd.DataFrame, csv_path: Path, schedule_utc: str, l
             shown += 1
         if shown >= limit:
             break
-    if len(candidates) > shown:
-        sections.append(f"... plus {len(candidates) - shown} more candidates in `{csv_path}`")
+    if len(visible) > shown:
+        sections.append(f"... plus {len(visible) - shown} more Discord candidates in `{csv_path}`")
+    hidden = len(candidates) - len(visible)
+    if hidden > 0:
+        sections.append(f"{hidden} C tier candidates saved to CSV/research log only.")
     sections.append("Exit: Day10 +5%未達なら撤退 / +125%利確 or Day20")
     sections.append(f"CSV: `{csv_path}`")
     return "\n\n".join(sections)
@@ -569,7 +574,7 @@ def is_strong_b(row: pd.Series, config: dict[str, Any]) -> bool:
         and near_intraday_high(data)
         and bool(row.get("option_liquidity_ok", False))
         and not is_healthcare_or_biotech(data)
-        and (pd.isna(row.get("gap_pct")) or float(row.get("gap_pct")) < 0.20)
+        and not is_emergency_gap_excluded(data)
         and not is_extreme_iv(data, config)
     )
 
@@ -577,13 +582,14 @@ def is_strong_b(row: pd.Series, config: dict[str, Any]) -> bool:
 def is_emergency_candidate(row: pd.Series, schedule_utc: str, config: dict[str, Any]) -> bool:
     if schedule_utc != PUSHOVER_EMERGENCY_SCHEDULE:
         return False
+    data = row.to_dict()
+    if is_emergency_gap_excluded(data):
+        return False
     rank = row.get("alert_rank")
     if rank in {"S", "A"}:
-        data = row.to_dict()
         return bool(
             bool(row.get("option_liquidity_ok", False))
             and not is_healthcare_or_biotech(data)
-            and (pd.isna(row.get("gap_pct")) or float(row.get("gap_pct")) < 0.20)
             and not is_extreme_iv(data, config)
         )
     return is_strong_b(row, config)
