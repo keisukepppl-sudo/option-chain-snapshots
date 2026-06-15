@@ -446,23 +446,6 @@ def breakout_still_valid(row: dict[str, Any]) -> bool:
     return pd.notna(price) and pd.notna(prior) and float(price) > float(prior)
 
 
-def high_gap_exception_ok(row: pd.Series, config: dict[str, Any]) -> bool:
-    data = row.to_dict()
-    return bool(
-        is_high_gap_caution(data)
-        and (row.get("alert_rank") == "A" or is_strong_b(row, config, ignore_gap=True))
-        and near_intraday_high(data)
-        and price_above_vwap(data)
-        and not_fading_from_open(data)
-        and float(row.get("volume_multiple", 0) or 0) >= 1.2
-        and float(row.get("standard_rs_score", 0) or 0) >= 98
-        and breakout_still_valid(data)
-        and not is_healthcare_or_biotech(data)
-        and bool(row.get("option_liquidity_ok", False))
-        and not is_extreme_iv(data, config)
-    )
-
-
 def base_exclusion(row: dict[str, Any], config: dict[str, Any]) -> bool:
     if is_healthcare_or_biotech(row):
         return True
@@ -475,9 +458,6 @@ def tier_for(row: dict[str, Any], config: dict[str, Any]) -> str:
     if base_exclusion(row, config) or not bool(row.get("option_liquidity_ok", False)):
         return "C"
     volume = float(row.get("volume_multiple", 0) or 0)
-    near_high = near_intraday_high(row)
-    if volume >= 2.0 and near_high:
-        return "S"
     if volume >= 1.5:
         return "A"
     if volume >= 1.2:
@@ -532,13 +512,23 @@ def select_candidates(results: pd.DataFrame, histories: dict[str, pd.DataFrame],
         row["market_cap_bucket"] = market_cap_bucket(row.get("market_cap"))
         row.update(option_liquidity_for(ticker, float(row["close"]), config))
         row["alert_rank"] = tier_for(row, config)
-        row["conviction_tier"] = {"S": "S Tier", "A": "A Tier", "B": "B Tier"}.get(row["alert_rank"], "C Tier")
+        row["conviction_tier"] = {"A": "A Tier", "B": "B Tier"}.get(row["alert_rank"], "C Tier")
         row["danger_flags"] = risk_flags(row, config)
+        row["research_log_status"] = "pending_20d_performance"
+        row["entry_price_for_tracking"] = row.get("close", math.nan)
+        row["tracking_horizon_trading_days"] = 20
+        try:
+            row["tracking_due_date"] = (pd.Timestamp(row["breakout_date"]) + pd.offsets.BDay(20)).date().isoformat()
+        except Exception:
+            row["tracking_due_date"] = ""
+        row["return_20d"] = math.nan
+        row["max_gain_20d"] = math.nan
+        row["max_drawdown_20d"] = math.nan
         rows.append(row)
     out = pd.DataFrame(rows)
     if out.empty:
         return out
-    order = {"S": 0, "A": 1, "B": 2}
+    order = {"A": 0, "B": 1, "C": 2}
     out["rank_order"] = out["alert_rank"].map(order).fillna(99)
     return out.sort_values(["rank_order", "standard_rs_score", "volume_multiple"], ascending=[True, False, False]).drop(columns=["rank_order"])
 
@@ -548,6 +538,61 @@ def save_candidates(candidates: pd.DataFrame, outdir: Path) -> Path:
     path = outdir / "russell1000_momentum_candidates.csv"
     candidates.to_csv(path, index=False)
     return path
+
+
+def update_research_log_performance(log_root: Path, histories: dict[str, pd.DataFrame], horizon: int = 20) -> None:
+    if not log_root.exists():
+        return
+    for csv_path in log_root.glob("*/russell1000_momentum_candidates.csv"):
+        try:
+            log = pd.read_csv(csv_path)
+        except Exception:
+            continue
+        if log.empty or "ticker" not in log.columns or "breakout_date" not in log.columns:
+            continue
+        changed = False
+        for col in ["research_log_status", "entry_price_for_tracking", "tracking_horizon_trading_days", "tracking_due_date", "return_20d", "max_gain_20d", "max_drawdown_20d"]:
+            if col not in log.columns:
+                log[col] = math.nan
+        for idx, row in log.iterrows():
+            if pd.notna(row.get("return_20d")):
+                continue
+            ticker = str(row.get("ticker", "")).upper()
+            history = histories.get(ticker)
+            if history is None or history.empty:
+                continue
+            try:
+                signal_date = pd.Timestamp(row["breakout_date"]).date()
+            except Exception:
+                continue
+            hist = history.copy().dropna(subset=["Close"])
+            if hist.empty:
+                continue
+            hist_dates = pd.Series(pd.to_datetime(hist.index).date, index=hist.index)
+            eligible_positions = [i for i, d in enumerate(hist_dates.tolist()) if d >= signal_date]
+            if not eligible_positions:
+                continue
+            entry_idx = eligible_positions[0]
+            target_idx = entry_idx + horizon
+            if target_idx >= len(hist):
+                log.at[idx, "research_log_status"] = "pending_20d_performance"
+                changed = True
+                continue
+            entry_price = float(row.get("entry_price_for_tracking")) if pd.notna(row.get("entry_price_for_tracking")) else float(hist["Close"].iloc[entry_idx])
+            target_price = float(hist["Close"].iloc[target_idx])
+            window = hist.iloc[entry_idx : target_idx + 1]
+            if entry_price <= 0 or window.empty:
+                continue
+            log.at[idx, "entry_price_for_tracking"] = entry_price
+            log.at[idx, "tracking_horizon_trading_days"] = horizon
+            log.at[idx, "tracking_due_date"] = pd.Timestamp(hist.index[target_idx]).date().isoformat()
+            log.at[idx, "return_20d"] = target_price / entry_price - 1.0
+            log.at[idx, "max_gain_20d"] = float(window["High"].max()) / entry_price - 1.0 if "High" in window.columns else math.nan
+            log.at[idx, "max_drawdown_20d"] = float(window["Low"].min()) / entry_price - 1.0 if "Low" in window.columns else math.nan
+            log.at[idx, "research_log_status"] = "completed_20d_performance"
+            changed = True
+        if changed:
+            log.to_csv(csv_path, index=False)
 
 
 def schedule_kind(schedule_utc: str) -> str:
@@ -565,7 +610,7 @@ def candidate_block(row: pd.Series) -> str:
     prior = row.get("prior_20d_high", math.nan)
     breakout_pct = price / prior - 1.0 if pd.notna(price) and pd.notna(prior) and prior > 0 else math.nan
     rank = row.get("alert_rank", "B")
-    action = {"S": "Consider immediately / 04:30 Emergency eligible", "A": "Priority review / 04:30 Emergency eligible", "B": "Monitor / strong B may alert at 04:30"}.get(rank, "No alert")
+    action = {"A": "Priority review / 04:30 Emergency eligible", "B": "Monitor / 04:30 Emergency eligible"}.get(rank, "No realtime alert")
     return (
         f"{row.get('ticker')} - {row.get('company_name') or 'N/A'}\n"
         f"Tier: {rank}\n"
@@ -593,7 +638,7 @@ def candidate_block(row: pd.Series) -> str:
 
 def build_message(candidates: pd.DataFrame, csv_path: Path, schedule_utc: str, limit: int = 10) -> str:
     kind = schedule_kind(schedule_utc)
-    visible = candidates[candidates["alert_rank"].isin(["S", "A", "B"])].copy() if not candidates.empty and "alert_rank" in candidates.columns else candidates
+    visible = candidates[candidates["alert_rank"].isin(["A", "B"])].copy() if not candidates.empty and "alert_rank" in candidates.columns else candidates
     if visible.empty:
         if kind == "intraday_digest":
             return "No intraday breakout candidates"
@@ -605,13 +650,13 @@ def build_message(candidates: pd.DataFrame, csv_path: Path, schedule_utc: str, l
         subtitle = "Discord only. C tier is excluded. Review earnings, guidance, theme, valuation, IV, and option spread."
     elif kind == "intraday_digest":
         title = "Intraday Breakout Digest"
-        subtitle = "Discord: S/A/B only. C tier hidden. Pushover Emergency: 04:30 JST only."
+        subtitle = "Discord: A/B only. C tier hidden. Pushover Emergency: 04:30 JST only."
     else:
         title = "Production Momentum Alert"
         subtitle = "RS98 + intraday breakout + volume pace. Candidate discovery only."
     sections = [title, subtitle]
     shown = 0
-    for rank, heading in [("S", "S Tier"), ("A", "A Tier"), ("B", "B Tier")]:
+    for rank, heading in [("A", "A Tier"), ("B", "B Tier")]:
         group = visible[visible["alert_rank"] == rank].head(max(0, limit - shown))
         if group.empty:
             continue
@@ -650,16 +695,7 @@ def is_emergency_candidate(row: pd.Series, schedule_utc: str, config: dict[str, 
     data = row.to_dict()
     if is_extreme_gap(data):
         return False
-    if is_high_gap_caution(data):
-        return high_gap_exception_ok(row, config)
-    rank = row.get("alert_rank")
-    if rank in {"S", "A"}:
-        return bool(
-            bool(row.get("option_liquidity_ok", False))
-            and not is_healthcare_or_biotech(data)
-            and not is_extreme_iv(data, config)
-        )
-    return is_strong_b(row, config)
+    return row.get("alert_rank") in {"A", "B"}
 
 
 def select_pushover_candidates(candidates: pd.DataFrame, schedule_utc: str, config: dict[str, Any]) -> pd.DataFrame:
@@ -672,7 +708,7 @@ def select_pushover_candidates(candidates: pd.DataFrame, schedule_utc: str, conf
 def build_pushover_message(candidates: pd.DataFrame, csv_path: Path, limit: int = 8) -> str:
     lines = ["04:30 Breakout Emergency", "Exit: Day10 underlying +5% not reached -> exit / +125% take profit or Day20"]
     for _, row in candidates.head(limit).iterrows():
-        size = "S/A: review immediately" if row.get("alert_rank") in {"S", "A"} else "Strong B: smaller size only"
+        size = "A: priority review" if row.get("alert_rank") == "A" else "B: standard review"
         caution = " | HIGH GAP CAUTION: consider smaller size" if is_high_gap_caution(row.to_dict()) else ""
         lines.append(
             f"{row.get('alert_rank')} | {row.get('ticker')} {row.get('company_name') or ''} | Price {float(row.get('latest_price', row.get('close', 0))):.2f} | "
@@ -713,6 +749,7 @@ def run(config: dict[str, Any], outdir: Path, period: str) -> tuple[pd.DataFrame
     else:
         candidates = results[results.get("rank", "C").isin(["S", "A", "B"])].copy() if "rank" in results.columns else results.iloc[0:0].copy()
     csv_path = save_candidates(candidates, outdir / today_str())
+    update_research_log_performance(outdir, histories)
     return candidates, csv_path
 
 
