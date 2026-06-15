@@ -33,7 +33,7 @@ jobs:
       - name: Run daily scanner
         env:
           STOCK: ${{ secrets.STOCK }}
-          PUSHOVER_ENABLED: ${{ (github.event.schedule == '30 17 * * 1-5' || github.event.schedule == '30 19 * * 1-5') && secrets.PUSHOVER_ENABLED || 'false' }}
+          PUSHOVER_ENABLED: ${{ github.event.schedule == '30 19 * * 1-5' && secrets.PUSHOVER_ENABLED || 'false' }}
           PUSHOVER_APP_TOKEN: ${{ secrets.PUSHOVER_APP_TOKEN }}
           PUSHOVER_USER_KEY: ${{ secrets.PUSHOVER_USER_KEY }}
           SCANNER_SCHEDULE_UTC: ${{ github.event.schedule }}
