@@ -34,7 +34,7 @@ jobs:
           PUSHOVER_APP_TOKEN: ${{ secrets.PUSHOVER_APP_TOKEN }}
           PUSHOVER_USER_KEY: ${{ secrets.PUSHOVER_USER_KEY }}
           SCANNER_SCHEDULE_UTC: ${{ github.event.schedule }}
-        run: python scanner_notify.py
+        run: python scripts/production_scanner_entry.py
 
       - name: Upload scanner CSV
         uses: actions/upload-artifact@v4
