@@ -38,6 +38,8 @@ def _logged_send_discord_alert(*args: Any, **kwargs: Any) -> Any:
 def _logged_pushover_enabled(*args: Any, **kwargs: Any) -> bool:
     enabled = REAL_PUSHOVER_ENABLED(*args, **kwargs)
     print(f"Pushover enabled: {enabled}", flush=True)
+    if not enabled:
+        print("Pushover skipped: PUSHOVER_ENABLED is false", flush=True)
     return enabled
 
 
@@ -85,6 +87,12 @@ def main() -> None:
     print(f"scanner started: current_jst={pd.Timestamp.now(tz='Asia/Tokyo').isoformat()} schedule_utc={schedule}", flush=True)
     if not os.environ.get("PUSHOVER_APP_TOKEN") and os.environ.get("PUSHOVER_API_TOKEN"):
         os.environ["PUSHOVER_APP_TOKEN"] = os.environ["PUSHOVER_API_TOKEN"]
+    has_token = bool(os.environ.get("PUSHOVER_APP_TOKEN") or os.environ.get("PUSHOVER_API_TOKEN"))
+    has_user = bool(os.environ.get("PUSHOVER_USER_KEY"))
+    print(f"Pushover token exists: {has_token}", flush=True)
+    print(f"Pushover user key exists: {has_user}", flush=True)
+    if not has_token or not has_user:
+        print("Pushover skipped: token/user key missing", flush=True)
     if schedule in PRE_CLOSE_CRONS:
         os.environ["SCANNER_SCHEDULE_UTC"] = TARGET_0430_CRON
 
