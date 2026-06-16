@@ -18,6 +18,7 @@ PRE_CLOSE_CRONS = {
     "30 19 * * 1-5",
     TARGET_0430_CRON,
 }
+EMERGENCY_RANKS = ["S", "A", "B"]
 
 
 REAL_SEND_DISCORD_ALERT = entry.sn.send_discord_alert
@@ -60,27 +61,30 @@ def _logged_save_candidates(candidates: pd.DataFrame, outdir: Path) -> Path:
     return path
 
 
-def _select_rank_a_pushover_candidates(candidates: pd.DataFrame, schedule_utc: str, config: dict[str, Any]) -> pd.DataFrame:
+def _select_emergency_pushover_candidates(candidates: pd.DataFrame, schedule_utc: str, config: dict[str, Any]) -> pd.DataFrame:
     if schedule_utc not in PRE_CLOSE_CRONS or candidates.empty:
         print("Pushover skipped: not pre-close schedule or no scanner candidates", flush=True)
         return candidates.iloc[0:0].copy()
-    base = candidates[(candidates["exclusion_reason"].fillna("") == "") & (candidates["alert_rank"] == "A")].copy()
+    base = candidates[
+        (candidates["exclusion_reason"].fillna("") == "")
+        & (candidates["alert_rank"].isin(EMERGENCY_RANKS))
+    ].copy()
     if base.empty:
-        print("Pushover skipped: no Rank A emergency candidates", flush=True)
+        print("Pushover skipped: no S/A/B emergency candidates", flush=True)
     state_path = entry._state_path(Path("scanner_alerts") / entry.sn.today_str() / "russell1000_momentum_candidates.csv")
     state = entry._load_state(state_path)
     sendable = pd.DataFrame([row for _, row in base.iterrows() if entry._needs_emergency(row, state)])
     if not base.empty and sendable.empty:
-        print("Pushover skipped: duplicate Rank A emergency candidates already sent", flush=True)
+        print("Pushover skipped: duplicate S/A/B emergency candidates already sent", flush=True)
     entry.EMERGENCY_CONTEXT.clear()
     entry.EMERGENCY_CONTEXT.update({"state_path": state_path, "state": state, "candidates": sendable})
     return sendable
 
 
-def _send_rank_a_emergency(message: str, title: str = "Rank A Breakout Alert", **kwargs: Any) -> dict[str, Any]:
+def _send_emergency(message: str, title: str = "S/A/B Breakout Alert", **kwargs: Any) -> dict[str, Any]:
     candidates = entry.EMERGENCY_CONTEXT.get("candidates", pd.DataFrame())
     try:
-        print("Pushover sending: priority=2 retry=60 expire=3600 sound=climb", flush=True)
+        print("Pushover sending: ranks=S/A/B priority=2 retry=60 expire=3600 sound=climb", flush=True)
         result = REAL_SEND_PUSHOVER_EMERGENCY(message, title=title, **kwargs)
         print(f"Pushover sent: status_code={result.get('status_code')}", flush=True)
         entry._record_emergency(candidates, result.get("status_code"), True)
@@ -110,8 +114,8 @@ def main() -> None:
     entry.sn.send_discord_alert = _logged_send_discord_alert
     entry.sn.pushover_enabled = _logged_pushover_enabled
     entry.sn.save_candidates = _logged_save_candidates
-    entry.sn.select_pushover_candidates = _select_rank_a_pushover_candidates
-    entry.sn.send_pushover_emergency = _send_rank_a_emergency
+    entry.sn.select_pushover_candidates = _select_emergency_pushover_candidates
+    entry.sn.send_pushover_emergency = _send_emergency
 
     try:
         entry.sn.main()
