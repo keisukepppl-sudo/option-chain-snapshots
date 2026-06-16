@@ -7,6 +7,7 @@ on:
     - cron: "0 14 * * 1-5"   # intraday_scan_2300_jst / 23:00 JST
     - cron: "15 19 * * 1-5"  # pre_close_scan_0415_jst / 04:15 JST
     - cron: "25 19 * * 1-5"  # pre_close_scan_0425_jst / 04:25 JST
+    - cron: "30 19 * * 0-4"  # pre_close_scan_0430_jst / 04:30 JST
     - cron: "35 19 * * 1-5"  # pre_close_scan_0435_jst / 04:35 JST
   workflow_dispatch:
 
@@ -32,6 +33,7 @@ jobs:
           STOCK: ${{ secrets.STOCK }}
           PUSHOVER_ENABLED: ${{ secrets.PUSHOVER_ENABLED }}
           PUSHOVER_APP_TOKEN: ${{ secrets.PUSHOVER_APP_TOKEN }}
+          PUSHOVER_API_TOKEN: ${{ secrets.PUSHOVER_API_TOKEN }}
           PUSHOVER_USER_KEY: ${{ secrets.PUSHOVER_USER_KEY }}
           SCANNER_SCHEDULE_UTC: ${{ github.event.schedule }}
         run: python scripts/production_scanner_entry.py
