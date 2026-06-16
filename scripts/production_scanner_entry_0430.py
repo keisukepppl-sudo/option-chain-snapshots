@@ -7,6 +7,7 @@ from typing import Any
 import pandas as pd
 
 import scripts.production_scanner_entry as entry
+from scripts import trade_logger
 
 
 TARGET_0430_CRON = "30 19 * * 0-4"
@@ -48,6 +49,14 @@ def _logged_save_candidates(candidates: pd.DataFrame, outdir: Path) -> Path:
     print(f"candidates count: {len(candidates)}", flush=True)
     if candidates.empty:
         print("No breakout candidates found", flush=True)
+    try:
+        trade_logger.append_alert_log(
+            candidates,
+            outdir,
+            schedule_utc=os.environ.get("SCANNER_SCHEDULE_UTC", ""),
+        )
+    except Exception as exc:
+        print(f"Trade log failed/skipped: {exc}", flush=True)
     return path
 
 
