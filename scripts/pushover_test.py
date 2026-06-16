@@ -38,8 +38,8 @@ def main() -> None:
                 "request_payload": {
                     "priority": priority_value,
                     "retry": 60 if priority_value == 2 else None,
-                    "expire": 600 if priority_value == 2 else None,
-                    "sound": "siren" if priority_value == 2 else None,
+                    "expire": 3600 if priority_value == 2 else None,
+                    "sound": "climb" if priority_value == 2 else None,
                 },
             },
             ensure_ascii=False,
@@ -51,8 +51,8 @@ def main() -> None:
         title=title,
         priority=priority_value,
         retry=60,
-        expire=600,
-        sound="siren" if priority_value == 2 else None,
+        expire=3600,
+        sound="climb" if priority_value == 2 else None,
         raise_on_error=False,
     )
     print(
