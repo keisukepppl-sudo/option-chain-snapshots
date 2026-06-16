@@ -57,6 +57,8 @@ TRADE_LOG_COLUMNS = [
     "result_notes",
 ]
 
+LOG_RANKS = ["S", "A", "B", "C"]
+
 
 def _safe_float(value: Any, default: float = math.nan) -> float:
     try:
@@ -181,7 +183,7 @@ def _row_to_log(row: pd.Series, timestamp_jst: str, schedule_utc: str) -> dict[s
 
 
 def append_alert_log(candidates: pd.DataFrame, outdir: Path, schedule_utc: str = "") -> Path:
-    """Append S/A breakout alerts to scanner_alerts/trade_log.csv with de-duplication."""
+    """Append S/A/B/C breakout alerts to scanner_alerts/trade_log.csv with de-duplication."""
     outdir.mkdir(parents=True, exist_ok=True)
     log_path = outdir.parent / "trade_log.csv"
     daily_path = outdir / "trade_log_snapshot.csv"
@@ -199,7 +201,7 @@ def append_alert_log(candidates: pd.DataFrame, outdir: Path, schedule_utc: str =
     if "exclusion_reason" in visible.columns:
         visible = visible[visible["exclusion_reason"].fillna("") == ""]
     if "alert_rank" in visible.columns:
-        visible = visible[visible["alert_rank"].isin(["S", "A"])]
+        visible = visible[visible["alert_rank"].isin(LOG_RANKS)]
 
     new_rows = [_row_to_log(row, timestamp_jst, schedule_utc) for _, row in visible.iterrows()]
     new_df = pd.DataFrame(new_rows, columns=TRADE_LOG_COLUMNS)
