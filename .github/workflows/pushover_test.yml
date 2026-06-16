@@ -38,5 +38,6 @@ jobs:
         env:
           PUSHOVER_ENABLED: ${{ secrets.PUSHOVER_ENABLED }}
           PUSHOVER_APP_TOKEN: ${{ secrets.PUSHOVER_APP_TOKEN }}
+          PUSHOVER_API_TOKEN: ${{ secrets.PUSHOVER_API_TOKEN }}
           PUSHOVER_USER_KEY: ${{ secrets.PUSHOVER_USER_KEY }}
         run: python scripts/pushover_test.py --priority "${{ inputs.priority }}" --message "${{ inputs.message }}"
