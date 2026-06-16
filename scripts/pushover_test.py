@@ -34,6 +34,7 @@ def main() -> None:
             {
                 "PUSHOVER_ENABLED": os.environ.get("PUSHOVER_ENABLED", ""),
                 "PUSHOVER_APP_TOKEN_exists": bool(os.environ.get("PUSHOVER_APP_TOKEN")),
+                "PUSHOVER_API_TOKEN_exists": bool(os.environ.get("PUSHOVER_API_TOKEN")),
                 "PUSHOVER_USER_KEY_exists": bool(os.environ.get("PUSHOVER_USER_KEY")),
                 "request_payload": {
                     "priority": priority_value,
