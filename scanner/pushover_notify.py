@@ -35,7 +35,7 @@ def send_pushover_message(
     session: HTTPSession | None = None,
     raise_on_error: bool = True,
 ) -> dict[str, Any]:
-    token = app_token or os.environ.get("PUSHOVER_APP_TOKEN", "")
+    token = app_token or os.environ.get("PUSHOVER_APP_TOKEN", "") or os.environ.get("PUSHOVER_API_TOKEN", "")
     user = user_key or os.environ.get("PUSHOVER_USER_KEY", "")
     if not token or not user:
         raise ValueError("Pushover token/user key are required. Set PUSHOVER_APP_TOKEN and PUSHOVER_USER_KEY.")
@@ -49,8 +49,8 @@ def send_pushover_message(
     }
     if priority == 2:
         payload["retry"] = retry if retry is not None else 60
-        payload["expire"] = expire if expire is not None else 600
-        payload["sound"] = sound or "siren"
+        payload["expire"] = expire if expire is not None else 3600
+        payload["sound"] = sound or "climb"
     elif sound:
         payload["sound"] = sound
     http = session or requests
@@ -81,8 +81,8 @@ def send_pushover_emergency(
         app_token=app_token,
         user_key=user_key,
         retry=60,
-        expire=600,
-        sound="siren",
+        expire=3600,
+        sound="climb",
         timeout=timeout,
         session=session,
     )
