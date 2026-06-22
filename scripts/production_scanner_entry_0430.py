@@ -15,10 +15,12 @@ import scripts.production_scanner_entry as entry
 
 
 TARGET_0430_CRON = "30 19 * * 0-4"
+MORNING_1000_CRON = "0 1 * * 1-5"
 FINAL_0430_CRONS = {
     TARGET_0430_CRON,
     "30 19 * * 1-5",
 }
+STATUS_NOTIFICATION_CRONS = set(FINAL_0430_CRONS) | {MORNING_1000_CRON}
 PRE_CLOSE_CRONS = {
     "15 19 * * 1-5",
     "25 19 * * 1-5",
@@ -119,6 +121,18 @@ def _is_final_0430_schedule(schedule_utc: str) -> bool:
     return schedule_utc in FINAL_0430_CRONS
 
 
+def _is_status_notification_schedule(schedule_utc: str) -> bool:
+    return schedule_utc in STATUS_NOTIFICATION_CRONS
+
+
+def _scheduled_scan_jst(schedule_utc: str) -> str:
+    if schedule_utc == MORNING_1000_CRON:
+        return "10:00"
+    if schedule_utc in FINAL_0430_CRONS:
+        return "04:30"
+    return "N/A"
+
+
 def _rank_counts(candidates: pd.DataFrame) -> dict[str, int]:
     counts = {rank: 0 for rank in EMERGENCY_RANKS}
     if candidates.empty:
@@ -157,11 +171,12 @@ def _completion_message(status: str = "SUCCESS") -> str:
     counts = SCAN_CONTEXT.get("rank_counts") or {rank: 0 for rank in EMERGENCY_RANKS}
     candidates = int(SCAN_CONTEXT.get("notifiable_candidates", 0))
     schedule_utc = str(SCAN_CONTEXT.get("schedule_utc", ""))
+    scheduled_scan_jst = _scheduled_scan_jst(schedule_utc)
     today_line = "No S/A/B/C candidates found." if candidates == 0 else "S/A/B/C candidates found. See Discord/CSV for details."
     return (
         "Russell1000 Scanner\n\n"
-        "04:30 JST Scan Complete\n\n"
-        "scheduled_scan_jst: 04:30\n"
+        f"{scheduled_scan_jst} JST Scan Complete\n\n"
+        f"scheduled_scan_jst: {scheduled_scan_jst}\n"
         f"actual_run_time_jst: {_scan_time_text()}\n"
         f"SCANNER_SCHEDULE_UTC: {schedule_utc}\n"
         "notification_sent: YES\n\n"
@@ -177,9 +192,10 @@ def _completion_message(status: str = "SUCCESS") -> str:
 
 def _error_message(exc: BaseException) -> str:
     schedule_utc = str(SCAN_CONTEXT.get("schedule_utc", ""))
+    scheduled_scan_jst = _scheduled_scan_jst(schedule_utc)
     return (
         "Russell1000 Scanner ERROR\n\n"
-        "scheduled_scan_jst: 04:30\n"
+        f"scheduled_scan_jst: {scheduled_scan_jst}\n"
         f"actual_run_time_jst: {_scan_time_text()}\n"
         f"SCANNER_SCHEDULE_UTC: {schedule_utc}\n"
         "notification_sent: YES\n\n"
@@ -205,18 +221,19 @@ def _send_pushover_status(message: str, title: str) -> bool:
 
 
 def _send_final_completion_if_needed(raw_schedule: str) -> None:
-    if not _is_final_0430_schedule(raw_schedule):
+    if not _is_status_notification_schedule(raw_schedule):
         return
     if bool(SCAN_CONTEXT.get("notification_sent")):
         return
+    scheduled_scan_jst = _scheduled_scan_jst(raw_schedule)
     _send_pushover_status(
         _completion_message("SUCCESS"),
-        title="Russell1000 Scanner 04:30 JST",
+        title=f"Russell1000 Scanner {scheduled_scan_jst} JST",
     )
 
 
 def _send_error_notification(raw_schedule: str, exc: BaseException) -> None:
-    if not _is_final_0430_schedule(raw_schedule):
+    if not _is_status_notification_schedule(raw_schedule):
         return
     _send_pushover_status(
         _error_message(exc),
