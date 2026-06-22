@@ -19,6 +19,7 @@ notify:
   alert_ranks:
     - S
     - A
+    - B
   production_momentum:
     rs_min: 98
     breakout_lookback_days: 20
