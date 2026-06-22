@@ -3,6 +3,7 @@ name: Daily Russell1000 Scanner
 on:
   schedule:
     # GitHub Actions cron uses UTC.
+    - cron: "0 1 * * 1-5"    # morning_scan_1000_jst / 10:00 JST
     - cron: "30 13 * * 1-5"  # intraday_scan_2230_jst / 22:30 JST
     - cron: "0 14 * * 1-5"   # intraday_scan_2300_jst / 23:00 JST
     - cron: "15 19 * * 1-5"  # pre_close_scan_0415_jst / 04:15 JST
