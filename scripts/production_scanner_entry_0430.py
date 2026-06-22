@@ -17,11 +17,13 @@ from scanner.pushover_notify import send_pushover_message as REAL_SEND_PUSHOVER_
 
 TARGET_0430_CRON = "30 19 * * 0-4"
 MORNING_1000_CRON = "0 1 * * 1-5"
+MORNING_1015_CRON = "15 1 * * 1-5"
 FINAL_0430_CRONS = {
     TARGET_0430_CRON,
     "30 19 * * 1-5",
 }
-STATUS_NOTIFICATION_CRONS = set(FINAL_0430_CRONS) | {MORNING_1000_CRON}
+MORNING_STATUS_CRONS = {MORNING_1000_CRON, MORNING_1015_CRON}
+STATUS_NOTIFICATION_CRONS = set(FINAL_0430_CRONS) | MORNING_STATUS_CRONS
 PRE_CLOSE_CRONS = {
     "15 19 * * 1-5",
     "25 19 * * 1-5",
@@ -128,6 +130,8 @@ def _is_status_notification_schedule(schedule_utc: str) -> bool:
 def _scheduled_scan_jst(schedule_utc: str) -> str:
     if schedule_utc == MORNING_1000_CRON:
         return "10:00"
+    if schedule_utc == MORNING_1015_CRON:
+        return "10:15"
     if schedule_utc in FINAL_0430_CRONS:
         return "04:30"
     return "N/A"
