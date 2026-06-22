@@ -33,7 +33,7 @@ REAL_PUSHOVER_ENABLED = entry.sn.pushover_enabled
 REAL_SEND_PUSHOVER_EMERGENCY = entry.REAL_SEND_PUSHOVER_EMERGENCY
 REAL_SEND_PUSHOVER_MESSAGE = entry.sn.send_pushover_message
 REAL_SAVE_CANDIDATES = entry.sn.save_candidates
-EMERGENCY_RANKS = ["S", "A"]
+EMERGENCY_RANKS = ["S", "A", "B", "C"]
 EMERGENCY_RANK_SET = set(EMERGENCY_RANKS)
 SCAN_CONTEXT: dict[str, Any] = {
     "candidates_total": 0,
@@ -76,7 +76,7 @@ def _logged_save_candidates(candidates: pd.DataFrame, outdir: Path) -> Path:
         }
     )
     print(f"candidates count: {len(candidates)}", flush=True)
-    print(f"notifiable S/A candidates count: {notifiable_count}", flush=True)
+    print(f"notifiable S/A/B/C candidates count: {notifiable_count}", flush=True)
     print(f"rank counts: {_format_rank_counts(rank_counts)}", flush=True)
     if notifiable_count == 0:
         print("No breakout candidates found", flush=True)
@@ -89,12 +89,12 @@ def _select_sabcd_pushover_candidates(candidates: pd.DataFrame, schedule_utc: st
         return candidates.iloc[0:0].copy()
     base = candidates[(candidates["exclusion_reason"].fillna("") == "") & candidates["alert_rank"].isin(EMERGENCY_RANKS)].copy()
     if base.empty:
-        print("Pushover skipped: no S/A candidates", flush=True)
+        print("Pushover skipped: no S/A/B/C candidates", flush=True)
     state_path = entry._state_path(Path("scanner_alerts") / entry.sn.today_str() / "russell1000_momentum_candidates.csv")
     state = entry._load_state(state_path)
     sendable = pd.DataFrame([row for _, row in base.iterrows() if entry._needs_emergency(row, state)])
     if not base.empty and sendable.empty:
-        print("Pushover skipped: duplicate S/A emergency candidates already sent", flush=True)
+        print("Pushover skipped: duplicate S/A/B/C emergency candidates already sent", flush=True)
     entry.EMERGENCY_CONTEXT.clear()
     entry.EMERGENCY_CONTEXT.update({"state_path": state_path, "state": state, "candidates": sendable})
     return sendable
@@ -157,7 +157,7 @@ def _completion_message(status: str = "SUCCESS") -> str:
     counts = SCAN_CONTEXT.get("rank_counts") or {rank: 0 for rank in EMERGENCY_RANKS}
     candidates = int(SCAN_CONTEXT.get("notifiable_candidates", 0))
     schedule_utc = str(SCAN_CONTEXT.get("schedule_utc", ""))
-    today_line = "No S/A candidates found." if candidates == 0 else "S/A candidates found. See Discord/CSV for details."
+    today_line = "No S/A/B/C candidates found." if candidates == 0 else "S/A/B/C candidates found. See Discord/CSV for details."
     return (
         "Russell1000 Scanner\n\n"
         "04:30 JST Scan Complete\n\n"
