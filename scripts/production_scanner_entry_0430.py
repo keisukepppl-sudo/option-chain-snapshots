@@ -12,6 +12,7 @@ if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
 import scripts.production_scanner_entry as entry
+from scanner.pushover_notify import send_pushover_message as REAL_SEND_PUSHOVER_MESSAGE
 
 
 TARGET_0430_CRON = "30 19 * * 0-4"
@@ -33,7 +34,6 @@ PRE_CLOSE_CRONS = {
 REAL_SEND_DISCORD_ALERT = entry.sn.send_discord_alert
 REAL_PUSHOVER_ENABLED = entry.sn.pushover_enabled
 REAL_SEND_PUSHOVER_EMERGENCY = entry.REAL_SEND_PUSHOVER_EMERGENCY
-REAL_SEND_PUSHOVER_MESSAGE = entry.sn.send_pushover_message
 REAL_SAVE_CANDIDATES = entry.sn.save_candidates
 EMERGENCY_RANKS = ["S", "A", "B", "C"]
 EMERGENCY_RANK_SET = set(EMERGENCY_RANKS)
