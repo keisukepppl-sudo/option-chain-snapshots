@@ -18,12 +18,17 @@ from scanner.pushover_notify import send_pushover_message as REAL_SEND_PUSHOVER_
 TARGET_0430_CRON = "30 19 * * 0-4"
 MORNING_1000_CRON = "0 1 * * 1-5"
 MORNING_1015_CRON = "15 1 * * 1-5"
+INTRADAY_2230_CRON = "30 13 * * 1-5"
+INTRADAY_2300_CRON = "0 14 * * 1-5"
 FINAL_0430_CRONS = {
     TARGET_0430_CRON,
     "30 19 * * 1-5",
 }
 MORNING_STATUS_CRONS = {MORNING_1000_CRON, MORNING_1015_CRON}
 STATUS_NOTIFICATION_CRONS = set(FINAL_0430_CRONS) | MORNING_STATUS_CRONS
+DELAY_SUPPRESS_CRONS = {INTRADAY_2230_CRON, INTRADAY_2300_CRON}
+DELAY_SUPPRESS_AFTER_MINUTES = 60
+DELAY_WARNING_AFTER_MINUTES = 15
 PRE_CLOSE_CRONS = {
     "15 19 * * 1-5",
     "25 19 * * 1-5",
@@ -49,7 +54,91 @@ SCAN_CONTEXT: dict[str, Any] = {
 }
 
 
+def _scheduled_local_time(schedule_utc: str) -> tuple[int, int] | None:
+    if schedule_utc == INTRADAY_2230_CRON:
+        return (22, 30)
+    if schedule_utc == INTRADAY_2300_CRON:
+        return (23, 0)
+    if schedule_utc == MORNING_1000_CRON:
+        return (10, 0)
+    if schedule_utc == MORNING_1015_CRON:
+        return (10, 15)
+    if schedule_utc in PRE_CLOSE_CRONS or schedule_utc in FINAL_0430_CRONS:
+        return (4, 30)
+    return None
+
+
+def _scheduled_local_timestamp(schedule_utc: str, now: pd.Timestamp | None = None) -> pd.Timestamp | None:
+    target = _scheduled_local_time(schedule_utc)
+    if target is None:
+        return None
+    now = now or _scan_time_jst()
+    hour, minute = target
+    scheduled = now.replace(hour=hour, minute=minute, second=0, microsecond=0)
+    if scheduled > now:
+        scheduled -= pd.Timedelta(days=1)
+    return scheduled
+
+
+def _delay_minutes(schedule_utc: str, now: pd.Timestamp | None = None) -> float | None:
+    now = now or _scan_time_jst()
+    scheduled = _scheduled_local_timestamp(schedule_utc, now=now)
+    if scheduled is None:
+        return None
+    return max(0.0, float((now - scheduled).total_seconds() / 60.0))
+
+
+def _is_delayed_intraday_suppressed(schedule_utc: str) -> bool:
+    delay = _delay_minutes(schedule_utc)
+    return bool(schedule_utc in DELAY_SUPPRESS_CRONS and delay is not None and delay > DELAY_SUPPRESS_AFTER_MINUTES)
+
+
+def _is_delayed_final_schedule(schedule_utc: str) -> bool:
+    delay = _delay_minutes(schedule_utc)
+    return bool(schedule_utc in FINAL_0430_CRONS and delay is not None and delay > DELAY_WARNING_AFTER_MINUTES)
+
+
+def _delay_notice(schedule_utc: str) -> str:
+    scheduled = _scheduled_local_timestamp(schedule_utc)
+    delay = _delay_minutes(schedule_utc)
+    if scheduled is None or delay is None:
+        return ""
+    if schedule_utc in DELAY_SUPPRESS_CRONS and delay > DELAY_SUPPRESS_AFTER_MINUTES:
+        return (
+            "DELAYED RUN - NOTIFICATION SUPPRESSED\n"
+            f"scheduled_scan_jst: {_scheduled_scan_jst(schedule_utc)}\n"
+            f"scheduled_time_jst: {scheduled.strftime('%Y-%m-%d %H:%M JST')}\n"
+            f"actual_run_time_jst: {_scan_time_text()}\n"
+            f"delay_minutes: {delay:.1f}\n"
+            f"SCANNER_SCHEDULE_UTC: {schedule_utc}\n"
+        )
+    if schedule_utc in FINAL_0430_CRONS and delay > DELAY_WARNING_AFTER_MINUTES:
+        return (
+            "DELAYED RUN\n"
+            f"scheduled_scan_jst: {_scheduled_scan_jst(schedule_utc)}\n"
+            f"scheduled_time_jst: {scheduled.strftime('%Y-%m-%d %H:%M JST')}\n"
+            f"actual_run_time_jst: {_scan_time_text()}\n"
+            f"delay_minutes: {delay:.1f}\n"
+            f"SCANNER_SCHEDULE_UTC: {schedule_utc}\n"
+        )
+    return ""
+
+
+def _prepend_delay_notice(message: str, schedule_utc: str) -> str:
+    notice = _delay_notice(schedule_utc)
+    if not notice or "DELAYED RUN" in message:
+        return message
+    return f"{notice}\n{message}"
+
+
 def _logged_send_discord_alert(*args: Any, **kwargs: Any) -> Any:
+    schedule = str(SCAN_CONTEXT.get("schedule_utc", ""))
+    if _is_delayed_intraday_suppressed(schedule):
+        print(_delay_notice(schedule), flush=True)
+        print("Discord skipped: delayed 22:30/23:00 schedule; log only", flush=True)
+        return None
+    if _is_delayed_final_schedule(schedule) and args and isinstance(args[0], str):
+        args = (_prepend_delay_notice(args[0], schedule),) + args[1:]
     try:
         result = REAL_SEND_DISCORD_ALERT(*args, **kwargs)
         print("Discord sent", flush=True)
@@ -106,6 +195,11 @@ def _select_sabcd_pushover_candidates(candidates: pd.DataFrame, schedule_utc: st
 
 def _send_sabcd_emergency(message: str, title: str = "04:30 Breakout Alert", **kwargs: Any) -> dict[str, Any]:
     candidates = entry.EMERGENCY_CONTEXT.get("candidates", pd.DataFrame())
+    schedule = str(SCAN_CONTEXT.get("schedule_utc", ""))
+    if _is_delayed_final_schedule(schedule):
+        message = _prepend_delay_notice(message, schedule)
+        if "DELAYED" not in title:
+            title = f"DELAYED {title}"
     try:
         result = REAL_SEND_PUSHOVER_EMERGENCY(message, title=title, **kwargs)
         print(f"Pushover sent: status_code={result.get('status_code')}", flush=True)
@@ -134,6 +228,10 @@ def _scheduled_scan_jst(schedule_utc: str) -> str:
         return "10:15"
     if schedule_utc in FINAL_0430_CRONS:
         return "04:30"
+    if schedule_utc == INTRADAY_2230_CRON:
+        return "22:30"
+    if schedule_utc == INTRADAY_2300_CRON:
+        return "23:00"
     return "N/A"
 
 
@@ -177,7 +275,10 @@ def _completion_message(status: str = "SUCCESS") -> str:
     schedule_utc = str(SCAN_CONTEXT.get("schedule_utc", ""))
     scheduled_scan_jst = _scheduled_scan_jst(schedule_utc)
     today_line = "No S/A/B/C candidates found." if candidates == 0 else "S/A/B/C candidates found. See Discord/CSV for details."
+    delayed = _delay_notice(schedule_utc)
+    prefix = f"{delayed}\n" if delayed else ""
     return (
+        prefix +
         "Russell1000 Scanner\n\n"
         f"{scheduled_scan_jst} JST Scan Complete\n\n"
         f"scheduled_scan_jst: {scheduled_scan_jst}\n"
@@ -197,7 +298,10 @@ def _completion_message(status: str = "SUCCESS") -> str:
 def _error_message(exc: BaseException) -> str:
     schedule_utc = str(SCAN_CONTEXT.get("schedule_utc", ""))
     scheduled_scan_jst = _scheduled_scan_jst(schedule_utc)
+    delayed = _delay_notice(schedule_utc)
+    prefix = f"{delayed}\n" if delayed else ""
     return (
+        prefix +
         "Russell1000 Scanner ERROR\n\n"
         f"scheduled_scan_jst: {scheduled_scan_jst}\n"
         f"actual_run_time_jst: {_scan_time_text()}\n"
@@ -222,6 +326,19 @@ def _send_pushover_status(message: str, title: str) -> bool:
     except Exception as exc:
         print(f"Pushover status failed: {exc}", flush=True)
         return False
+
+
+def _send_pushover_message_guarded(message: str, title: str, priority: int = 0, **kwargs: Any) -> dict[str, Any]:
+    schedule = str(SCAN_CONTEXT.get("schedule_utc", ""))
+    if _is_delayed_intraday_suppressed(schedule):
+        print(_delay_notice(schedule), flush=True)
+        print("Pushover skipped: delayed 22:30/23:00 schedule; log only", flush=True)
+        return {"status_code": "SKIPPED_DELAYED_INTRADAY"}
+    if _is_delayed_final_schedule(schedule):
+        message = _prepend_delay_notice(message, schedule)
+        if "DELAYED" not in title:
+            title = f"DELAYED {title}"
+    return REAL_SEND_PUSHOVER_MESSAGE(message, title=title, priority=priority, **kwargs)
 
 
 def _send_final_completion_if_needed(raw_schedule: str) -> None:
@@ -285,6 +402,7 @@ def main() -> None:
     entry.sn.save_candidates = _logged_save_candidates
     entry.sn.select_pushover_candidates = _select_sabcd_pushover_candidates
     entry.sn.send_pushover_emergency = _send_sabcd_emergency
+    entry.sn.send_pushover_message = _send_pushover_message_guarded
 
     try:
         entry.sn.main()
