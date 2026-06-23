@@ -1,0 +1,69 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Transform: AWS::Serverless-2016-10-31
+Description: Pushover health-check notification for the breakout scanner wake-up path.
+
+Parameters:
+  PushoverEnabled:
+    Type: String
+    Default: "true"
+    AllowedValues: ["true", "false"]
+  PushoverAppToken:
+    Type: String
+    NoEcho: true
+  PushoverUserKey:
+    Type: String
+    NoEcho: true
+  PushoverPriority:
+    Type: Number
+    Default: 2
+  PushoverRetry:
+    Type: Number
+    Default: 60
+  PushoverExpire:
+    Type: Number
+    Default: 600
+  PushoverSound:
+    Type: String
+    Default: climb
+
+Resources:
+  PushoverHealthCheckFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      Runtime: python3.12
+      Handler: lambda_function.lambda_handler
+      CodeUri: .
+      MemorySize: 128
+      Timeout: 30
+      Policies:
+        - AWSLambdaBasicExecutionRole
+      Environment:
+        Variables:
+          PUSHOVER_ENABLED: !Ref PushoverEnabled
+          PUSHOVER_APP_TOKEN: !Ref PushoverAppToken
+          PUSHOVER_USER_KEY: !Ref PushoverUserKey
+          PUSHOVER_PRIORITY: !Ref PushoverPriority
+          PUSHOVER_RETRY: !Ref PushoverRetry
+          PUSHOVER_EXPIRE: !Ref PushoverExpire
+          PUSHOVER_SOUND: !Ref PushoverSound
+          PUSHOVER_TITLE: AWS 04:30 Health Check
+      Events:
+        Daily0430Jst:
+          Type: ScheduleV2
+          Properties:
+            Name: pushover-healthcheck-0430-jst
+            Description: Sends a daily Pushover health-check notification around 04:30 JST on weekdays.
+            ScheduleExpression: cron(30 4 ? * MON-FRI *)
+            ScheduleExpressionTimezone: Asia/Tokyo
+            FlexibleTimeWindow:
+              Mode: "OFF"
+            State: ENABLED
+            Input: '{"source":"eventbridge-scheduler","scheduled_scan_jst":"04:30"}'
+
+Outputs:
+  FunctionName:
+    Description: Lambda function name.
+    Value: !Ref PushoverHealthCheckFunction
+  FunctionArn:
+    Description: Lambda function ARN.
+    Value: !GetAtt PushoverHealthCheckFunction.Arn
