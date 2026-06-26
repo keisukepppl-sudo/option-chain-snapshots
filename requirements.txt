@@ -6,3 +6,4 @@ PyYAML
 pytest
 requests
 beautifulsoup4
+pyarrow
