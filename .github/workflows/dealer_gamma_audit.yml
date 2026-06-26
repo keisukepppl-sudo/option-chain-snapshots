@@ -58,7 +58,9 @@ jobs:
           cp dealer_gamma_history/dealer_gamma_proxy_history.csv dealer_gamma_proxy_history.csv || true
           cp dealer_gamma_history/dealer_gamma_proxy_history.parquet dealer_gamma_proxy_history.parquet || true
           cp dealer_gamma_history/dealer_gamma_backfill_audit.md dealer_gamma_backfill_audit.md || true
-          cp dealer_gamma_history/dealer_gamma_quality_rules_v1.json dealer_gamma_quality_rules_v1.json || true
+          cp dealer_gamma_history/dealer_gamma_quality_rules_v2.json dealer_gamma_quality_rules_v2.json || true
+          cp dealer_gamma_history/dealer_gamma_root_diagnostics.csv dealer_gamma_root_diagnostics.csv || true
+          cp dealer_gamma_history/dealer_gamma_root_diagnostics.parquet dealer_gamma_root_diagnostics.parquet || true
           cp dealer_gamma_history/dealer_gamma_manual_validation_*.md . 2>/dev/null || true
 
       - name: Verify raw option-chain snapshots were not mutated
@@ -90,13 +92,17 @@ jobs:
             dealer_gamma_history/dealer_gamma_proxy_history.csv
             dealer_gamma_history/dealer_gamma_proxy_history.parquet
             dealer_gamma_history/dealer_gamma_backfill_audit.md
-            dealer_gamma_history/dealer_gamma_quality_rules_v1.json
+            dealer_gamma_history/dealer_gamma_quality_rules_v2.json
+            dealer_gamma_history/dealer_gamma_root_diagnostics.csv
+            dealer_gamma_history/dealer_gamma_root_diagnostics.parquet
             dealer_gamma_history/dealer_gamma_manual_validation_*.md
             dealer_gamma_snapshot_file_audit.csv
             dealer_gamma_proxy_history.csv
             dealer_gamma_proxy_history.parquet
             dealer_gamma_backfill_audit.md
-            dealer_gamma_quality_rules_v1.json
+            dealer_gamma_quality_rules_v2.json
+            dealer_gamma_root_diagnostics.csv
+            dealer_gamma_root_diagnostics.parquet
             dealer_gamma_manual_validation_*.md
             phase3_1_completion_gate_audit.md
             raw_snapshot_mutation_report.txt
@@ -129,7 +135,7 @@ jobs:
           git add market_environment_score_deployment_audit.csv market_environment_score_deployment_audit.md || true
           git add dealer_gamma_history_coverage_audit.csv dealer_gamma_history_coverage_audit.md || true
           git add dealer_gamma_snapshot_file_audit.csv dealer_gamma_proxy_history.csv dealer_gamma_proxy_history.parquet || true
-          git add dealer_gamma_backfill_audit.md dealer_gamma_quality_rules_v1.json dealer_gamma_manual_validation_*.md || true
+          git add dealer_gamma_backfill_audit.md dealer_gamma_quality_rules_v2.json dealer_gamma_root_diagnostics.csv dealer_gamma_root_diagnostics.parquet dealer_gamma_manual_validation_*.md || true
           git add phase3_1_completion_gate_audit.md raw_snapshot_mutation_report.txt raw_snapshot_mutation_count.txt || true
           git diff --cached --quiet || git commit -m "Update dealer gamma audit reports"
           git push
