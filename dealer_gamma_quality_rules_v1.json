@@ -1,0 +1,21 @@
+{
+  "version": "dealer_gamma_quality_rules_v1",
+  "high": {
+    "input_completeness_rate_min": 0.95,
+    "calculation_success_rate_min": 0.9,
+    "stale_quote_count_max": 0
+  },
+  "medium": {
+    "input_completeness_rate_min": 0.8,
+    "calculation_success_rate_min": 0.7
+  },
+  "low": {
+    "input_completeness_rate_min": 0.6,
+    "calculation_success_rate_min": 0.01
+  },
+  "unusable": {
+    "notes": "corrupted, missing underlying price, or insufficient OI/IV"
+  },
+  "sign_convention": "open_interest_sign_heuristic_call_plus_put_minus",
+  "dealer_gamma_proxy_assumption": "dealer_short_customer_options_assumption"
+}
