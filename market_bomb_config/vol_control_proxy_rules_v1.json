@@ -1,0 +1,13 @@
+{
+  "version": "vol_control_proxy_rules_v1",
+  "target_vols": [
+    0.1,
+    0.12,
+    0.15
+  ],
+  "max_exposure": 1.0,
+  "deleveraging_threshold_1d": -0.025,
+  "deleveraging_threshold_5d": -0.05,
+  "re_risking_threshold_1d": 0.025,
+  "re_risking_threshold_5d": 0.05
+}

@@ -1,0 +1,98 @@
+name: CTA Vol Proxy Research
+
+on:
+  workflow_dispatch:
+    inputs:
+      persist_reports:
+        description: "Commit generated research reports"
+        required: true
+        default: false
+        type: boolean
+      refresh_price_history:
+        description: "Refresh or backfill daily price history before analysis"
+        required: true
+        default: true
+        type: boolean
+
+jobs:
+  research:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout main
+        uses: actions/checkout@v4
+        with:
+          ref: main
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Run CTA / Vol proxy research
+        run: |
+          if [ "${{ inputs.refresh_price_history }}" = "true" ]; then
+            python market_bomb_phase3_2_cta_vol_proxy.py
+          else
+            python market_bomb_phase3_2_cta_vol_proxy.py --skip-refresh-price-history
+          fi
+
+      - name: Upload CTA / Vol proxy artifacts
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: cta-vol-proxy-research-${{ github.run_id }}
+          path: |
+            market_bomb_config/cta_proxy_rules_v1.json
+            market_bomb_config/vol_control_proxy_rules_v1.json
+            market_bomb_history/cta_proxy_history.csv
+            market_bomb_history/cta_proxy_history.parquet
+            market_bomb_history/vol_control_proxy_history.csv
+            market_bomb_history/vol_control_proxy_history.parquet
+            market_bomb_history/cta_vol_proxy_quality_audit.csv
+            market_bomb_history/cta_vol_proxy_quality_audit.md
+            market_bomb_analysis/cta_vol_price_source_audit.csv
+            market_bomb_analysis/cta_vol_price_source_audit.md
+            market_bomb_analysis/cta_proxy_report_*.md
+            market_bomb_analysis/vol_control_proxy_report_*.md
+            market_bomb_analysis/cta_vol_proxy_combined_report_*.md
+            market_bomb_analysis/cta_vol_indicator_summary_*.csv
+            market_bomb_analysis/cta_vol_baseline_comparison_*.csv
+            market_bomb_analysis/cta_vol_join_audit_*.csv
+            market_bomb_analysis/cta_vol_data_sufficiency_*.md
+            market_bomb_analysis/cta_vol_methodology_v1.md
+          if-no-files-found: warn
+
+  persist:
+    needs: research
+    if: ${{ inputs.persist_reports == true && needs.research.result == 'success' }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout main
+        uses: actions/checkout@v4
+        with:
+          ref: main
+
+      - name: Download research artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: cta-vol-proxy-research-${{ github.run_id }}
+          path: .
+
+      - name: Commit research reports
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add market_bomb_config/cta_proxy_rules_v1.json market_bomb_config/vol_control_proxy_rules_v1.json || true
+          git add market_bomb_history/cta_proxy_history.* market_bomb_history/vol_control_proxy_history.* market_bomb_history/cta_vol_proxy_quality_audit.* || true
+          git add market_bomb_analysis/cta_vol_price_source_audit.* market_bomb_analysis/cta_proxy_report_*.md market_bomb_analysis/vol_control_proxy_report_*.md || true
+          git add market_bomb_analysis/cta_vol_proxy_combined_report_*.md market_bomb_analysis/cta_vol_indicator_summary_*.csv market_bomb_analysis/cta_vol_baseline_comparison_*.csv || true
+          git add market_bomb_analysis/cta_vol_join_audit_*.csv market_bomb_analysis/cta_vol_data_sufficiency_*.md market_bomb_analysis/cta_vol_methodology_v1.md || true
+          git diff --cached --quiet || git commit -m "Update CTA Vol proxy research reports"
+          git push

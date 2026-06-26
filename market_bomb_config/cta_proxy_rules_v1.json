@@ -1,0 +1,22 @@
+{
+  "version": "cta_proxy_rules_v1",
+  "long_bias": {
+    "close_gt_ema_20": true,
+    "close_gt_sma_50": true,
+    "return_20d_gt": 0.0
+  },
+  "short_bias": {
+    "close_lt_ema_20": true,
+    "close_lt_sma_50": true,
+    "return_20d_lt": 0.0
+  },
+  "exposure_mapping": {
+    "long_bias": 1.0,
+    "neutral": 0.0,
+    "short_bias": -1.0
+  },
+  "deleveraging_if": {
+    "cta_exposure_change_1d_lt": 0.0,
+    "cta_exposure_change_5d_lt": 0.0
+  }
+}
