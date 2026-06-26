@@ -103,6 +103,8 @@ DEALER_GAMMA_QUALITY_RULES = {
     "dealer_gamma_proxy_assumption": DEALER_GAMMA_PROXY_ASSUMPTION,
 }
 
+_OPTION_SNAPSHOT_RECORD_CACHE: dict[str, tuple[list[dict[str, Any]], str, float]] = {}
+
 
 def safe_float(value: Any, default: float = math.nan) -> float:
     try:
@@ -842,11 +844,15 @@ def option_quality_metrics(option_rows: list[dict[str, Any]], underlying_price: 
     missing_underlying = 0 if pd.notna(underlying_price) and underlying_price > 0 else total
     stale_quote = 0
     valid_for_calc = 0
+    expiry_cache: dict[str, pd.Timestamp | None] = {}
     for row in option_rows:
         oi = safe_float(row.get("open_interest"))
         iv = safe_float(row.get("implied_volatility"))
         strike = safe_float(row.get("strike"))
-        expiry_ts = parse_timestamp(row.get("expiration"))
+        expiry_key = str(row.get("expiration", ""))
+        if expiry_key not in expiry_cache:
+            expiry_cache[expiry_key] = parse_timestamp(row.get("expiration"))
+        expiry_ts = expiry_cache[expiry_key]
         quote_ts = parse_timestamp(row.get("quote_timestamp"))
         if pd.isna(oi) or oi < 0:
             invalid_or_negative_oi += 1
@@ -964,6 +970,61 @@ def aggregate_gamma_proxy_at_price(option_rows: list[dict[str, Any]], spot: floa
     return float(np.sum(vals)) if vals else math.nan
 
 
+def gamma_grid_values(option_rows: list[dict[str, Any]], grid: np.ndarray, as_of: pd.Timestamp) -> np.ndarray:
+    strikes = []
+    open_interest = []
+    ivs = []
+    multipliers = []
+    signs = []
+    years = []
+    expiry_cache: dict[str, pd.Timestamp | None] = {}
+    for row in option_rows:
+        side = row.get("call_put_flag")
+        strike = safe_float(row.get("strike"))
+        oi = safe_float(row.get("open_interest"))
+        iv = safe_float(row.get("implied_volatility"))
+        mult = safe_float(row.get("contract_multiplier"), 100)
+        expiry_key = str(row.get("expiration", ""))
+        if expiry_key not in expiry_cache:
+            expiry_ts = parse_timestamp(row.get("expiration"))
+            if expiry_ts is None and row.get("expiration"):
+                expiry_ts = parse_timestamp(str(row.get("expiration")) + "T20:00:00Z")
+            expiry_cache[expiry_key] = expiry_ts
+        expiry_ts = expiry_cache[expiry_key]
+        if (
+            expiry_ts is None
+            or side not in {"call", "put"}
+            or pd.isna(strike)
+            or pd.isna(oi)
+            or pd.isna(iv)
+            or strike <= 0
+            or oi < 0
+            or iv <= 0
+        ):
+            continue
+        strikes.append(strike)
+        open_interest.append(oi)
+        ivs.append(iv)
+        multipliers.append(mult)
+        signs.append(1.0 if side == "call" else -1.0)
+        years.append(max((expiry_ts - as_of).total_seconds() / (365.25 * 24 * 3600), 1 / 365.25))
+    if not strikes:
+        return np.full(len(grid), np.nan)
+    grid_arr = np.asarray(grid, dtype=float)[:, None]
+    strike_arr = np.asarray(strikes, dtype=float)[None, :]
+    oi_arr = np.asarray(open_interest, dtype=float)[None, :]
+    iv_arr = np.asarray(ivs, dtype=float)[None, :]
+    mult_arr = np.asarray(multipliers, dtype=float)[None, :]
+    sign_arr = np.asarray(signs, dtype=float)[None, :]
+    years_arr = np.asarray(years, dtype=float)[None, :]
+    vol_sqrt = iv_arr * np.sqrt(years_arr)
+    with np.errstate(divide="ignore", invalid="ignore", over="ignore"):
+        d1 = (np.log(grid_arr / strike_arr) + 0.5 * iv_arr * iv_arr * years_arr) / vol_sqrt
+        gamma = np.exp(-0.5 * d1 * d1) / math.sqrt(2 * math.pi) / (grid_arr * vol_sqrt)
+        contribution = sign_arr * gamma * oi_arr * mult_arr * grid_arr * grid_arr * 0.01
+    return np.nansum(contribution, axis=1)
+
+
 def gamma_flip_quality(distance_pct: float) -> tuple[str, str, str]:
     if pd.isna(distance_pct):
         return "unavailable", "", ""
@@ -999,10 +1060,7 @@ def local_gamma_flip_search(option_rows: list[dict[str, Any]], underlying_price:
     search_high = underlying_price * GAMMA_FLIP_SEARCH_HIGH_PCT
     grid = np.linspace(search_low, search_high, GAMMA_FLIP_MINIMUM_GRID_SIZE)
     diagnostics: list[dict[str, Any]] = []
-    values: list[tuple[float, float]] = []
-    for grid_price in grid:
-        agg = aggregate_gamma_proxy_at_price(option_rows, float(grid_price), as_of)
-        values.append((float(grid_price), agg))
+    values = list(zip([float(x) for x in grid], [float(x) if pd.notna(x) else math.nan for x in gamma_grid_values(option_rows, grid, as_of)]))
 
     roots: list[float] = []
     for (p0, g0), (p1, g1) in zip(values, values[1:]):
@@ -1211,15 +1269,20 @@ def calculate_gex_proxy_metrics(option_rows: list[dict[str, Any]], underlying_pr
     zero_dte_oi = 0.0
     expected_move_candidates: list[float] = []
     as_of_date = as_of.tz_convert(ET).date()
+    expiry_cache: dict[str, pd.Timestamp | None] = {}
     for row in option_rows:
         side = row.get("call_put_flag")
         strike = safe_float(row.get("strike"))
         oi = safe_float(row.get("open_interest"))
         iv = safe_float(row.get("implied_volatility"))
         mult = safe_float(row.get("contract_multiplier"), 100)
-        expiry_ts = parse_timestamp(row.get("expiration"))
-        if expiry_ts is None and row.get("expiration"):
-            expiry_ts = parse_timestamp(str(row.get("expiration")) + "T20:00:00Z")
+        expiry_key = str(row.get("expiration", ""))
+        if expiry_key not in expiry_cache:
+            expiry_ts = parse_timestamp(row.get("expiration"))
+            if expiry_ts is None and row.get("expiration"):
+                expiry_ts = parse_timestamp(str(row.get("expiration")) + "T20:00:00Z")
+            expiry_cache[expiry_key] = expiry_ts
+        expiry_ts = expiry_cache[expiry_key]
         if expiry_ts is None or pd.isna(strike) or pd.isna(oi) or pd.isna(iv) or strike <= 0 or oi < 0 or iv <= 0:
             continue
         years = max((expiry_ts - as_of).total_seconds() / (365.25 * 24 * 3600), 1 / 365.25)
@@ -1469,10 +1532,30 @@ def parse_snapshot_file(path: str, raw: bytes | None, local_path: Path | None = 
 
 
 def collect_option_snapshot_records(root: Path) -> tuple[list[dict[str, Any]], str, float]:
+    cache_key = f"{root.resolve()}|{os.environ.get('GITHUB_ACTIONS', '')}|{os.environ.get('GITHUB_SHA', '')}"
+    if cache_key in _OPTION_SNAPSHOT_RECORD_CACHE:
+        return _OPTION_SNAPSHOT_RECORD_CACHE[cache_key]
     repo = resolve_github_repository(root)
-    tree = github_main_tree(repo)
     records: list[dict[str, Any]] = []
     success_rate = np.nan
+    base = root / "option_chain_snapshots"
+    if os.environ.get("GITHUB_ACTIONS") == "true" and base.exists():
+        workflow_started = os.environ.get("GITHUB_WORKFLOW_STARTED_AT", "")
+        workflow_completed = ""
+        for p in sorted(base.rglob("*")):
+            if not p.is_file() or p.suffix.lower() not in {".json", ".csv", ".parquet"}:
+                continue
+            rec = parse_snapshot_file(str(p.relative_to(root)).replace("\\", "/"), None, p)
+            rec["source_basis"] = "github_main_checkout"
+            rec["github_repository"] = repo
+            rec["workflow_execution_success_rate"] = success_rate
+            rec["github_workflow_started_at_utc"] = workflow_started
+            rec["github_workflow_completed_at_utc"] = workflow_completed
+            records.append(rec)
+        result = (records, "github_main_checkout", success_rate)
+        _OPTION_SNAPSHOT_RECORD_CACHE[cache_key] = result
+        return result
+    tree = github_main_tree(repo)
     if tree:
         runs = github_workflow_runs(repo, ".github/workflows/option_snapshot.yml")
         success_rate = runs.get("workflow_execution_success_rate", np.nan)
@@ -1500,8 +1583,9 @@ def collect_option_snapshot_records(root: Path) -> tuple[list[dict[str, Any]], s
             rec["github_repository"] = repo
             rec["workflow_execution_success_rate"] = success_rate
             records.append(rec)
-        return records, "github_main_api", success_rate
-    base = root / "option_chain_snapshots"
+        result = (records, "github_main_api", success_rate)
+        _OPTION_SNAPSHOT_RECORD_CACHE[cache_key] = result
+        return result
     if base.exists():
         for p in sorted(base.rglob("*")):
             if p.is_file() and p.suffix.lower() in {".json", ".csv", ".parquet"}:
@@ -1510,7 +1594,9 @@ def collect_option_snapshot_records(root: Path) -> tuple[list[dict[str, Any]], s
                 rec["github_repository"] = repo
                 rec["workflow_execution_success_rate"] = np.nan
                 records.append(rec)
-    return records, "local_fallback_repo_unresolved_or_api_unavailable", success_rate
+    result = (records, "local_fallback_repo_unresolved_or_api_unavailable", success_rate)
+    _OPTION_SNAPSHOT_RECORD_CACHE[cache_key] = result
+    return result
 
 
 def dealer_gamma_coverage_audit(root: Path) -> pd.DataFrame:

@@ -277,7 +277,7 @@ def test_local_gamma_flip_selects_nearest_root(monkeypatch):
         return pd.Series([80.0, 90.0, 100.0, 110.0, 120.0]).to_numpy()
 
     monkeypatch.setattr(score.np, "linspace", fake_grid)
-    monkeypatch.setattr(score, "aggregate_gamma_proxy_at_price", lambda rows, spot, as_of: values[spot])
+    monkeypatch.setattr(score, "gamma_grid_values", lambda rows, grid, as_of: pd.Series([values[float(x)] for x in grid]).to_numpy())
     metrics, diagnostics = score.local_gamma_flip_search([{"dummy": True}], 100, pd.Timestamp("2026-06-25T21:30:00Z"))
     assert metrics["gamma_flip_root_count"] == 2
     assert metrics["gamma_flip_selected_root"] == 105.0
