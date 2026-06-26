@@ -1,0 +1,135 @@
+name: Dealer Gamma Audit
+
+on:
+  workflow_dispatch:
+    inputs:
+      run_backfill:
+        description: "Run Dealer Gamma / GEX proxy backfill from raw option snapshots"
+        required: true
+        default: true
+        type: boolean
+      persist_reports:
+        description: "Commit generated audit/backfill reports"
+        required: true
+        default: false
+        type: boolean
+
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      actions: read
+    steps:
+      - name: Checkout main
+        uses: actions/checkout@v4
+        with:
+          ref: main
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Snapshot raw option-chain hashes before audit
+        run: |
+          if [ -d option_chain_snapshots ]; then
+            find option_chain_snapshots -type f -print0 | sort -z | xargs -0 sha256sum > /tmp/raw_before.sha256
+          else
+            touch /tmp/raw_before.sha256
+          fi
+
+      - name: Run dealer gamma audit
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          GITHUB_SHA: ${{ github.sha }}
+          GITHUB_REF_NAME: ${{ github.ref_name }}
+        run: |
+          if [ "${{ inputs.run_backfill }}" = "true" ]; then
+            python market_environment_score_v0.py
+          else
+            python market_environment_score_v0.py --skip-backfill
+          fi
+          cp dealer_gamma_history/dealer_gamma_snapshot_file_audit.csv dealer_gamma_snapshot_file_audit.csv || true
+          cp dealer_gamma_history/dealer_gamma_proxy_history.csv dealer_gamma_proxy_history.csv || true
+          cp dealer_gamma_history/dealer_gamma_proxy_history.parquet dealer_gamma_proxy_history.parquet || true
+          cp dealer_gamma_history/dealer_gamma_backfill_audit.md dealer_gamma_backfill_audit.md || true
+          cp dealer_gamma_history/dealer_gamma_quality_rules_v1.json dealer_gamma_quality_rules_v1.json || true
+          cp dealer_gamma_history/dealer_gamma_manual_validation_*.md . 2>/dev/null || true
+
+      - name: Verify raw option-chain snapshots were not mutated
+        run: |
+          if [ -d option_chain_snapshots ]; then
+            find option_chain_snapshots -type f -print0 | sort -z | xargs -0 sha256sum > /tmp/raw_after.sha256
+          else
+            touch /tmp/raw_after.sha256
+          fi
+          if diff -u /tmp/raw_before.sha256 /tmp/raw_after.sha256 > raw_snapshot_mutation_report.txt; then
+            echo "raw_snapshot_mutation_count=0" > raw_snapshot_mutation_count.txt
+          else
+            grep -E '^[+-][^+-]' raw_snapshot_mutation_report.txt | wc -l | awk '{print "raw_snapshot_mutation_count="$1}' > raw_snapshot_mutation_count.txt
+            cat raw_snapshot_mutation_report.txt
+            exit 1
+          fi
+
+      - name: Upload dealer gamma audit artifacts
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: dealer-gamma-audit-${{ github.run_id }}
+          path: |
+            market_environment_score_deployment_audit.csv
+            market_environment_score_deployment_audit.md
+            dealer_gamma_history_coverage_audit.csv
+            dealer_gamma_history_coverage_audit.md
+            dealer_gamma_history/dealer_gamma_snapshot_file_audit.csv
+            dealer_gamma_history/dealer_gamma_proxy_history.csv
+            dealer_gamma_history/dealer_gamma_proxy_history.parquet
+            dealer_gamma_history/dealer_gamma_backfill_audit.md
+            dealer_gamma_history/dealer_gamma_quality_rules_v1.json
+            dealer_gamma_history/dealer_gamma_manual_validation_*.md
+            dealer_gamma_snapshot_file_audit.csv
+            dealer_gamma_proxy_history.csv
+            dealer_gamma_proxy_history.parquet
+            dealer_gamma_backfill_audit.md
+            dealer_gamma_quality_rules_v1.json
+            dealer_gamma_manual_validation_*.md
+            phase3_1_completion_gate_audit.md
+            raw_snapshot_mutation_report.txt
+            raw_snapshot_mutation_count.txt
+          if-no-files-found: ignore
+
+  persist:
+    needs: audit
+    if: ${{ inputs.persist_reports == true && needs.audit.result == 'success' }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      actions: read
+    steps:
+      - name: Checkout main
+        uses: actions/checkout@v4
+        with:
+          ref: main
+
+      - name: Download audit artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: dealer-gamma-audit-${{ github.run_id }}
+          path: .
+
+      - name: Commit audit reports
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add market_environment_score_deployment_audit.csv market_environment_score_deployment_audit.md || true
+          git add dealer_gamma_history_coverage_audit.csv dealer_gamma_history_coverage_audit.md || true
+          git add dealer_gamma_snapshot_file_audit.csv dealer_gamma_proxy_history.csv dealer_gamma_proxy_history.parquet || true
+          git add dealer_gamma_backfill_audit.md dealer_gamma_quality_rules_v1.json dealer_gamma_manual_validation_*.md || true
+          git add phase3_1_completion_gate_audit.md raw_snapshot_mutation_report.txt raw_snapshot_mutation_count.txt || true
+          git diff --cached --quiet || git commit -m "Update dealer gamma audit reports"
+          git push
