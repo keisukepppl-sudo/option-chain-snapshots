@@ -40,6 +40,11 @@ NYSE_CALENDAR_PATH = Path("market_bomb_config/nyse_regular_sessions_v1.csv")
 NYSE_CALENDAR_METADATA_PATH = Path("market_bomb_config/nyse_regular_sessions_metadata_v1.json")
 EXPIRY_INTRADAY_RULES_PATH = Path("market_bomb_config/market_impact_expiry_intraday_rules_v1.json")
 OUTPUT_ROOT = Path("market_bomb_market_impact")
+CTA_VOL_QUALITY_CONTRACT_REVISION = "cta_vol_quality_contract_v1_1_8"
+CTA_VOL_SELECTION_POLICY_REVISION = "latest_clean_feature_selector_v1_1_8"
+LEVERAGED_BUNDLE_POLICY_REVISION = "leveraged_etf_input_bundle_v1_1_8"
+MARKET_LEVEL_INTEGRITY_REVISION = "market_level_decision_scope_integrity_v1_1_8"
+DEALER_GAMMA_SIGN_POLICY_REVISION = "dealer_gamma_negative_sign_policy_v1_1_8"
 
 FEATURE_AUDIT_COLUMNS = [
     "feature_family",
@@ -109,6 +114,36 @@ LEVERAGED_AUDIT_COLUMNS = [
     "volume_reference_window",
     "volume_reference_last_date",
     "volume_reference_row_count",
+]
+
+LEVERAGED_ETF_COMPONENT_MANIFEST_COLUMNS = [
+    "target_market",
+    "decision_timestamp_utc",
+    "selection_bundle_id",
+    "source_component_type",
+    "fund_ticker",
+    "selected_source_row_identifier",
+    "selected_source_content_hash",
+    "selected_source_as_of_timestamp_utc",
+    "selected_source_effective_available_at_utc",
+    "selection_status",
+    "availability_state",
+    "primary_eligible",
+    "invalid_reason",
+    "selected_value_or_reference",
+    "selection_policy_revision",
+]
+
+MARKET_LEVEL_SCOPE_INTEGRITY_COLUMNS = [
+    "target_market",
+    "decision_timestamp_utc",
+    "model_clock",
+    "model_scope",
+    "required_component",
+    "component_integrity_status",
+    "scope_integrity_status",
+    "scope_integrity_failure_reason",
+    "source_parity_status",
 ]
 
 EXPIRY_SNAPSHOT_AUDIT_COLUMNS = [
@@ -335,6 +370,11 @@ SOURCE_SELECTION_PARITY_COLUMNS = [
     "panel_selected_source_hash_or_index",
     "audit_selected_effective_available_at_utc",
     "panel_selected_effective_available_at_utc",
+    "audit_selection_status",
+    "panel_selection_status",
+    "audit_selected_source_quality_value",
+    "panel_selected_source_quality_value",
+    "selection_quality_contract_revision",
     "selection_parity_status",
     "selection_parity_failure_reason",
     "scope_gate_recommendation",
@@ -1045,8 +1085,9 @@ def select_latest_clean_feature(
     decision_timestamp_utc: Any,
     target_vol: float | None,
     source_rows: pd.DataFrame,
-    policy_revision: str = "latest_clean_feature_selector_v1_1_7",
+    policy_revision: str = CTA_VOL_SELECTION_POLICY_REVISION,
     max_age_hours: float = 96,
+    quality_contract: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     decision_ts = parse_ts(decision_timestamp_utc)
     feature_family = str(family)
@@ -1064,10 +1105,14 @@ def select_latest_clean_feature(
         "selected_source_as_of_timestamp_utc": "",
         "selected_source_effective_available_at_utc": "",
         "selected_source_available_at_utc": "",
+        "selected_source_quality_value": "",
+        "selection_quality_contract_revision": "",
         "selection_policy_revision": policy_revision,
         "invalid_reason": "",
         "row": None,
     }
+    contract = quality_contract or default_cta_vol_quality_contract(feature_family)
+    base["selection_quality_contract_revision"] = str(contract.get("contract_revision", CTA_VOL_QUALITY_CONTRACT_REVISION))
     required = {"asset", "feature_as_of_timestamp_utc", "effective_available_at_utc"}
     if source_rows.empty:
         return base | {"availability_state": "coverage_not_started", "invalid_reason": "feature_history_missing"}
@@ -1099,20 +1144,33 @@ def select_latest_clean_feature(
     work = work[work["feature_age_hours"] <= max_age_hours].copy()
     if work.empty:
         return base | {"availability_state": "unavailable_coverage", "invalid_reason": "feature_too_old"}
-    row = work.sort_values(["effective", "feature_asof"]).iloc[-1]
-    row_id = str(row.name)
-    return base | {
-        "selection_status": "selected",
-        "availability_state": "valid",
-        "primary_eligible": True,
-        "selected_source_row_identifier": row_id,
-        "selected_source_content_hash": row_content_hash(row),
-        "selected_source_as_of_timestamp_utc": row.get("feature_as_of_timestamp_utc", ""),
-        "selected_source_effective_available_at_utc": row.get("effective_available_at_utc", ""),
-        "selected_source_available_at_utc": row.get("effective_available_at_utc", ""),
-        "invalid_reason": "",
-        "row": row,
-    }
+    quality_results: list[tuple[Any, bool, str, str]] = []
+    missing_contract_field = False
+    for idx, candidate in work.sort_values(["effective", "feature_asof"], ascending=[False, False]).iterrows():
+        ok, quality_value, reason = evaluate_cta_vol_quality_contract(candidate, contract)
+        quality_results.append((idx, ok, quality_value, reason))
+        if reason in {"required_quality_field_missing", "data_type_mismatch", "is_proxy_not_true", "observed_flow_not_false"}:
+            missing_contract_field = True
+        if ok:
+            row = candidate
+            row_id = str(row.name)
+            return base | {
+                "selection_status": "selected",
+                "availability_state": "valid",
+                "primary_eligible": True,
+                "selected_source_row_identifier": row_id,
+                "selected_source_content_hash": row_content_hash(row),
+                "selected_source_as_of_timestamp_utc": row.get("feature_as_of_timestamp_utc", ""),
+                "selected_source_effective_available_at_utc": row.get("effective_available_at_utc", ""),
+                "selected_source_available_at_utc": row.get("effective_available_at_utc", ""),
+                "selected_source_quality_value": quality_value,
+                "invalid_reason": "",
+                "row": row,
+            }
+    reasons = [r for _, _, _, r in quality_results if r]
+    if missing_contract_field:
+        return base | {"selection_status": "selected_invalid", "availability_state": "missing_required_field", "invalid_reason": ";".join(sorted(set(reasons)))}
+    return base | {"availability_state": "unavailable_coverage", "invalid_reason": ";".join(sorted(set(reasons))) or "no_quality_accepted_feature"}
 
 
 def latest_available_feature(df: pd.DataFrame, asset: str, decision_ts: pd.Timestamp, max_age_hours: float = 96, target_vol: float | None = None) -> tuple[pd.Series | None, str, str]:
@@ -1164,6 +1222,52 @@ def target_to_feature_asset(target: str) -> str:
     return target
 
 
+def default_cta_vol_quality_contract(family: str) -> dict[str, Any]:
+    return {
+        "contract_revision": CTA_VOL_QUALITY_CONTRACT_REVISION,
+        "allowed_quality_values": ["medium", "high"],
+        "quality_column_candidates": ["quality_flag", "quality_grade", "source_quality"],
+        "require_quality_column": True,
+        "required_data_type": "",
+        "require_is_proxy_true": False,
+        "require_observed_flow_false": False,
+        "family": family,
+    }
+
+
+def _boolish(value: Any) -> bool | None:
+    if pd.isna(value):
+        return None
+    text = str(value).strip().lower()
+    if text in {"true", "1", "yes", "y"}:
+        return True
+    if text in {"false", "0", "no", "n"}:
+        return False
+    return None
+
+
+def evaluate_cta_vol_quality_contract(row: pd.Series, contract: dict[str, Any]) -> tuple[bool, str, str]:
+    quality_cols = [c for c in contract.get("quality_column_candidates", []) if c in row.index]
+    if contract.get("require_quality_column", True) and not quality_cols:
+        return False, "", "required_quality_field_missing"
+    quality_value = str(row.get(quality_cols[0], "")).strip().lower() if quality_cols else ""
+    allowed = {str(v).strip().lower() for v in contract.get("allowed_quality_values", ["medium", "high"])}
+    if quality_cols and quality_value not in allowed:
+        return False, quality_value, "quality_rejected:" + quality_value
+    required_data_type = str(contract.get("required_data_type", "")).strip()
+    if required_data_type and str(row.get("data_type", "")).strip() != required_data_type:
+        return False, quality_value, "data_type_mismatch"
+    if contract.get("require_is_proxy_true", False):
+        is_proxy = _boolish(row.get("is_proxy", np.nan))
+        if is_proxy is not True:
+            return False, quality_value, "is_proxy_not_true"
+    if contract.get("require_observed_flow_false", False):
+        observed = _boolish(row.get("observed_flow", np.nan))
+        if observed is not False:
+            return False, quality_value, "observed_flow_not_false"
+    return True, quality_value, ""
+
+
 def build_cta_vol_feature_outcome_panel(root: Path, daily_outcomes: pd.DataFrame, cfg: dict[str, Any]) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
     cta, vol = load_feature_history(root)
     rows: list[dict[str, Any]] = []
@@ -1213,7 +1317,7 @@ def build_cta_vol_feature_outcome_panel(root: Path, daily_outcomes: pd.DataFrame
                 data_type=row.get("data_type") if row is not None else "unavailable",
                 is_proxy=row.get("is_proxy") if row is not None else True,
                 observed_flow=row.get("observed_flow") if row is not None else False,
-                quality_grade=row.get("quality_flag") if row is not None else "unavailable",
+                quality_grade=(cta_selection if family == "CTA" else vol_selection).get("selected_source_quality_value", "unavailable") if row is not None else "unavailable",
             ))
         if cta_row is None and vol_row is None:
             continue
@@ -1253,6 +1357,10 @@ def build_cta_vol_feature_outcome_panel(root: Path, daily_outcomes: pd.DataFrame
             "cta_selected_source_effective_available_at_utc": cta_selection["selected_source_effective_available_at_utc"],
             "cta_primary_eligible": bool(cta_selection["primary_eligible"]),
             "cta_selection_status": cta_selection["selection_status"],
+            "cta_availability_state": cta_selection["availability_state"],
+            "cta_invalid_reason": cta_selection["invalid_reason"],
+            "cta_selected_source_quality_value": cta_selection["selected_source_quality_value"],
+            "cta_selection_quality_contract_revision": cta_selection["selection_quality_contract_revision"],
             "cta_selection_policy_revision": cta_selection["selection_policy_revision"],
             "vol_selected_source_row_identifier": vol_selection["selected_source_row_identifier"],
             "vol_selected_source_content_hash": vol_selection["selected_source_content_hash"],
@@ -1260,6 +1368,10 @@ def build_cta_vol_feature_outcome_panel(root: Path, daily_outcomes: pd.DataFrame
             "vol_selected_source_effective_available_at_utc": vol_selection["selected_source_effective_available_at_utc"],
             "vol_primary_eligible": bool(vol_selection["primary_eligible"]),
             "vol_selection_status": vol_selection["selection_status"],
+            "vol_availability_state": vol_selection["availability_state"],
+            "vol_invalid_reason": vol_selection["invalid_reason"],
+            "vol_selected_source_quality_value": vol_selection["selected_source_quality_value"],
+            "vol_selection_quality_contract_revision": vol_selection["selection_quality_contract_revision"],
             "vol_selection_policy_revision": vol_selection["selection_policy_revision"],
             "vol_target_vol_requested": 0.12,
             "cta_trend_state": cta_row.get("cta_trend_state") if cta_row is not None else "unavailable",
@@ -1545,7 +1657,7 @@ def strict_rth_volume_reference(
     samples: list[float] = []
     used_dates: list[str] = []
     excluded_early: list[str] = []
-    for ref_day in sorted(prior_dates)[-max(window * 3, window):]:
+    for ref_day in sorted(prior_dates, reverse=True):
         session = get_nyse_session(ref_day, nyse_calendar)
         if session.get("is_early_close"):
             excluded_early.append(pd.Timestamp(ref_day).date().isoformat())
@@ -1558,6 +1670,9 @@ def strict_rth_volume_reference(
             used_dates.append(pd.Timestamp(ref_day).date().isoformat())
         if len(samples) >= window:
             break
+    paired = sorted(zip(used_dates, samples), key=lambda x: x[0])
+    used_dates = [d for d, _ in paired]
+    samples = [v for _, v in paired]
     status = "eligible" if len(samples) >= min_valid_sessions and pd.notna(current_volume) else "unavailable_coverage"
     ratio = current_volume / float(np.mean(samples)) if status == "eligible" and samples else np.nan
     source_id = f"rth_ref_count={len(samples)};dates={';'.join(used_dates)}"
@@ -1613,18 +1728,18 @@ def prior_available_aum_record(aum: pd.DataFrame, ticker: str, decision_ts: pd.T
     asof_col = "aum_as_of_timestamp_utc" if "aum_as_of_timestamp_utc" in work.columns else "as_of_timestamp_utc" if "as_of_timestamp_utc" in work.columns else "effective_available_at_utc" if "effective_available_at_utc" in work.columns else ""
     eff_col = "aum_effective_available_at_utc" if "aum_effective_available_at_utc" in work.columns else "effective_available_at_utc" if "effective_available_at_utc" in work.columns else asof_col
     if not asof_col or not eff_col:
-        return base | {"aum_source": "aum_timestamp_missing", "selection_status": "unavailable_missing_required_input", "availability_failure_reason": "aum_timestamp_missing"}
+        return base | {"aum_source": "aum_timestamp_missing", "selection_status": "selected_invalid", "availability_state": "data_quality_blocked", "availability_failure_reason": "aum_timestamp_missing"}
     work["aum_asof"] = pd.to_datetime(work[asof_col], utc=True, errors="coerce")
     work["aum_effective"] = pd.to_datetime(work[eff_col], utc=True, errors="coerce")
     invalid_ts = work["aum_asof"].isna() | work["aum_effective"].isna()
     work = work[~invalid_ts].copy()
     if work.empty:
-        return base | {"aum_source": "aum_timestamp_missing", "selection_status": "unavailable_missing_required_input", "availability_failure_reason": "aum_timestamp_missing"}
+        return base | {"aum_source": "aum_timestamp_missing", "selection_status": "selected_invalid", "availability_state": "data_quality_blocked", "availability_failure_reason": "aum_timestamp_missing"}
     late = work[(work["aum_asof"] > prior_regular_close_ts) | (work["aum_effective"] > prior_regular_close_ts)]
     work = work[(work["aum_asof"] <= prior_regular_close_ts) & (work["aum_effective"] <= prior_regular_close_ts)].copy()
     if work.empty:
-        reason = "selected_aum_after_prior_regular_close" if not late.empty else "no_prior_available_aum"
-        return base | {"aum_source": "no_prior_available_aum", "selection_status": "selected_invalid" if not late.empty else "unavailable_coverage_not_started", "availability_state": "data_quality_blocked" if not late.empty else "coverage_gap_or_no_candidate", "availability_failure_reason": reason}
+        reason = "coverage_not_started" if not late.empty else "no_prior_available_aum"
+        return base | {"aum_source": "no_prior_available_aum", "selection_status": "unavailable_coverage_not_started", "availability_state": "coverage_not_started", "availability_failure_reason": reason}
     row = work.sort_values(["aum_effective", "aum_asof"]).iloc[-1]
     row_id = str(row.name)
     value_type = str(row.get("aum_value_type", "net_assets_usd")).lower()
@@ -1716,6 +1831,8 @@ def component_selection_row(
     asof: Any = "",
     effective: Any = "",
     source_path: str = "",
+    selection_bundle_id: str = "",
+    selected_value_or_reference: Any = "",
 ) -> dict[str, Any]:
     source_id = ""
     source_hash = ""
@@ -1728,6 +1845,7 @@ def component_selection_row(
     return {
         "target_market": target,
         "decision_timestamp_utc": decision_ts.isoformat(),
+        "selection_bundle_id": selection_bundle_id,
         "source_component_type": component_type,
         "input_component": component_type,
         "fund_ticker": fund_ticker,
@@ -1745,8 +1863,9 @@ def component_selection_row(
         "selected_for_model": primary_eligible,
         "invalid_reason": invalid_reason,
         "availability_failure_reason": "" if primary_eligible else invalid_reason,
-        "selection_policy_version": "leveraged_etf_input_bundle_v1_1_7",
-        "selection_policy_revision": "leveraged_etf_input_bundle_v1_1_7",
+        "selected_value_or_reference": selected_value_or_reference,
+        "selection_policy_version": LEVERAGED_BUNDLE_POLICY_REVISION,
+        "selection_policy_revision": LEVERAGED_BUNDLE_POLICY_REVISION,
     }
 
 
@@ -1767,6 +1886,7 @@ def build_leveraged_etf_input_selection_bundle(
     if decision_ts is None:
         decision_ts = pd.Timestamp(decision_timestamp_utc, tz=UTC)
     day = decision_ts.tz_convert(ET).date()
+    bundle_id = hashlib.sha256(f"{target}|{decision_ts.isoformat()}|{LEVERAGED_BUNDLE_POLICY_REVISION}".encode("utf-8")).hexdigest()
     decision_bar = parse_et_time(cfg.get("primary_decision_bar_et", "15:30"), time(15, 30))
     close_bar_time = parse_et_time(cfg.get("primary_close_bar_et", "16:00"), time(16, 0))
     min_cfg = cfg.get("minimum_samples", {})
@@ -1793,13 +1913,15 @@ def build_leveraged_etf_input_selection_bundle(
             asof=provider_rules.get("provider_bar_semantics_verified_at_utc", ""),
             effective=provider_rules.get("provider_bar_semantics_verified_at_utc", ""),
             source_path=str(EXPIRY_INTRADAY_RULES_PATH).replace("\\", "/"),
+            selection_bundle_id=bundle_id,
+            selected_value_or_reference=str(provider_rules.get("bar_timestamp_convention", "")),
         )
     ]
     session = get_nyse_session(day, nyse_calendar)
     if session.get("calendar_coverage_status") != "covered" or not session.get("is_regular_session") or session.get("is_early_close"):
         reason = "early_close_session_excluded_from_primary" if session.get("is_early_close") else "nyse_regular_session_unavailable"
-        components.append(component_selection_row(target=target, decision_ts=decision_ts, component_type="universe", status="unavailable_coverage", primary_eligible=False, invalid_reason=reason))
-        return {"target_market": target, "decision_timestamp_utc": decision_ts.isoformat(), "components": components, "status": "insufficient_data", "failure_reason": reason}
+        components.append(component_selection_row(target=target, decision_ts=decision_ts, component_type="universe", status="unavailable_coverage", primary_eligible=False, invalid_reason=reason, selection_bundle_id=bundle_id))
+        return {"target_market": target, "decision_timestamp_utc": decision_ts.isoformat(), "selection_bundle_id": bundle_id, "components": components, "status": "insufficient_data", "failure_reason": reason}
     work = bars.copy()
     if not work.empty and "timestamp_utc" in work.columns:
         work["timestamp_utc"] = pd.to_datetime(work["timestamp_utc"], utc=True, errors="coerce")
@@ -1809,14 +1931,14 @@ def build_leveraged_etf_input_selection_bundle(
     et_times = work["timestamp_utc"].dt.tz_convert(ET) if not work.empty and "timestamp_utc" in work.columns else pd.Series(dtype="datetime64[ns, UTC]")
     bar_1530 = exact_bar(work, et_times, decision_bar) if not work.empty else None
     bar_1600 = exact_bar(work, et_times, close_bar_time) if not work.empty else None
-    components.append(component_selection_row(target=target, decision_ts=decision_ts, component_type="bar_1530", status="selected" if bar_1530 is not None else "unavailable_coverage", primary_eligible=bar_1530 is not None, invalid_reason="" if bar_1530 is not None else "required_1530_bar_missing", row=bar_1530, asof=bar_1530.get("timestamp_utc") if bar_1530 is not None else "", effective=bar_1530.get("timestamp_utc") if bar_1530 is not None else "", source_path=source_path))
-    components.append(component_selection_row(target=target, decision_ts=decision_ts, component_type="bar_1600", status="selected" if bar_1600 is not None else "unavailable_coverage", primary_eligible=bar_1600 is not None, invalid_reason="" if bar_1600 is not None else "required_1600_bar_missing", row=bar_1600, asof=bar_1600.get("timestamp_utc") if bar_1600 is not None else "", effective=bar_1600.get("timestamp_utc") if bar_1600 is not None else "", source_path=source_path))
+    components.append(component_selection_row(target=target, decision_ts=decision_ts, component_type="bar_1530", status="selected" if bar_1530 is not None else "unavailable_coverage", primary_eligible=bar_1530 is not None, invalid_reason="" if bar_1530 is not None else "required_1530_bar_missing", row=bar_1530, asof=bar_1530.get("timestamp_utc") if bar_1530 is not None else "", effective=bar_1530.get("timestamp_utc") if bar_1530 is not None else "", source_path=source_path, selection_bundle_id=bundle_id, selected_value_or_reference=bar_1530.get("close") if bar_1530 is not None else ""))
+    components.append(component_selection_row(target=target, decision_ts=decision_ts, component_type="bar_1600", status="selected" if bar_1600 is not None else "unavailable_coverage", primary_eligible=bar_1600 is not None, invalid_reason="" if bar_1600 is not None else "required_1600_bar_missing", row=bar_1600, asof=bar_1600.get("timestamp_utc") if bar_1600 is not None else "", effective=bar_1600.get("timestamp_utc") if bar_1600 is not None else "", source_path=source_path, selection_bundle_id=bundle_id, selected_value_or_reference=bar_1600.get("close") if bar_1600 is not None else ""))
     prior_regular_close_ts = previous_regular_session_close_utc(day, nyse_calendar)
     prior_close = safe_float(work.iloc[0].get("prior_regular_session_close", np.nan)) if not work.empty else np.nan
     prior_ok = prior_regular_close_ts is not None and pd.notna(prior_close) and prior_close > 0
-    components.append(component_selection_row(target=target, decision_ts=decision_ts, component_type="prior_close", status="selected" if prior_ok else "unavailable_coverage", primary_eligible=prior_ok, invalid_reason="" if prior_ok else "prior_regular_close_missing", row={"source_row_identifier": f"prior_close:{day}", "prior_regular_close": prior_close}, asof=prior_regular_close_ts.isoformat() if prior_regular_close_ts is not None else "", effective=prior_regular_close_ts.isoformat() if prior_regular_close_ts is not None else "", source_path=source_path))
+    components.append(component_selection_row(target=target, decision_ts=decision_ts, component_type="prior_close", status="selected" if prior_ok else "unavailable_coverage", primary_eligible=prior_ok, invalid_reason="" if prior_ok else "prior_regular_close_missing", row={"source_row_identifier": f"prior_close:{day}", "prior_regular_close": prior_close}, asof=prior_regular_close_ts.isoformat() if prior_regular_close_ts is not None else "", effective=prior_regular_close_ts.isoformat() if prior_regular_close_ts is not None else "", source_path=source_path, selection_bundle_id=bundle_id, selected_value_or_reference=prior_close))
     volume = strict_rth_volume_reference(bars, day, decision_bar, nyse_calendar, window=volume_window, min_valid_sessions=volume_min)
-    components.append(component_selection_row(target=target, decision_ts=decision_ts, component_type="volume_ref", status="selected" if volume["rth_volume_reference_status"] == "eligible" else "unavailable_coverage", primary_eligible=volume["rth_volume_reference_status"] == "eligible", invalid_reason=volume.get("invalid_reason", ""), row={"source_row_identifier": volume.get("source_row_identifier", ""), **volume}, asof=decision_ts.isoformat(), effective=decision_ts.isoformat(), source_path=source_path) | volume)
+    components.append(component_selection_row(target=target, decision_ts=decision_ts, component_type="volume_ref", status="selected" if volume["rth_volume_reference_status"] == "eligible" else "unavailable_coverage", primary_eligible=volume["rth_volume_reference_status"] == "eligible", invalid_reason=volume.get("invalid_reason", ""), row={"source_row_identifier": volume.get("source_row_identifier", ""), **volume}, asof=decision_ts.isoformat(), effective=decision_ts.isoformat(), source_path=source_path, selection_bundle_id=bundle_id, selected_value_or_reference=volume.get("volume_ratio", np.nan)) | volume)
     prior_ts_for_aum = prior_regular_close_ts or decision_ts
     eligible_funds = 0
     for fund in funds:
@@ -1824,9 +1946,10 @@ def build_leveraged_etf_input_selection_bundle(
         record = prior_available_aum_record(aum_history, ticker, decision_ts, prior_ts_for_aum)
         eligible = bool(record.get("primary_eligible", False))
         eligible_funds += int(eligible)
-        components.append(component_selection_row(target=target, decision_ts=decision_ts, component_type="aum", fund_ticker=ticker, status="selected" if eligible else "unavailable_coverage", primary_eligible=eligible, invalid_reason="" if eligible else str(record.get("availability_failure_reason", "")), row=record, asof=record.get("aum_as_of_timestamp_utc", ""), effective=record.get("aum_effective_available_at_utc", ""), source_path=record.get("source_path_or_provider", "")) | {"aum_value": record.get("aum_value", np.nan), "aum_value_type": record.get("aum_value_type", "")})
+        record_status = "selected" if eligible else ("selected_invalid" if str(record.get("selection_status", "")) == "selected_invalid" or str(record.get("availability_state", "")) == "data_quality_blocked" else "unavailable_coverage")
+        components.append(component_selection_row(target=target, decision_ts=decision_ts, component_type="aum", fund_ticker=ticker, status=record_status, primary_eligible=eligible, invalid_reason="" if eligible else str(record.get("availability_failure_reason", "")), row=record, asof=record.get("aum_as_of_timestamp_utc", ""), effective=record.get("aum_effective_available_at_utc", ""), source_path=record.get("source_path_or_provider", ""), selection_bundle_id=bundle_id, selected_value_or_reference=record.get("aum_value", np.nan)) | {"aum_value": record.get("aum_value", np.nan), "aum_value_type": record.get("aum_value_type", "")})
     universe_ok = eligible_funds == len(funds) and len(funds) > 0
-    components.append(component_selection_row(target=target, decision_ts=decision_ts, component_type="universe", status="selected" if universe_ok else "unavailable_coverage", primary_eligible=universe_ok, invalid_reason="" if universe_ok else "primary_universe_incomplete", row={"source_row_identifier": f"universe:{target}:{eligible_funds}/{len(funds)}", "funds": ",".join(str(f.get("ticker", "")) for f in funds)}, asof=decision_ts.isoformat(), effective=decision_ts.isoformat(), source_path=str(LEVERAGED_UNIVERSE_PATH).replace("\\", "/")) | {"required_fund_count": len(funds), "eligible_fund_count": eligible_funds})
+    components.append(component_selection_row(target=target, decision_ts=decision_ts, component_type="universe", status="selected" if universe_ok else "unavailable_coverage", primary_eligible=universe_ok, invalid_reason="" if universe_ok else "primary_universe_incomplete", row={"source_row_identifier": f"universe:{target}:{eligible_funds}/{len(funds)}", "funds": ",".join(str(f.get("ticker", "")) for f in funds)}, asof=decision_ts.isoformat(), effective=decision_ts.isoformat(), source_path=str(LEVERAGED_UNIVERSE_PATH).replace("\\", "/"), selection_bundle_id=bundle_id, selected_value_or_reference=f"{eligible_funds}/{len(funds)}") | {"required_fund_count": len(funds), "eligible_fund_count": eligible_funds})
     statuses = [c for c in components if not bool(c.get("primary_eligible", False))]
     if any(c.get("selection_status") == "selected_invalid" for c in statuses):
         status = "data_quality_blocked"
@@ -1834,7 +1957,7 @@ def build_leveraged_etf_input_selection_bundle(
         status = "insufficient_data"
     else:
         status = "eligible_primary"
-    return {"target_market": target, "decision_timestamp_utc": decision_ts.isoformat(), "components": components, "status": status, "failure_reason": ";".join(sorted(set(str(c.get("invalid_reason", "")) for c in statuses if str(c.get("invalid_reason", "")))))}
+    return {"target_market": target, "decision_timestamp_utc": decision_ts.isoformat(), "selection_bundle_id": bundle_id, "components": components, "status": status, "failure_reason": ";".join(sorted(set(str(c.get("invalid_reason", "")) for c in statuses if str(c.get("invalid_reason", "")))))}
 
 
 def build_leveraged_etf_panel(root: Path, cfg: dict[str, Any]) -> tuple[pd.DataFrame, pd.DataFrame]:
@@ -1843,17 +1966,11 @@ def build_leveraged_etf_panel(root: Path, cfg: dict[str, Any]) -> tuple[pd.DataF
     nyse_calendar = load_nyse_calendar(root)
     rows: list[dict[str, Any]] = []
     audit: list[dict[str, Any]] = []
+    component_manifest: list[dict[str, Any]] = []
     decision_bar = parse_et_time(cfg.get("primary_decision_bar_et", "15:30"), time(15, 30))
     close_bar_time = parse_et_time(cfg.get("primary_close_bar_et", "16:00"), time(16, 0))
     timestamp_convention = str(cfg.get("bar_timestamp_convention", "bar_end"))
     provider_rules = expiry_intraday_rules(root)
-    provider_configured = (root / EXPIRY_INTRADAY_RULES_PATH).exists()
-    provider_verified = bool(provider_configured and provider_rules.get("provider_bar_semantics_verified", False))
-    provider_source = str(provider_rules.get("provider_bar_semantics_source", ""))
-    provider_verified_at = str(provider_rules.get("provider_bar_semantics_verified_at_utc", ""))
-    min_cfg = cfg.get("minimum_samples", {})
-    default_volume_min = 20 if (root / RULES_PATH).exists() else 0
-    volume_reference_min_sessions = int(cfg.get("leveraged_etf_volume_reference_min_sessions", min_cfg.get("leveraged_etf_volume_reference_min_sessions", default_volume_min)))
     for family, funds in universe.items():
         if not isinstance(funds, list):
             continue
@@ -1863,110 +1980,62 @@ def build_leveraged_etf_panel(root: Path, cfg: dict[str, Any]) -> tuple[pd.DataF
             if bars.empty:
                 audit.append({"target_market": target, "feature_family": "LeveragedETF", "availability_status": "unavailable", "availability_failure_reason": "intraday_bars_missing"})
                 continue
-            if timestamp_convention != "bar_end":
-                audit.append({"target_market": target, "feature_family": "LeveragedETF", "availability_status": "unavailable", "availability_failure_reason": "bar_timestamp_convention_unknown"})
-                continue
             bars["date_et"] = bars["timestamp_utc"].dt.tz_convert(ET).dt.date
             for day, group in bars.groupby("date_et"):
                 session = get_nyse_session(day, nyse_calendar)
                 decision_ts = pd.Timestamp.combine(pd.Timestamp(day).date(), decision_bar).tz_localize(ET).tz_convert(UTC)
-                if session["calendar_coverage_status"] != "covered":
-                    audit.append({**session, "target_market": target, "feature_family": "LeveragedETF", "decision_timestamp_utc": decision_ts.isoformat(), "availability_status": "unavailable", "availability_failure_reason": "nyse_calendar_coverage_missing"})
-                    continue
-                if not provider_verified or timestamp_convention != "bar_end" or (provider_configured and (not provider_source or not provider_verified_at)):
+                fund_rows = [f for f in funds if str(f["target"]) == target]
+                bundle = build_leveraged_etf_input_selection_bundle(
+                    target=target,
+                    decision_timestamp_utc=decision_ts,
+                    underlying=target,
+                    funds=fund_rows,
+                    bars=bars,
+                    aum_history=aum,
+                    provider_rules=provider_rules,
+                    nyse_calendar=nyse_calendar,
+                    cfg=cfg,
+                    root=root,
+                )
+                components = bundle["components"]
+                component_manifest.extend([{k: c.get(k, "") for k in LEVERAGED_ETF_COMPONENT_MANIFEST_COLUMNS} for c in components])
+                component_map = {(c.get("source_component_type"), c.get("fund_ticker", "")): c for c in components}
+                failure_reason = str(bundle.get("failure_reason", ""))
+                if bundle.get("status") != "eligible_primary":
                     audit.append({
                         **session,
                         "target_market": target,
                         "feature_family": "LeveragedETF",
                         "decision_timestamp_utc": decision_ts.isoformat(),
                         "bar_timestamp_convention": timestamp_convention,
-                        "provider_bar_semantics_verified": provider_verified,
-                        "provider_bar_semantics_source": provider_source,
-                        "provider_bar_semantics_verified_at_utc": provider_verified_at,
                         "availability_status": "unavailable",
-                        "availability_failure_reason": "provider_bar_semantics_unverified" if not provider_verified else "provider_bar_semantics_incomplete",
-                        "leveraged_etf_primary_input_integrity_status": "data_quality_blocked",
-                        "leveraged_etf_primary_input_gate": "data_quality_blocked",
+                        "availability_failure_reason": failure_reason,
+                        "leveraged_etf_primary_input_integrity_status": bundle.get("status"),
+                        "leveraged_etf_primary_input_gate": bundle.get("status"),
                     })
                     continue
-                if not session["is_regular_session"]:
-                    audit.append({**session, "target_market": target, "feature_family": "LeveragedETF", "decision_timestamp_utc": decision_ts.isoformat(), "availability_status": "unavailable", "availability_failure_reason": "not_regular_session"})
-                    continue
-                if session["is_early_close"]:
-                    audit.append({**session, "target_market": target, "feature_family": "LeveragedETF", "decision_timestamp_utc": decision_ts.isoformat(), "availability_status": "unavailable", "availability_failure_reason": "early_close_session_excluded_from_primary"})
-                    continue
-                group = group.sort_values("timestamp_utc")
-                et_times = group["timestamp_utc"].dt.tz_convert(ET)
-                open_time = parse_et_time(str(session["regular_open_et"]), time(9, 30))
-                session_close_time = parse_et_time(str(session["regular_close_et"]), time(16, 0))
-                group = group[(et_times.dt.time >= open_time) & (et_times.dt.time <= session_close_time)].copy()
-                et_times = group["timestamp_utc"].dt.tz_convert(ET)
-                if group.empty:
-                    audit.append({**session, "target_market": target, "feature_family": "LeveragedETF", "decision_timestamp_utc": decision_ts.isoformat(), "availability_status": "unavailable", "availability_failure_reason": "regular_session_bars_missing"})
-                    continue
-                at_1530 = group[et_times.dt.time <= decision_bar]
-                bar_1530 = exact_bar(group, et_times, decision_bar)
-                bar_close = exact_bar(group, et_times, close_bar_time)
-                if bar_1530 is None:
-                    audit.append({**session, "target_market": target, "feature_family": "LeveragedETF", "decision_timestamp_utc": decision_ts.isoformat(), "availability_status": "unavailable", "availability_failure_reason": "required_1530_bar_missing", "leveraged_etf_primary_input_integrity_status": "insufficient_data", "leveraged_etf_primary_input_gate": "insufficient_data"})
-                    continue
-                if bar_close is None:
-                    audit.append({**session, "target_market": target, "feature_family": "LeveragedETF", "decision_timestamp_utc": decision_ts.isoformat(), "availability_status": "unavailable", "availability_failure_reason": "required_1600_bar_missing", "leveraged_etf_primary_input_integrity_status": "insufficient_data", "leveraged_etf_primary_input_gate": "insufficient_data"})
-                    continue
-                prior_close = safe_float(group.iloc[0].get("prior_regular_session_close", np.nan))
-                price_1530 = safe_float(bar_1530.get("close"))
-                close_price = safe_float(bar_close.get("close"))
+                bar_1530_comp = component_map.get(("bar_1530", ""), {})
+                bar_1600_comp = component_map.get(("bar_1600", ""), {})
+                prior_close_comp = component_map.get(("prior_close", ""), {})
+                volume_comp = component_map.get(("volume_ref", ""), {})
+                price_1530 = safe_float(bar_1530_comp.get("selected_value_or_reference"))
+                close_price = safe_float(bar_1600_comp.get("selected_value_or_reference"))
+                prior_close = safe_float(prior_close_comp.get("selected_value_or_reference"))
                 if pd.isna(prior_close) or prior_close <= 0 or pd.isna(price_1530) or pd.isna(close_price):
-                    audit.append({"target_market": target, "feature_family": "LeveragedETF", "availability_status": "unavailable", "availability_failure_reason": "prior_regular_session_close_missing"})
+                    audit.append({**session, "target_market": target, "feature_family": "LeveragedETF", "decision_timestamp_utc": decision_ts.isoformat(), "availability_status": "unavailable", "availability_failure_reason": "selected_bundle_price_missing", "leveraged_etf_primary_input_integrity_status": "data_quality_blocked", "leveraged_etf_primary_input_gate": "data_quality_blocked"})
                     continue
                 r_to_1530 = price_1530 / prior_close - 1
                 pressure = 0.0
-                unavailable = []
-                fund_rows = [f for f in funds if str(f["target"]) == target]
-                prior_regular_close_ts = previous_regular_session_close_utc(day, nyse_calendar)
-                if prior_regular_close_ts is None:
-                    audit.append({**session, "target_market": target, "feature_family": "LeveragedETF", "decision_timestamp_utc": decision_ts.isoformat(), "availability_status": "unavailable", "availability_failure_reason": "previous_regular_session_missing"})
-                    continue
-                aum_records = []
+                aum_components = [c for c in components if c.get("source_component_type") == "aum"]
                 for fund in fund_rows:
-                    aum_record = prior_available_aum_record(aum, str(fund["ticker"]), decision_ts, prior_regular_close_ts)
-                    aum_records.append(aum_record)
-                    fund_aum, aum_source, aum_proxy = safe_float(aum_record["aum_value"]), str(aum_record["aum_source"]), bool(aum_record["aum_proxy"])
-                    if not bool(aum_record.get("primary_eligible", False)):
-                        unavailable.append(f"{fund['ticker']}:{aum_source}")
-                        continue
-                    pressure += leveraged_pressure(float(fund["leverage"]), fund_aum, r_to_1530)
-                complete_coverage = (len(fund_rows) - len(unavailable)) / max(len(fund_rows), 1)
-                if unavailable:
-                    audit.append({
-                        "target_market": target,
-                        "feature_family": "LeveragedETF",
-                        "decision_timestamp_utc": decision_ts.isoformat(),
-                        "availability_status": "unavailable",
-                        "availability_failure_reason": "partial_universe_not_primary:" + ";".join(unavailable),
-                        "complete_universe_coverage": complete_coverage,
-                    })
-                    continue
+                    acomp = component_map.get(("aum", str(fund["ticker"])), {})
+                    pressure += leveraged_pressure(float(fund["leverage"]), safe_float(acomp.get("selected_value_or_reference")), r_to_1530)
+                group = group.sort_values("timestamp_utc")
+                et_times = group["timestamp_utc"].dt.tz_convert(ET)
+                at_1530 = group[et_times.dt.time <= decision_bar]
                 after_1530 = group[(et_times.dt.time > decision_bar) & (et_times.dt.time <= close_bar_time)]
-                volume_ref = strict_rth_volume_reference(bars, day, decision_bar, nyse_calendar, window=20, min_valid_sessions=volume_reference_min_sessions)
-                volume_ratio = volume_ref["volume_ratio"]
-                volume_ref_count = int(volume_ref["rth_volume_reference_valid_session_count"])
-                volume_ref_last = str(volume_ref["rth_volume_reference_session_dates"]).split(";")[-1] if str(volume_ref["rth_volume_reference_session_dates"]) else ""
-                if volume_ref_count < volume_reference_min_sessions:
-                    audit.append({
-                        **session,
-                        "target_market": target,
-                        "feature_family": "LeveragedETF",
-                        "decision_timestamp_utc": decision_ts.isoformat(),
-                        "availability_status": "unavailable",
-                        "availability_failure_reason": "volume_reference_insufficient",
-                        "leveraged_etf_primary_input_integrity_status": "insufficient_data",
-                        "leveraged_etf_primary_input_gate": "insufficient_data",
-                        "volume_reference_window": volume_reference_min_sessions,
-                        "volume_reference_last_date": volume_ref_last,
-                        "volume_reference_row_count": volume_ref_count,
-                    })
-                    continue
+                volume_ref_count = int(volume_comp.get("rth_volume_reference_valid_session_count", 0))
+                volume_ref_last = str(volume_comp.get("rth_volume_reference_session_dates", "")).split(";")[-1] if str(volume_comp.get("rth_volume_reference_session_dates", "")) else ""
                 prior_session_return = safe_float(group.iloc[0].get("prior_session_return", np.nan))
                 prior_20d_realized_vol = safe_float(group.iloc[0].get("prior_20d_realized_vol", np.nan))
                 flags = expiry_flags_for_date(load_expiry_calendar(root), day)
@@ -1993,18 +2062,18 @@ def build_leveraged_etf_panel(root: Path, cfg: dict[str, Any]) -> tuple[pd.DataF
                     "return_prior_close_to_1530": r_to_1530,
                     "absolute_return_prior_regular_close_to_1530": abs(r_to_1530),
                     "intraday_realized_vol_to_1530": pd.to_numeric(at_1530["close"], errors="coerce").pct_change().std() * math.sqrt(78) if len(at_1530) > 2 else np.nan,
-                    "intraday_volume_ratio_vs_prior_20d_same_time": volume_ratio,
-                    "volume_reference_window": volume_ref["rth_volume_reference_window_configured"],
+                    "intraday_volume_ratio_vs_prior_20d_same_time": safe_float(volume_comp.get("volume_ratio")),
+                    "volume_reference_window": volume_comp.get("rth_volume_reference_window_configured", ""),
                     "volume_reference_last_date": volume_ref_last,
                     "volume_reference_row_count": volume_ref_count,
-                    "rth_volume_reference_window_configured": volume_ref["rth_volume_reference_window_configured"],
-                    "rth_volume_reference_min_valid_sessions": volume_ref["rth_volume_reference_min_valid_sessions"],
-                    "rth_volume_reference_valid_session_count": volume_ref["rth_volume_reference_valid_session_count"],
-                    "rth_volume_reference_session_dates": volume_ref["rth_volume_reference_session_dates"],
-                    "rth_volume_reference_excluded_premarket_rows": volume_ref["rth_volume_reference_excluded_premarket_rows"],
-                    "rth_volume_reference_excluded_postmarket_rows": volume_ref["rth_volume_reference_excluded_postmarket_rows"],
-                    "rth_volume_reference_excluded_early_close_dates": volume_ref["rth_volume_reference_excluded_early_close_dates"],
-                    "rth_volume_reference_status": volume_ref["rth_volume_reference_status"],
+                    "rth_volume_reference_window_configured": volume_comp.get("rth_volume_reference_window_configured", ""),
+                    "rth_volume_reference_min_valid_sessions": volume_comp.get("rth_volume_reference_min_valid_sessions", ""),
+                    "rth_volume_reference_valid_session_count": volume_comp.get("rth_volume_reference_valid_session_count", ""),
+                    "rth_volume_reference_session_dates": volume_comp.get("rth_volume_reference_session_dates", ""),
+                    "rth_volume_reference_excluded_premarket_rows": volume_comp.get("rth_volume_reference_excluded_premarket_rows", ""),
+                    "rth_volume_reference_excluded_postmarket_rows": volume_comp.get("rth_volume_reference_excluded_postmarket_rows", ""),
+                    "rth_volume_reference_excluded_early_close_dates": volume_comp.get("rth_volume_reference_excluded_early_close_dates", ""),
+                    "rth_volume_reference_status": volume_comp.get("rth_volume_reference_status", ""),
                     "prior_session_return": prior_session_return,
                     "prior_20d_realized_vol": prior_20d_realized_vol,
                     "weekday": pd.Timestamp(day).weekday(),
@@ -2026,19 +2095,20 @@ def build_leveraged_etf_panel(root: Path, cfg: dict[str, Any]) -> tuple[pd.DataF
                     "decision_bar_timestamp_et": "15:30",
                     "close_price_method": "completed_regular_close_bar_close",
                     "close_bar_timestamp_et": "16:00",
-                    "actual_1530_bar_timestamp_utc": bar_1530.get("timestamp_utc"),
-                    "actual_1600_bar_timestamp_utc": bar_close.get("timestamp_utc"),
-                    "prior_regular_close_timestamp_utc": prior_regular_close_ts.isoformat(),
-                    "aum_as_of_timestamp_utc": ";".join(str(r.get("aum_as_of_timestamp_utc", "")) for r in aum_records),
-                    "aum_effective_available_at_utc": ";".join(str(r.get("aum_effective_available_at_utc", "")) for r in aum_records),
-                    "selected_aum_source_row_identifiers": ";".join(str(r.get("source_row_identifier", "")) for r in aum_records),
-                    "selected_aum_source_hashes": ";".join(str(r.get("source_hash_or_index", "")) for r in aum_records),
-                    "selected_aum_primary_eligible_flags": ";".join(str(bool(r.get("primary_eligible", False))).lower() for r in aum_records),
-                    "selected_aum_selection_policy_version": ";".join(str(r.get("selection_policy_version", "")) for r in aum_records),
-                    "selected_source_row_identifier": ";".join(str(r.get("source_row_identifier", "")) for r in aum_records),
-                    "selected_source_hash_or_index": ";".join(str(r.get("source_hash_or_index", "")) for r in aum_records),
-                    "selected_source_effective_available_at_utc": ";".join(str(r.get("aum_effective_available_at_utc", "")) for r in aum_records),
-                    "selection_policy_version": "latest_clean_primary_aum_v1",
+                    "actual_1530_bar_timestamp_utc": bar_1530_comp.get("selected_source_as_of_timestamp_utc", ""),
+                    "actual_1600_bar_timestamp_utc": bar_1600_comp.get("selected_source_as_of_timestamp_utc", ""),
+                    "prior_regular_close_timestamp_utc": prior_close_comp.get("selected_source_as_of_timestamp_utc", ""),
+                    "selection_bundle_id": bundle.get("selection_bundle_id", ""),
+                    "aum_as_of_timestamp_utc": ";".join(str(c.get("selected_source_as_of_timestamp_utc", "")) for c in aum_components),
+                    "aum_effective_available_at_utc": ";".join(str(c.get("selected_source_effective_available_at_utc", "")) for c in aum_components),
+                    "selected_aum_source_row_identifiers": ";".join(str(c.get("selected_source_row_identifier", "")) for c in aum_components),
+                    "selected_aum_source_hashes": ";".join(str(c.get("selected_source_content_hash", "")) for c in aum_components),
+                    "selected_aum_primary_eligible_flags": ";".join(str(bool(c.get("primary_eligible", False))).lower() for c in aum_components),
+                    "selected_aum_selection_policy_version": ";".join(str(c.get("selection_policy_revision", "")) for c in aum_components),
+                    "selected_source_row_identifier": ";".join(str(c.get("selected_source_row_identifier", "")) for c in components),
+                    "selected_source_hash_or_index": ";".join(str(c.get("selected_source_content_hash", "")) for c in components),
+                    "selected_source_effective_available_at_utc": ";".join(str(c.get("selected_source_effective_available_at_utc", "")) for c in components),
+                    "selection_policy_version": LEVERAGED_BUNDLE_POLICY_REVISION,
                     "primary_eligible": True,
                     "scope_integrity_status": "eligible_primary",
                     "scope_integrity_failure_reason": "",
@@ -2047,7 +2117,7 @@ def build_leveraged_etf_panel(root: Path, cfg: dict[str, Any]) -> tuple[pd.DataF
                     "universe_completeness": "complete",
                     "calendar_session_status": session["calendar_coverage_status"],
                     "is_early_close": session["is_early_close"],
-                    "complete_universe_coverage": complete_coverage,
+                    "complete_universe_coverage": 1.0,
                 })
                 audit.append({
                     "target_market": target,
@@ -2058,11 +2128,12 @@ def build_leveraged_etf_panel(root: Path, cfg: dict[str, Any]) -> tuple[pd.DataF
                     "decision_bar_timestamp_et": "15:30",
                     "close_price_method": "completed_regular_close_bar_close",
                     "close_bar_timestamp_et": "16:00",
-                    "actual_1530_bar_timestamp_utc": bar_1530.get("timestamp_utc"),
-                    "actual_1600_bar_timestamp_utc": bar_close.get("timestamp_utc"),
-                    "prior_regular_close_timestamp_utc": prior_regular_close_ts.isoformat(),
-                    "aum_as_of_timestamp_utc": ";".join(str(r.get("aum_as_of_timestamp_utc", "")) for r in aum_records),
-                    "aum_effective_available_at_utc": ";".join(str(r.get("aum_effective_available_at_utc", "")) for r in aum_records),
+                    "actual_1530_bar_timestamp_utc": bar_1530_comp.get("selected_source_as_of_timestamp_utc", ""),
+                    "actual_1600_bar_timestamp_utc": bar_1600_comp.get("selected_source_as_of_timestamp_utc", ""),
+                    "prior_regular_close_timestamp_utc": prior_close_comp.get("selected_source_as_of_timestamp_utc", ""),
+                    "selection_bundle_id": bundle.get("selection_bundle_id", ""),
+                    "aum_as_of_timestamp_utc": ";".join(str(c.get("selected_source_as_of_timestamp_utc", "")) for c in aum_components),
+                    "aum_effective_available_at_utc": ";".join(str(c.get("selected_source_effective_available_at_utc", "")) for c in aum_components),
                     "universe_completeness": "complete",
                     "calendar_session_status": session["calendar_coverage_status"],
                     "is_early_close": session["is_early_close"],
@@ -2070,24 +2141,26 @@ def build_leveraged_etf_panel(root: Path, cfg: dict[str, Any]) -> tuple[pd.DataF
                     "availability_failure_reason": "",
                     "leveraged_etf_primary_input_integrity_status": "eligible_primary",
                     "leveraged_etf_primary_input_gate": "eligible_primary",
-                    "complete_universe_coverage": complete_coverage,
+                    "complete_universe_coverage": 1.0,
                     "universe_fund_count": len(fund_rows),
-                    "volume_reference_window": volume_ref["rth_volume_reference_window_configured"],
+                    "volume_reference_window": volume_comp.get("rth_volume_reference_window_configured", ""),
                     "volume_reference_last_date": volume_ref_last,
                     "volume_reference_row_count": volume_ref_count,
-                    "rth_volume_reference_window_configured": volume_ref["rth_volume_reference_window_configured"],
-                    "rth_volume_reference_min_valid_sessions": volume_ref["rth_volume_reference_min_valid_sessions"],
-                    "rth_volume_reference_valid_session_count": volume_ref["rth_volume_reference_valid_session_count"],
-                    "rth_volume_reference_session_dates": volume_ref["rth_volume_reference_session_dates"],
-                    "rth_volume_reference_excluded_premarket_rows": volume_ref["rth_volume_reference_excluded_premarket_rows"],
-                    "rth_volume_reference_excluded_postmarket_rows": volume_ref["rth_volume_reference_excluded_postmarket_rows"],
-                    "rth_volume_reference_excluded_early_close_dates": volume_ref["rth_volume_reference_excluded_early_close_dates"],
-                    "rth_volume_reference_status": volume_ref["rth_volume_reference_status"],
+                    "rth_volume_reference_window_configured": volume_comp.get("rth_volume_reference_window_configured", ""),
+                    "rth_volume_reference_min_valid_sessions": volume_comp.get("rth_volume_reference_min_valid_sessions", ""),
+                    "rth_volume_reference_valid_session_count": volume_comp.get("rth_volume_reference_valid_session_count", ""),
+                    "rth_volume_reference_session_dates": volume_comp.get("rth_volume_reference_session_dates", ""),
+                    "rth_volume_reference_excluded_premarket_rows": volume_comp.get("rth_volume_reference_excluded_premarket_rows", ""),
+                    "rth_volume_reference_excluded_postmarket_rows": volume_comp.get("rth_volume_reference_excluded_postmarket_rows", ""),
+                    "rth_volume_reference_excluded_early_close_dates": volume_comp.get("rth_volume_reference_excluded_early_close_dates", ""),
+                    "rth_volume_reference_status": volume_comp.get("rth_volume_reference_status", ""),
                 })
-    return pd.DataFrame(rows), pd.DataFrame(audit)
+    panel = pd.DataFrame(rows)
+    panel.attrs["component_manifest"] = pd.DataFrame(component_manifest, columns=LEVERAGED_ETF_COMPONENT_MANIFEST_COLUMNS)
+    return panel, pd.DataFrame(audit)
 
 
-def build_leveraged_etf_input_candidate_audits(root: Path, cfg: dict[str, Any]) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame, pd.DataFrame]:
+def build_leveraged_etf_input_candidate_audits(root: Path, cfg: dict[str, Any], panel_component_manifest: pd.DataFrame | None = None) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame, pd.DataFrame]:
     universe = leveraged_universe(root)
     aum = load_leveraged_aum(root)
     nyse_calendar = load_nyse_calendar(root)
@@ -2206,18 +2279,6 @@ def build_leveraged_etf_input_candidate_audits(root: Path, cfg: dict[str, Any]) 
                     "availability_failure_reason": "" if complete else "primary_universe_incomplete",
                     "analysis_mode": "primary_complete_universe" if complete else "exploratory_partial_universe",
                 })
-                panel_bundle = build_leveraged_etf_input_selection_bundle(
-                    target=target,
-                    decision_timestamp_utc=decision_ts,
-                    underlying=target,
-                    funds=fund_rows,
-                    bars=bars,
-                    aum_history=aum,
-                    provider_rules=provider_rules,
-                    nyse_calendar=nyse_calendar,
-                    cfg=cfg,
-                    root=root,
-                )
                 audit_bundle = build_leveraged_etf_input_selection_bundle(
                     target=target,
                     decision_timestamp_utc=decision_ts,
@@ -2231,7 +2292,14 @@ def build_leveraged_etf_input_candidate_audits(root: Path, cfg: dict[str, Any]) 
                     root=root,
                 )
                 audit_components = {(c.get("source_component_type"), c.get("fund_ticker", "")): c for c in audit_bundle["components"]}
-                for comp in panel_bundle["components"]:
+                if panel_component_manifest is not None and not panel_component_manifest.empty:
+                    actual_rows = panel_component_manifest[
+                        panel_component_manifest.get("target_market", pd.Series(dtype=str)).astype(str).eq(target)
+                        & panel_component_manifest.get("decision_timestamp_utc", pd.Series(dtype=str)).astype(str).eq(decision_ts.isoformat())
+                    ].to_dict("records")
+                else:
+                    actual_rows = audit_bundle["components"]
+                for comp in actual_rows:
                     key = (comp.get("source_component_type"), comp.get("fund_ticker", ""))
                     acomp = audit_components.get(key, {})
                     panel_ok = bool(comp.get("primary_eligible", False))
@@ -2240,6 +2308,8 @@ def build_leveraged_etf_input_candidate_audits(root: Path, cfg: dict[str, Any]) 
                         str(comp.get("selected_source_row_identifier", "")) == str(acomp.get("selected_source_row_identifier", ""))
                         and str(comp.get("selected_source_content_hash", "")) == str(acomp.get("selected_source_content_hash", ""))
                         and str(comp.get("selected_source_effective_available_at_utc", "")) == str(acomp.get("selected_source_effective_available_at_utc", ""))
+                        and str(comp.get("selection_status", "")) == str(acomp.get("selection_status", ""))
+                        and str(bool(comp.get("primary_eligible", False))).lower() == str(bool(acomp.get("primary_eligible", False))).lower()
                     )
                     if panel_ok and audit_ok:
                         status = "matched" if same else "mismatch"
@@ -2280,8 +2350,6 @@ def leveraged_integrity_status(reasons: list[str], all_primary: bool) -> tuple[s
         "selected_aum_after_prior_regular_close",
         "date_only_aum_not_primary",
         "imputed_surrogate_exploratory_not_primary",
-        "exact_1530_bar_missing",
-        "exact_1600_bar_missing",
     ]
     reason_text = ";".join([r for r in reasons if r])
     if any(token in reason_text for token in data_quality_reasons):
@@ -2505,13 +2573,17 @@ def build_dealer_gamma_panel(root: Path, daily_outcomes: pd.DataFrame, cfg: dict
         row = outcome.to_dict()
         flip_state = str(feat.get(cols.get("gamma_flip_state", "gamma_flip_state"), "unavailable"))
         distance = safe_float(feat.get(cols.get("gamma_flip_distance_pct", "gamma_flip_distance_pct"), np.nan))
+        net_gex = safe_float(feat.get(cols.get("net_gex_proxy", "net_gex_proxy"), np.nan))
+        sign_convention = str(load_json(root, DEALER_RULES_PATH, {}).get("sign_convention", ""))
+        sign_verified = sign_convention == "positive_net_gex_proxy_means_long_gamma_proxy_not_dealer_inventory"
+        negative_gamma = int(pd.notna(net_gex) and sign_verified and net_gex < 0)
         if flip_state == "no_local_flip":
             distance = np.nan
         row.update({
             "analysis_id": f"dealer_gamma_{target}_{decision_ts.date()}",
             "feature_family": "DealerGamma",
             "feature_name": "observed_raw_chain_proxy_set",
-            "feature_value": safe_float(feat.get(cols.get("net_gex_proxy", "net_gex_proxy"), np.nan)),
+            "feature_value": net_gex,
             "feature_unit": "proxy",
             "feature_as_of_timestamp_utc": feat.get(asof_col, ""),
             "effective_available_at_utc": feat.get(eff_col, ""),
@@ -2523,7 +2595,11 @@ def build_dealer_gamma_panel(root: Path, daily_outcomes: pd.DataFrame, cfg: dict
             "dealer_feature_sample_type": "observed_raw_chain_primary",
             "gamma_flip_state": flip_state if flip_state in {"local_flip_found", "no_local_flip", "unavailable"} else "unavailable",
             "gamma_flip_distance_pct": distance,
-            "net_gex_proxy": safe_float(feat.get(cols.get("net_gex_proxy", "net_gex_proxy"), np.nan)),
+            "net_gex_proxy": net_gex,
+            "negative_gamma_proxy_indicator": negative_gamma if sign_verified else np.nan,
+            "dealer_gamma_sign_policy_revision": DEALER_GAMMA_SIGN_POLICY_REVISION if sign_verified else "unverified_sign_convention",
+            "dealer_gamma_selection_status": "selected",
+            "dealer_gamma_effective_available_at_utc": feat.get(eff_col, ""),
             "pinning_proxy": safe_float(feat.get(cols.get("pinning_proxy", "pinning_proxy"), np.nan)),
             "local_flip_found_flag": int(flip_state == "local_flip_found"),
             "no_local_flip_flag": int(flip_state == "no_local_flip"),
@@ -2554,6 +2630,93 @@ def build_dealer_gamma_panel(root: Path, daily_outcomes: pd.DataFrame, cfg: dict
         quality_grade="medium" if rows else "unavailable",
     ) | {"sample_count": len(rows)})
     return pd.DataFrame(rows), pd.DataFrame(audit)
+
+
+def build_dealer_gamma_intraday_selection_audit(root: Path, lev_panel: pd.DataFrame, cfg: dict[str, Any] | None = None) -> pd.DataFrame:
+    cfg = cfg or rules(root)
+    raw = load_dealer_gamma_history(root)
+    cols_out = [
+        "target_market", "decision_timestamp_utc", "selection_status", "availability_state",
+        "primary_eligible", "selected_source_row_identifier", "selected_source_content_hash",
+        "selected_source_as_of_timestamp_utc", "selected_source_effective_available_at_utc",
+        "raw_chain_quality", "dealer_gamma_sign_policy_revision", "net_gex_proxy",
+        "negative_gamma_proxy_indicator", "gamma_flip_state", "gamma_flip_distance_pct",
+        "invalid_reason",
+    ]
+    if lev_panel.empty:
+        return pd.DataFrame(columns=cols_out)
+    if raw.empty:
+        rows = [
+            {
+                "target_market": row.get("target_market", ""),
+                "decision_timestamp_utc": row.get("decision_timestamp_utc", ""),
+                "selection_status": "unavailable_coverage",
+                "availability_state": "coverage_missing",
+                "primary_eligible": False,
+                "invalid_reason": "dealer_gamma_history_missing",
+            }
+            for _, row in lev_panel.iterrows()
+        ]
+        return pd.DataFrame(rows, columns=cols_out)
+    cols = {str(c).lower(): c for c in raw.columns}
+    target_col = cols.get("ticker") or cols.get("asset") or cols.get("target_market")
+    eff_col = cols.get("effective_available_at_utc") or cols.get("snapshot_timestamp_utc") or cols.get("feature_as_of_timestamp_utc")
+    asof_col = cols.get("feature_as_of_timestamp_utc") or cols.get("option_chain_as_of_timestamp_utc") or cols.get("snapshot_timestamp_utc") or eff_col
+    quality_col = cols.get("row_economic_quality") or cols.get("raw_chain_quality") or cols.get("economic_quality")
+    if target_col is None or eff_col is None or asof_col is None:
+        return pd.DataFrame([{
+            "target_market": row.get("target_market", ""),
+            "decision_timestamp_utc": row.get("decision_timestamp_utc", ""),
+            "selection_status": "selected_invalid",
+            "availability_state": "missing_required_field",
+            "primary_eligible": False,
+            "invalid_reason": "dealer_gamma_required_columns_missing",
+        } for _, row in lev_panel.iterrows()], columns=cols_out)
+    work = raw.copy()
+    work["target_market"] = work[target_col].astype(str).str.upper()
+    work["effective_ts"] = pd.to_datetime(work[eff_col], utc=True, errors="coerce")
+    work["feature_asof_ts"] = pd.to_datetime(work[asof_col], utc=True, errors="coerce")
+    work["quality"] = work[quality_col].astype(str).str.lower() if quality_col else "unknown"
+    observed_col = cols.get("raw_option_chain_snapshot") or cols.get("observed_raw_chain") or cols.get("raw_chain_present")
+    observed_mask = work[observed_col].astype(str).str.lower().isin(["true", "1", "yes"]) if observed_col else pd.Series([True] * len(work), index=work.index)
+    work = work[observed_mask & work["quality"].isin(["medium", "high"])].copy()
+    sign_convention = str(load_json(root, DEALER_RULES_PATH, {}).get("sign_convention", ""))
+    sign_verified = sign_convention == "positive_net_gex_proxy_means_long_gamma_proxy_not_dealer_inventory"
+    max_age = safe_float(cfg.get("max_feature_age_hours", 96), 96)
+    rows: list[dict[str, Any]] = []
+    for _, decision in lev_panel.iterrows():
+        target = str(decision.get("target_market", "")).upper()
+        decision_ts = parse_ts(decision.get("decision_timestamp_utc"))
+        base = {"target_market": target, "decision_timestamp_utc": decision.get("decision_timestamp_utc", "")}
+        if decision_ts is None:
+            rows.append(base | {"selection_status": "selected_invalid", "availability_state": "missing_required_field", "primary_eligible": False, "invalid_reason": "decision_timestamp_invalid"})
+            continue
+        subset = work[(work["target_market"].eq(target)) & (work["effective_ts"] <= decision_ts) & (work["feature_asof_ts"] <= decision_ts)].copy()
+        subset["feature_age_hours"] = (decision_ts - subset["effective_ts"]).dt.total_seconds() / 3600
+        subset = subset[subset["feature_age_hours"] <= max_age]
+        if subset.empty:
+            rows.append(base | {"selection_status": "unavailable_coverage", "availability_state": "unavailable_coverage", "primary_eligible": False, "invalid_reason": "no_gamma_available_by_1530"})
+            continue
+        feat = subset.sort_values("effective_ts").iloc[-1]
+        net_gex = safe_float(feat.get(cols.get("net_gex_proxy", "net_gex_proxy"), np.nan))
+        negative_gamma = int(pd.notna(net_gex) and sign_verified and net_gex < 0)
+        rows.append(base | {
+            "selection_status": "selected",
+            "availability_state": "valid",
+            "primary_eligible": True,
+            "selected_source_row_identifier": str(feat.name),
+            "selected_source_content_hash": row_content_hash(feat),
+            "selected_source_as_of_timestamp_utc": feat.get(asof_col, ""),
+            "selected_source_effective_available_at_utc": feat.get(eff_col, ""),
+            "raw_chain_quality": feat.get("quality", ""),
+            "dealer_gamma_sign_policy_revision": DEALER_GAMMA_SIGN_POLICY_REVISION if sign_verified else "unverified_sign_convention",
+            "net_gex_proxy": net_gex,
+            "negative_gamma_proxy_indicator": negative_gamma if sign_verified else np.nan,
+            "gamma_flip_state": feat.get(cols.get("gamma_flip_state", "gamma_flip_state"), "unavailable"),
+            "gamma_flip_distance_pct": safe_float(feat.get(cols.get("gamma_flip_distance_pct", "gamma_flip_distance_pct"), np.nan)),
+            "invalid_reason": "" if sign_verified else "gamma_sign_convention_unverified",
+        })
+    return pd.DataFrame(rows, columns=cols_out)
 
 
 def split_dealer_gamma_state_distance(dealer_panel: pd.DataFrame) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
@@ -3150,6 +3313,110 @@ def expanding_monthly_oos_predictions(
             "fold_status": "tested",
         })
     return pd.DataFrame(pred_rows), pd.DataFrame(fold_rows), float(np.nanmean(effect_coefs)) if effect_coefs else np.nan
+
+
+def market_level_paired_walk_forward(
+    frame: pd.DataFrame,
+    outcome_col: str,
+    parent_scope: str,
+    model_scope: str,
+    model_clock: str,
+    baseline_cols: list[str],
+    parent_feature_cols: list[str],
+    augmented_feature_cols: list[str],
+    cfg: dict[str, Any],
+) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
+    stat = cfg.get("statistical", {})
+    alpha = safe_float(stat.get("ridge_alpha", 1.0), 1.0)
+    min_train = int(cfg.get("walk_forward", {}).get("minimum_train_observations", 252))
+    work = frame.copy()
+    work["decision_ts"] = pd.to_datetime(work["decision_timestamp_utc"], utc=True, errors="coerce")
+    work["test_month"] = work["decision_ts"].dt.tz_convert(ET).dt.to_period("M").astype(str)
+    parent_cols = list(dict.fromkeys(baseline_cols + parent_feature_cols))
+    augmented_cols = list(dict.fromkeys(baseline_cols + augmented_feature_cols))
+    required = list(dict.fromkeys(parent_cols + augmented_cols + [outcome_col]))
+    for col in required:
+        if col not in work.columns:
+            work[col] = np.nan
+    keep = pd.to_numeric(work[outcome_col], errors="coerce").notna()
+    for col in parent_cols + augmented_cols:
+        keep &= pd.to_numeric(work[col], errors="coerce").notna()
+    work = work.loc[keep].reset_index(drop=True)
+    y = pd.to_numeric(work[outcome_col], errors="coerce").reset_index(drop=True)
+    pred_rows: list[dict[str, Any]] = []
+    fold_rows: list[dict[str, Any]] = []
+    coef_rows: list[dict[str, Any]] = []
+    for month in sorted(work["test_month"].dropna().unique().tolist()):
+        train_idx = work.index[work["test_month"] < month].to_numpy()
+        test_idx = work.index[work["test_month"] == month].to_numpy()
+        if len(train_idx) < min_train or len(test_idx) == 0:
+            fold_rows.append({
+                "target_market": work["target_market"].iloc[0] if len(work) else "",
+                "model_scope": model_scope,
+                "parent_model_scope": parent_scope,
+                "model_clock": model_clock,
+                "outcome": outcome_col,
+                "test_month": month,
+                "sample_count_train": len(train_idx),
+                "sample_count_oos": len(test_idx),
+                "fold_status": "insufficient_train",
+            })
+            continue
+        parent_encoder = fit_feature_encoder(work.iloc[train_idx], parent_cols)
+        aug_encoder = fit_feature_encoder(work.iloc[train_idx], augmented_cols)
+        x_parent_train, parent_unseen_train = transform_feature_encoder(work.iloc[train_idx], parent_encoder)
+        x_parent_test, parent_unseen_test = transform_feature_encoder(work.iloc[test_idx], parent_encoder)
+        x_aug_train, aug_unseen_train = transform_feature_encoder(work.iloc[train_idx], aug_encoder)
+        x_aug_test, aug_unseen_test = transform_feature_encoder(work.iloc[test_idx], aug_encoder)
+        parent_pred, _, _ = ridge_predict(x_parent_train, y.iloc[train_idx], x_parent_test, alpha)
+        aug_pred, aug_beta, _ = ridge_predict(x_aug_train, y.iloc[train_idx], x_aug_test, alpha)
+        hist_mean = float(y.iloc[train_idx].mean())
+        aug_encoded_cols = x_aug_train.columns.tolist()
+        for feature_name, beta in zip(["intercept"] + aug_encoded_cols, aug_beta):
+            if feature_name == "intercept":
+                continue
+            coef_rows.append({
+                "target_market": work["target_market"].iloc[0],
+                "model_scope": model_scope,
+                "parent_model_scope": parent_scope,
+                "model_clock": model_clock,
+                "outcome": outcome_col,
+                "test_month": month,
+                "feature_name": feature_name,
+                "standardized_coefficient": float(beta),
+                "coefficient_sign": int(np.sign(beta)) if pd.notna(beta) else 0,
+                "sample_count_train": len(train_idx),
+                "sample_count_oos": len(test_idx),
+                "fold_status": "tested",
+            })
+        for idx, pp, ap in zip(test_idx, parent_pred, aug_pred):
+            pred_rows.append({
+                "target_market": work.loc[idx, "target_market"],
+                "model_scope": model_scope,
+                "parent_model_scope": parent_scope,
+                "outcome": outcome_col,
+                "model_clock": model_clock,
+                "row_index": int(idx),
+                "decision_timestamp_utc": work.loc[idx, "decision_timestamp_utc"],
+                "test_month": month,
+                "y_true": y.iloc[idx],
+                "parent_pred": pp,
+                "augmented_pred": ap,
+                "historical_mean_pred": hist_mean,
+            })
+        fold_rows.append({
+            "target_market": work["target_market"].iloc[0],
+            "model_scope": model_scope,
+            "parent_model_scope": parent_scope,
+            "model_clock": model_clock,
+            "outcome": outcome_col,
+            "test_month": month,
+            "sample_count_train": len(train_idx),
+            "sample_count_oos": len(test_idx),
+            "unseen_category_count": parent_unseen_train + parent_unseen_test + aug_unseen_train + aug_unseen_test,
+            "fold_status": "tested",
+        })
+    return pd.DataFrame(pred_rows), pd.DataFrame(fold_rows), pd.DataFrame(coef_rows)
 
 
 def moving_block_bootstrap_delta_ci(
@@ -4022,6 +4289,8 @@ def build_cta_vol_selector_parity_audit(root: Path, cta_panel: pd.DataFrame, cfg
                     panel_hash = str(prow.get("cta_selected_source_content_hash", ""))
                     panel_eff = str(prow.get("cta_selected_source_effective_available_at_utc", ""))
                     panel_primary = bool(prow.get("cta_primary_eligible", False))
+                    panel_status = str(prow.get("cta_selection_status", ""))
+                    panel_quality = str(prow.get("cta_selected_source_quality_value", ""))
                 else:
                     vol_target = asset if asset in {"QQQ", "SPY", "SOXX"} else "QQQ"
                     audit_sel = select_latest_clean_feature(family="VolControl", target=vol_target, decision_timestamp_utc=decision, target_vol=0.12, source_rows=vol, max_age_hours=max_age)
@@ -4029,6 +4298,8 @@ def build_cta_vol_selector_parity_audit(root: Path, cta_panel: pd.DataFrame, cfg
                     panel_hash = str(prow.get("vol_selected_source_content_hash", ""))
                     panel_eff = str(prow.get("vol_selected_source_effective_available_at_utc", ""))
                     panel_primary = bool(prow.get("vol_primary_eligible", False))
+                    panel_status = str(prow.get("vol_selection_status", ""))
+                    panel_quality = str(prow.get("vol_selected_source_quality_value", ""))
                 audit_id = str(audit_sel.get("selected_source_row_identifier", ""))
                 audit_hash = str(audit_sel.get("selected_source_content_hash", ""))
                 audit_eff = str(audit_sel.get("selected_source_effective_available_at_utc", ""))
@@ -4055,6 +4326,11 @@ def build_cta_vol_selector_parity_audit(root: Path, cta_panel: pd.DataFrame, cfg
                     "panel_selected_source_hash_or_index": panel_hash,
                     "audit_selected_effective_available_at_utc": audit_eff,
                     "panel_selected_effective_available_at_utc": panel_eff,
+                    "audit_selection_status": audit_sel.get("selection_status", ""),
+                    "panel_selection_status": panel_status,
+                    "audit_selected_source_quality_value": audit_sel.get("selected_source_quality_value", ""),
+                    "panel_selected_source_quality_value": panel_quality,
+                    "selection_quality_contract_revision": audit_sel.get("selection_quality_contract_revision", ""),
                     "selection_parity_status": status,
                     "selection_parity_failure_reason": reason,
                     "scope_gate_recommendation": "evaluate" if status == "matched" else ("insufficient_data" if status == "unavailable_coverage" else "data_quality_blocked"),
@@ -4626,7 +4902,7 @@ def build_provider_bar_semantics_validation_audit(root: Path, targets: list[str]
 
 def market_level_model_spec() -> dict[str, Any]:
     return {
-        "version": "market_level_model_spec_v1_1_7",
+        "version": "market_level_model_spec_v1_1_8",
         "actionization_gate": False,
         "targets": ["SPY", "QQQ", "SOXX"],
         "minimum_training_observations": 252,
@@ -4637,15 +4913,16 @@ def market_level_model_spec() -> dict[str, Any]:
             "B1": {"parent": "B0", "features": ["cta_exposure_change_proxy"]},
             "B2": {"parent": "B0", "features": ["vol_control_exposure_change_proxy"]},
             "B3": {"parent": "B0", "features": ["cta_exposure_change_proxy", "vol_control_exposure_change_proxy"]},
-            "B4": {"parent": "B3", "features": ["cta_exposure_change_proxy", "vol_control_exposure_change_proxy", "local_flip_found_flag", "no_local_flip_flag", "gamma_flip_distance_pct"]},
-            "B5": {"parent": "B4", "features": ["cta_exposure_change_proxy", "vol_control_exposure_change_proxy", "local_flip_found_flag", "no_local_flip_flag", "gamma_flip_distance_pct", "systematic_sell_pressure_x_negative_gamma"]},
+            "B4": {"parent": "B3", "features": ["cta_exposure_change_proxy", "vol_control_exposure_change_proxy", "negative_gamma_proxy_indicator", "gamma_flip_distance_pct"]},
+            "B5": {"parent": "B4", "features": ["cta_exposure_change_proxy", "vol_control_exposure_change_proxy", "negative_gamma_proxy_indicator", "gamma_flip_distance_pct", "systematic_sell_pressure_x_negative_gamma"]},
         },
         "intraday_models": {
             "C0": {"parent": "", "features": []},
             "C1": {"parent": "C0", "features": ["aggregate_pressure_usd"]},
-            "C2": {"parent": "C1", "features": ["aggregate_pressure_usd", "local_flip_found_flag", "no_local_flip_flag", "gamma_flip_distance_pct"]},
-            "C3": {"parent": "C2", "features": ["aggregate_pressure_usd", "local_flip_found_flag", "no_local_flip_flag", "gamma_flip_distance_pct", "leveraged_sell_pressure_x_negative_gamma"]},
+            "C2": {"parent": "C1", "features": ["aggregate_pressure_usd", "negative_gamma_proxy_indicator", "gamma_flip_distance_pct"]},
+            "C3": {"parent": "C2", "features": ["aggregate_pressure_usd", "negative_gamma_proxy_indicator", "gamma_flip_distance_pct", "leveraged_sell_pressure_x_negative_gamma"]},
         },
+        "direct_parent_incremental_formula": "incremental_oos_r_squared_vs_parent = 1 - SSE_augmented / SSE_parent on identical paired OOS rows",
         "guardrails": [
             "CTA and VolControl are rule-based proxies, not observed fund flows.",
             "Leveraged ETF pressure is an estimated rebalance proxy, not confirmed execution.",
@@ -4661,6 +4938,7 @@ def build_market_level_feature_panel(
     cta_panel: pd.DataFrame,
     dealer_panel: pd.DataFrame,
     lev_panel: pd.DataFrame,
+    dealer_intraday_selection: pd.DataFrame | None = None,
 ) -> pd.DataFrame:
     def numeric_col(df: pd.DataFrame, col: str, default: float = np.nan) -> pd.Series:
         if col not in df.columns:
@@ -4681,18 +4959,27 @@ def build_market_level_feature_panel(
         ]
         if not cta_panel.empty:
             eod = eod.merge(cta_panel[[c for c in cta_cols if c in cta_panel.columns]], on=["target_market", "decision_timestamp_utc"], how="left")
-        dealer_cols = ["target_market", "decision_timestamp_utc", "local_flip_found_flag", "no_local_flip_flag", "gamma_flip_distance_pct"]
+        dealer_cols = ["target_market", "decision_timestamp_utc", "negative_gamma_proxy_indicator", "gamma_flip_distance_pct", "net_gex_proxy", "gamma_flip_state", "dealer_gamma_selection_status", "dealer_gamma_effective_available_at_utc", "dealer_gamma_sign_policy_revision"]
         if not dealer_panel.empty:
             eod = eod.merge(dealer_panel[[c for c in dealer_cols if c in dealer_panel.columns]], on=["target_market", "decision_timestamp_utc"], how="left", suffixes=("", "_dealer"))
-        eod["systematic_sell_pressure_proxy"] = -numeric_col(eod, "cta_exposure_change_proxy").fillna(0) - numeric_col(eod, "vol_control_exposure_change_proxy").fillna(0)
-        eod["negative_gamma_proxy_indicator"] = numeric_col(eod, "local_flip_found_flag", 0).fillna(0)
+        cta_num = numeric_col(eod, "cta_exposure_change_proxy")
+        vol_num = numeric_col(eod, "vol_control_exposure_change_proxy")
+        if "negative_gamma_proxy_indicator" not in eod.columns:
+            eod["negative_gamma_proxy_indicator"] = np.nan
+        eod["systematic_sell_pressure_proxy"] = -(cta_num + vol_num)
         eod["systematic_sell_pressure_x_negative_gamma"] = eod["systematic_sell_pressure_proxy"] * eod["negative_gamma_proxy_indicator"]
     intraday = lev_panel[lev_panel.get("target_market", pd.Series(dtype=str)).astype(str).isin(targets)].copy() if not lev_panel.empty else pd.DataFrame()
     if not intraday.empty:
         intraday["decision_time_policy"] = "intraday_1530_et_v1"
         intraday["model_clock"] = "INTRADAY"
-        intraday["negative_gamma_proxy_indicator"] = numeric_col(intraday, "local_flip_found_flag", 0).fillna(0)
-        sell_pressure = -numeric_col(intraday, "aggregate_pressure_usd").fillna(0)
+        if dealer_intraday_selection is not None and not dealer_intraday_selection.empty:
+            gamma_cols = ["target_market", "decision_timestamp_utc", "negative_gamma_proxy_indicator", "gamma_flip_distance_pct", "net_gex_proxy", "gamma_flip_state", "selection_status", "selected_source_effective_available_at_utc", "dealer_gamma_sign_policy_revision"]
+            intraday = intraday.merge(dealer_intraday_selection[[c for c in gamma_cols if c in dealer_intraday_selection.columns]], on=["target_market", "decision_timestamp_utc"], how="left", suffixes=("", "_intraday_gamma"))
+            intraday["dealer_gamma_selection_status"] = intraday.get("selection_status", "")
+            intraday["dealer_gamma_effective_available_at_utc"] = intraday.get("selected_source_effective_available_at_utc", "")
+        if "negative_gamma_proxy_indicator" not in intraday.columns:
+            intraday["negative_gamma_proxy_indicator"] = np.nan
+        sell_pressure = -numeric_col(intraday, "aggregate_pressure_usd")
         intraday["leveraged_sell_pressure_x_negative_gamma"] = sell_pressure * intraday["negative_gamma_proxy_indicator"]
     panel = pd.concat([eod, intraday], ignore_index=True, sort=False)
     required_cols = [
@@ -4700,53 +4987,103 @@ def build_market_level_feature_panel(
         "next_session_return", "forward_return_3d", "forward_return_5d", "forward_realized_vol_5d",
         "intraday_return_1530_to_close", "intraday_absolute_return_1530_to_close", "intraday_range_1530_to_close",
         "cta_exposure_change_proxy", "vol_control_exposure_change_proxy", "aggregate_pressure_usd",
-        "local_flip_found_flag", "no_local_flip_flag", "gamma_flip_distance_pct",
+        "negative_gamma_proxy_indicator", "gamma_flip_distance_pct", "net_gex_proxy",
         "systematic_sell_pressure_x_negative_gamma", "leveraged_sell_pressure_x_negative_gamma",
     ]
     return ensure_columns(panel, required_cols)
 
 
-def build_market_level_decision_integrity_snapshot(panel: pd.DataFrame, scope_integrity: pd.DataFrame) -> pd.DataFrame:
-    cols = ["module", "model_scope", "target_market", "decision_timestamp_utc", "feature_family_or_component", "integrity_status", "availability_state", "source_parity_status", "selected_invalid_reason"]
+def build_market_level_model_scope_integrity(panel: pd.DataFrame) -> pd.DataFrame:
+    spec = market_level_model_spec()
+    dependencies = {
+        "B0": ["baseline"],
+        "B1": ["CTA"],
+        "B2": ["VolControl"],
+        "B3": ["CTA", "VolControl"],
+        "B4": ["CTA", "VolControl", "DealerGammaEOD"],
+        "B5": ["CTA", "VolControl", "DealerGammaEOD", "DealerGammaSign"],
+        "C0": ["baseline"],
+        "C1": ["LeveragedETF"],
+        "C2": ["LeveragedETF", "DealerGammaIntraday"],
+        "C3": ["LeveragedETF", "DealerGammaIntraday", "DealerGammaSign"],
+    }
+
+    def component_status(row: pd.Series, component: str) -> tuple[str, str, str]:
+        if component == "baseline":
+            return "valid", "", "matched"
+        if component == "CTA":
+            status = str(row.get("cta_selection_status", ""))
+            if bool(row.get("cta_primary_eligible", False)):
+                return "valid", "", "matched"
+            if status == "selected_invalid":
+                return "selected_invalid", str(row.get("cta_invalid_reason", "cta_selected_invalid")), "selected_invalid"
+            return "unavailable_coverage", str(row.get("cta_invalid_reason", "cta_unavailable")), "unavailable_coverage"
+        if component == "VolControl":
+            status = str(row.get("vol_selection_status", ""))
+            if bool(row.get("vol_primary_eligible", False)):
+                return "valid", "", "matched"
+            if status == "selected_invalid":
+                return "selected_invalid", str(row.get("vol_invalid_reason", "vol_selected_invalid")), "selected_invalid"
+            return "unavailable_coverage", str(row.get("vol_invalid_reason", "vol_unavailable")), "unavailable_coverage"
+        if component == "LeveragedETF":
+            gate = str(row.get("leveraged_etf_primary_input_gate", row.get("leveraged_etf_primary_input_integrity_status", "")))
+            if gate == "eligible_primary" and pd.notna(safe_float(row.get("aggregate_pressure_usd", np.nan))):
+                return "valid", "", "matched"
+            if gate == "data_quality_blocked":
+                return "selected_invalid", str(row.get("availability_failure_reason", "leveraged_etf_data_quality_blocked")), "selected_invalid"
+            return "unavailable_coverage", str(row.get("availability_failure_reason", "leveraged_etf_unavailable")), "unavailable_coverage"
+        if component in {"DealerGammaEOD", "DealerGammaIntraday"}:
+            status = str(row.get("dealer_gamma_selection_status", row.get("selection_status", "")))
+            if status == "selected" and pd.notna(safe_float(row.get("gamma_flip_distance_pct", 0))) or (status == "selected" and pd.notna(safe_float(row.get("net_gex_proxy", np.nan)))):
+                return "valid", "", "matched"
+            if status == "selected_invalid":
+                return "selected_invalid", str(row.get("invalid_reason", "dealer_gamma_selected_invalid")), "selected_invalid"
+            return "unavailable_coverage", str(row.get("invalid_reason", "dealer_gamma_unavailable")), "unavailable_coverage"
+        if component == "DealerGammaSign":
+            if pd.notna(safe_float(row.get("negative_gamma_proxy_indicator", np.nan))):
+                return "valid", "", "matched"
+            if str(row.get("dealer_gamma_sign_policy_revision", "")) == "unverified_sign_convention":
+                return "unavailable_coverage", "gamma_sign_convention_unverified", "unavailable_coverage"
+            return "unavailable_coverage", "negative_gamma_indicator_unavailable", "unavailable_coverage"
+        return "unavailable_coverage", "unknown_component", "unavailable_coverage"
+
     rows: list[dict[str, Any]] = []
-    if not panel.empty:
-        for _, row in panel.iterrows():
-            clock = str(row.get("model_clock", ""))
-            scopes = ["B0", "B1", "B2", "B3", "B4", "B5"] if clock == "EOD" else ["C0", "C1", "C2", "C3"]
-            for scope in scopes:
+    if panel.empty:
+        return pd.DataFrame(columns=MARKET_LEVEL_SCOPE_INTEGRITY_COLUMNS)
+    for _, row in panel.iterrows():
+        clock = str(row.get("model_clock", ""))
+        scopes = spec["eod_models"] if clock == "EOD" else spec["intraday_models"] if clock == "INTRADAY" else {}
+        for scope in scopes.keys():
+            comp_results = [component_status(row, comp) + (comp,) for comp in dependencies.get(scope, ["baseline"])]
+            statuses = [r[0] for r in comp_results]
+            if "selected_invalid" in statuses:
+                scope_status = "selected_invalid"
+            elif "unavailable_coverage" in statuses:
+                scope_status = "unavailable_coverage"
+            else:
+                scope_status = "valid"
+            reasons = ";".join(sorted(set(r[1] for r in comp_results if r[1])))
+            for status, reason, parity, comp in comp_results:
                 rows.append({
-                    "module": "MarketLevel",
-                    "model_scope": scope,
                     "target_market": row.get("target_market", ""),
                     "decision_timestamp_utc": row.get("decision_timestamp_utc", ""),
-                    "feature_family_or_component": clock,
-                    "integrity_status": "valid",
-                    "availability_state": "valid",
-                    "source_parity_status": "matched",
-                    "selected_invalid_reason": "",
+                    "model_clock": clock,
+                    "model_scope": scope,
+                    "required_component": comp,
+                    "component_integrity_status": status,
+                    "scope_integrity_status": scope_status,
+                    "scope_integrity_failure_reason": reasons,
+                    "source_parity_status": parity,
                 })
-    if not scope_integrity.empty:
-        for _, row in scope_integrity.iterrows():
-            status = str(row.get("scope_gate_recommendation", "evaluate"))
-            rows.append({
-                "module": row.get("module", ""),
-                "model_scope": row.get("model_scope", ""),
-                "target_market": row.get("target_market", ""),
-                "decision_timestamp_utc": row.get("decision_timestamp_utc", ""),
-                "feature_family_or_component": row.get("feature_family", ""),
-                "integrity_status": "selected_invalid" if status == "data_quality_blocked" else ("unavailable_coverage" if status == "insufficient_data" else "valid"),
-                "availability_state": status,
-                "source_parity_status": status,
-                "selected_invalid_reason": row.get("scope_integrity_failure_reason", ""),
-            })
-    return pd.DataFrame(rows, columns=cols)
+    return pd.DataFrame(rows, columns=MARKET_LEVEL_SCOPE_INTEGRITY_COLUMNS)
 
 
-def run_market_level_oos_backtest(panel: pd.DataFrame, integrity: pd.DataFrame, cfg: dict[str, Any], base_cfg: dict[str, Any]) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame, pd.DataFrame, pd.DataFrame, pd.DataFrame]:
+def run_market_level_oos_backtest(panel: pd.DataFrame, integrity: pd.DataFrame, cfg: dict[str, Any], base_cfg: dict[str, Any]) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame, pd.DataFrame, pd.DataFrame, pd.DataFrame, pd.DataFrame]:
     spec = market_level_model_spec()
     metric_rows: list[dict[str, Any]] = []
     pred_rows: list[dict[str, Any]] = []
-    fold_rows: list[dict[str, Any]] = []
+    coef_rows_all: list[dict[str, Any]] = []
+    fold_audit_rows: list[dict[str, Any]] = []
     comparison_rows: list[dict[str, Any]] = []
     quality_rows: list[dict[str, Any]] = []
     regime_rows: list[dict[str, Any]] = []
@@ -4755,6 +5092,7 @@ def run_market_level_oos_backtest(panel: pd.DataFrame, integrity: pd.DataFrame, 
     min_oos = int(spec["minimum_valid_oos_observations"])
     min_folds = int(spec["minimum_non_empty_oos_folds"])
     work = panel.copy()
+    model_lookup = {**spec["eod_models"], **spec["intraday_models"]}
     for clock, models, outcomes, baseline_cols, policy in [
         ("EOD", spec["eod_models"], eod_outcomes, base_cfg.get("daily", []), "eod_regular_close_v1"),
         ("INTRADAY", spec["intraday_models"], intraday_outcomes, base_cfg.get("intraday", []), "intraday_1530_et_v1"),
@@ -4764,9 +5102,19 @@ def run_market_level_oos_backtest(panel: pd.DataFrame, integrity: pd.DataFrame, 
             target_panel = clock_panel[clock_panel.get("target_market", pd.Series(dtype=str)).astype(str).eq(target)].copy() if not clock_panel.empty else pd.DataFrame()
             for model_name, model in models.items():
                 features = list(model.get("features", []))
+                parent_name = str(model.get("parent", ""))
+                parent_features = list(model_lookup.get(parent_name, {}).get("features", [])) if parent_name else []
                 for outcome in outcomes:
                     candidate_count = len(target_panel)
-                    valid_frame = target_panel.copy()
+                    scope_rows = integrity[
+                        integrity.get("target_market", pd.Series(dtype=str)).astype(str).eq(target)
+                        & integrity.get("model_scope", pd.Series(dtype=str)).astype(str).eq(model_name)
+                        & integrity.get("model_clock", pd.Series(dtype=str)).astype(str).eq(clock)
+                    ] if not integrity.empty else pd.DataFrame()
+                    invalid_decisions = set(scope_rows.loc[scope_rows.get("scope_integrity_status", pd.Series(dtype=str)).astype(str).eq("selected_invalid"), "decision_timestamp_utc"].astype(str).tolist()) if not scope_rows.empty else set()
+                    unavailable_decisions = set(scope_rows.loc[scope_rows.get("scope_integrity_status", pd.Series(dtype=str)).astype(str).eq("unavailable_coverage"), "decision_timestamp_utc"].astype(str).tolist()) if not scope_rows.empty else set()
+                    valid_decisions = set(scope_rows.loc[scope_rows.get("scope_integrity_status", pd.Series(dtype=str)).astype(str).eq("valid"), "decision_timestamp_utc"].astype(str).tolist()) if not scope_rows.empty else set(target_panel.get("decision_timestamp_utc", pd.Series(dtype=str)).astype(str).tolist())
+                    valid_frame = target_panel[target_panel.get("decision_timestamp_utc", pd.Series(dtype=str)).astype(str).isin(valid_decisions)].copy() if not target_panel.empty else pd.DataFrame()
                     required = list(dict.fromkeys(baseline_cols + features + [outcome]))
                     for col in required:
                         if col not in valid_frame.columns:
@@ -4775,42 +5123,61 @@ def run_market_level_oos_backtest(panel: pd.DataFrame, integrity: pd.DataFrame, 
                     for col in baseline_cols + features:
                         if col in valid_frame.columns:
                             num = pd.to_numeric(valid_frame[col], errors="coerce")
-                            if num.notna().mean() >= 0.8:
-                                valid_frame = valid_frame[num.notna()]
-                    invalid = integrity[
-                        integrity.get("target_market", pd.Series(dtype=str)).astype(str).eq(target)
-                        & integrity.get("model_scope", pd.Series(dtype=str)).astype(str).eq(model_name)
-                        & integrity.get("integrity_status", pd.Series(dtype=str)).astype(str).eq("selected_invalid")
-                    ] if not integrity.empty else pd.DataFrame()
-                    unavailable = max(candidate_count - len(valid_frame), 0)
-                    result_status = "data_quality_blocked" if not invalid.empty else "insufficient_data"
+                            valid_frame = valid_frame[num.notna()]
+                    unavailable = len(unavailable_decisions) + max(candidate_count - len(valid_frame) - len(invalid_decisions) - len(unavailable_decisions), 0)
+                    result_status = "data_quality_blocked" if invalid_decisions else "insufficient_data"
                     tested_folds = 0
                     oos_n = 0
                     oos_r2 = np.nan
+                    parent_oos_r2 = np.nan
+                    incremental_r2 = np.nan
+                    mse = np.nan
+                    parent_mse = np.nan
+                    delta_mse = np.nan
                     mae = np.nan
+                    parent_mae = np.nan
+                    delta_mae = np.nan
                     coef_median = np.nan
                     sign_consistency = np.nan
                     coef_dispersion = np.nan
-                    if invalid.empty and len(valid_frame) >= min_oos:
-                        preds, folds, coef = expanding_monthly_oos_predictions(valid_frame, outcome, baseline_cols, features, cfg)
+                    interaction_summary = ""
+                    if not invalid_decisions and len(valid_frame) >= min_oos:
+                        preds, folds, coefs = market_level_paired_walk_forward(valid_frame, outcome, parent_name, model_name, clock, baseline_cols, parent_features, features, cfg)
                         tested_folds = int(folds.get("fold_status", pd.Series(dtype=str)).astype(str).eq("tested").sum()) if not folds.empty else 0
                         oos_n = len(preds)
                         if oos_n >= min_oos and tested_folds >= min_folds:
                             y = pd.to_numeric(preds["y_true"], errors="coerce")
                             pred = pd.to_numeric(preds["augmented_pred"], errors="coerce")
+                            parent_pred = pd.to_numeric(preds["parent_pred"], errors="coerce")
                             hist = pd.to_numeric(preds["historical_mean_pred"], errors="coerce")
                             sse = float(((y - pred) ** 2).sum())
+                            parent_sse = float(((y - parent_pred) ** 2).sum())
                             sst = float(((y - hist) ** 2).sum())
                             oos_r2 = 1 - sse / sst if sst else np.nan
+                            parent_oos_r2 = 1 - parent_sse / sst if sst else np.nan
+                            incremental_r2 = 1 - sse / parent_sse if parent_sse > 0 else np.nan
+                            mse = float(((y - pred) ** 2).mean())
+                            parent_mse = float(((y - parent_pred) ** 2).mean())
+                            delta_mse = mse - parent_mse
                             mae = float((y - pred).abs().mean())
-                            coef_median = coef
-                            sign_consistency = float(np.sign(coef) != 0) if pd.notna(coef) else np.nan
-                            coef_dispersion = 0.0 if pd.notna(coef) else np.nan
+                            parent_mae = float((y - parent_pred).abs().mean())
+                            delta_mae = mae - parent_mae
+                            model_feature_coefs = coefs[coefs.get("feature_name", pd.Series(dtype=str)).astype(str).isin(features)] if not coefs.empty else pd.DataFrame()
+                            coef_values = pd.to_numeric(model_feature_coefs.get("standardized_coefficient", pd.Series(dtype=float)), errors="coerce").dropna()
+                            if not coef_values.empty:
+                                coef_median = float(coef_values.median())
+                                median_sign = int(np.sign(coef_median))
+                                sign_consistency = float((np.sign(coef_values) == median_sign).mean()) if median_sign else np.nan
+                                coef_dispersion = float(coef_values.std(ddof=0))
+                            interaction_cols = [c for c in ["systematic_sell_pressure_x_negative_gamma", "leveraged_sell_pressure_x_negative_gamma"] if c in features]
+                            if interaction_cols and not coefs.empty:
+                                ivals = pd.to_numeric(coefs[coefs["feature_name"].isin(interaction_cols)]["standardized_coefficient"], errors="coerce").dropna()
+                                if not ivals.empty:
+                                    interaction_summary = f"median={float(ivals.median()):.8g};dispersion_std={float(ivals.std(ddof=0)):.8g};folds={len(ivals)}"
                             result_status = "valid"
-                            preds = preds.assign(target_market=target, model_scope=model_name, outcome=outcome, model_clock=clock)
                             pred_rows.extend(preds.to_dict("records"))
-                        folds = folds.assign(target_market=target, model_scope=model_name, outcome=outcome, model_clock=clock) if not folds.empty else folds
-                        fold_rows.extend(folds.to_dict("records"))
+                        fold_audit_rows.extend(folds.to_dict("records"))
+                        coef_rows_all.extend(coefs.to_dict("records"))
                     metric_rows.append({
                         "result_status": result_status,
                         "target_market": target,
@@ -4818,22 +5185,30 @@ def run_market_level_oos_backtest(panel: pd.DataFrame, integrity: pd.DataFrame, 
                         "model_scope": model_name,
                         "model_clock": clock,
                         "candidate_decision_count": candidate_count,
+                        "valid_included_decision_count": len(valid_frame),
                         "valid_oos_observation_count": oos_n,
                         "unavailable_coverage_exclusion_count": unavailable,
-                        "selected_invalid_exclusion_count": len(invalid),
-                        "affected_decision_timestamps": ";".join(invalid.get("decision_timestamp_utc", pd.Series(dtype=str)).astype(str).tolist()[:50]),
+                        "selected_invalid_exclusion_count": len(invalid_decisions),
+                        "affected_decision_timestamps": ";".join(sorted(invalid_decisions)[:50]),
                         "oos_fold_count": tested_folds,
-                        "oos_r_squared": oos_r2,
-                        "baseline_relative_oos_r_squared": oos_r2,
-                        "mean_absolute_error": mae,
+                        "oos_r_squared_vs_historical_mean": oos_r2,
+                        "parent_oos_r_squared_vs_historical_mean": parent_oos_r2,
+                        "incremental_oos_r_squared_vs_parent": incremental_r2,
+                        "oos_mse": mse,
+                        "parent_oos_mse": parent_mse,
+                        "delta_oos_mse_vs_parent": delta_mse,
+                        "oos_mae": mae,
+                        "parent_oos_mae": parent_mae,
+                        "delta_oos_mae_vs_parent": delta_mae,
                         "directional_hit_rate": np.nan,
                         "coefficient_median_across_folds": coef_median,
                         "coefficient_sign_consistency": sign_consistency,
                         "coefficient_fold_dispersion": coef_dispersion,
-                        "interaction_coefficient_summary": "",
+                        "coefficient_dispersion_method": "std_ddof0",
+                        "interaction_coefficient_summary": interaction_summary,
                         "feature_availability_rate": len(valid_frame) / max(candidate_count, 1),
                         "decision_time_policy": policy,
-                        "source_provenance_policy_revision": "market_level_integrity_v1_1_7",
+                        "source_provenance_policy_revision": MARKET_LEVEL_INTEGRITY_REVISION,
                     })
                     quality_rows.append({
                         "target_market": target,
@@ -4842,7 +5217,7 @@ def run_market_level_oos_backtest(panel: pd.DataFrame, integrity: pd.DataFrame, 
                         "candidate_decision_count": candidate_count,
                         "valid_included_decision_count": len(valid_frame),
                         "unavailable_coverage_exclusion_count": unavailable,
-                        "selected_invalid_exclusion_count": len(invalid),
+                        "selected_invalid_exclusion_count": len(invalid_decisions),
                         "result_status": result_status,
                     })
     metrics = pd.DataFrame(metric_rows)
@@ -4850,30 +5225,30 @@ def run_market_level_oos_backtest(panel: pd.DataFrame, integrity: pd.DataFrame, 
         for _, row in metrics.iterrows():
             model_def = spec["eod_models"].get(row["model_scope"], spec["intraday_models"].get(row["model_scope"], {}))
             parent = model_def.get("parent", "")
-            parent_row = metrics[
-                metrics["target_market"].eq(row["target_market"]) & metrics["outcome"].eq(row["outcome"]) & metrics["model_scope"].eq(parent)
-            ] if parent else pd.DataFrame()
-            parent_r2 = safe_float(parent_row.iloc[0]["oos_r_squared"], np.nan) if not parent_row.empty else np.nan
             comparison_rows.append({
                 "target_market": row["target_market"],
                 "outcome": row["outcome"],
                 "model_scope": row["model_scope"],
                 "parent_model_scope": parent,
                 "result_status": row["result_status"],
-                "oos_r_squared_delta_vs_parent": row["oos_r_squared"] - parent_r2 if pd.notna(row["oos_r_squared"]) and pd.notna(parent_r2) else np.nan,
+                "incremental_oos_r_squared_vs_parent": row.get("incremental_oos_r_squared_vs_parent", np.nan),
+                "delta_oos_mse_vs_parent": row.get("delta_oos_mse_vs_parent", np.nan),
+                "delta_oos_mae_vs_parent": row.get("delta_oos_mae_vs_parent", np.nan),
                 "feature_availability_difference": np.nan,
                 "interpretation_caveat": "predictive association / incremental OOS fit only; not causal attribution",
             })
     regime_rows.append({"regime_partition": "positive_vs_negative_gamma_proxy", "status": "not_run_if_insufficient_data", "threshold_policy": "predeclared_proxy_state_only"})
-    pred_cols = ["target_market", "model_scope", "outcome", "model_clock", "row_index", "decision_timestamp_utc", "test_month", "y_true", "baseline_pred", "augmented_pred", "historical_mean_pred"]
-    fold_cols = ["target_market", "model_scope", "outcome", "model_clock", "test_month", "sample_count_train", "sample_count_oos", "unseen_category_count", "fold_status"]
-    metric_cols = ["result_status", "target_market", "outcome", "model_scope", "model_clock", "candidate_decision_count", "valid_oos_observation_count", "unavailable_coverage_exclusion_count", "selected_invalid_exclusion_count", "affected_decision_timestamps", "oos_fold_count", "oos_r_squared", "baseline_relative_oos_r_squared", "mean_absolute_error", "directional_hit_rate", "coefficient_median_across_folds", "coefficient_sign_consistency", "coefficient_fold_dispersion", "interaction_coefficient_summary", "feature_availability_rate", "decision_time_policy", "source_provenance_policy_revision"]
-    comp_cols = ["target_market", "outcome", "model_scope", "parent_model_scope", "result_status", "oos_r_squared_delta_vs_parent", "feature_availability_difference", "interpretation_caveat"]
+    pred_cols = ["target_market", "model_scope", "parent_model_scope", "outcome", "model_clock", "row_index", "decision_timestamp_utc", "test_month", "y_true", "parent_pred", "augmented_pred", "historical_mean_pred"]
+    coef_cols = ["target_market", "model_scope", "parent_model_scope", "model_clock", "outcome", "test_month", "feature_name", "standardized_coefficient", "coefficient_sign", "sample_count_train", "sample_count_oos", "fold_status"]
+    fold_cols = ["target_market", "model_scope", "parent_model_scope", "outcome", "model_clock", "test_month", "sample_count_train", "sample_count_oos", "unseen_category_count", "fold_status"]
+    metric_cols = ["result_status", "target_market", "outcome", "model_scope", "model_clock", "candidate_decision_count", "valid_included_decision_count", "valid_oos_observation_count", "unavailable_coverage_exclusion_count", "selected_invalid_exclusion_count", "affected_decision_timestamps", "oos_fold_count", "oos_r_squared_vs_historical_mean", "parent_oos_r_squared_vs_historical_mean", "incremental_oos_r_squared_vs_parent", "oos_mse", "parent_oos_mse", "delta_oos_mse_vs_parent", "oos_mae", "parent_oos_mae", "delta_oos_mae_vs_parent", "directional_hit_rate", "coefficient_median_across_folds", "coefficient_sign_consistency", "coefficient_fold_dispersion", "coefficient_dispersion_method", "interaction_coefficient_summary", "feature_availability_rate", "decision_time_policy", "source_provenance_policy_revision"]
+    comp_cols = ["target_market", "outcome", "model_scope", "parent_model_scope", "result_status", "incremental_oos_r_squared_vs_parent", "delta_oos_mse_vs_parent", "delta_oos_mae_vs_parent", "feature_availability_difference", "interpretation_caveat"]
     regime_cols = ["regime_partition", "status", "threshold_policy"]
     quality_cols = ["target_market", "model_scope", "outcome", "candidate_decision_count", "valid_included_decision_count", "unavailable_coverage_exclusion_count", "selected_invalid_exclusion_count", "result_status"]
     return (
         pd.DataFrame(pred_rows, columns=pred_cols),
-        pd.DataFrame(fold_rows, columns=fold_cols),
+        pd.DataFrame(coef_rows_all, columns=coef_cols),
+        pd.DataFrame(fold_audit_rows, columns=fold_cols),
         pd.DataFrame(metric_rows, columns=metric_cols),
         pd.DataFrame(comparison_rows, columns=comp_cols),
         pd.DataFrame(regime_rows, columns=regime_cols),
@@ -5021,15 +5396,19 @@ def run(
         cta_panel, availability, no_lookahead = build_cta_vol_feature_outcome_panel(root, daily_outcomes, cfg)
         cta_panel = attach_daily_baseline(cta_panel, daily_baseline)
     lev_panel, lev_audit = (pd.DataFrame(), pd.DataFrame())
+    lev_panel_component_manifest = pd.DataFrame(columns=LEVERAGED_ETF_COMPONENT_MANIFEST_COLUMNS)
     if run_leveraged_etf_analysis:
         lev_panel, lev_audit = build_leveraged_etf_panel(root, cfg)
-    lev_input_audit, lev_input_summary, lev_universe_input_audit, lev_selection_parity = build_leveraged_etf_input_candidate_audits(root, cfg)
+        lev_panel_component_manifest = lev_panel.attrs.get("component_manifest", pd.DataFrame(columns=LEVERAGED_ETF_COMPONENT_MANIFEST_COLUMNS))
+        lev_panel.attrs.clear()
+    lev_input_audit, lev_input_summary, lev_universe_input_audit, lev_selection_parity = build_leveraged_etf_input_candidate_audits(root, cfg, lev_panel_component_manifest)
     lev_primary_input_integrity, lev_primary_input_gate_summary, lev_aum_selector_parity, lev_bar_semantics_gate = build_leveraged_etf_primary_input_integrity_outputs(lev_input_audit, lev_universe_input_audit, lev_selection_parity)
     dealer_panel, dealer_audit = (pd.DataFrame(), pd.DataFrame())
     if run_dealer_observed_analysis:
         dealer_panel, dealer_audit = build_dealer_gamma_panel(root, daily_outcomes, cfg)
         dealer_panel = attach_daily_baseline(dealer_panel, daily_baseline)
     dealer_state_panel, dealer_distance_panel, dealer_sample_audit = split_dealer_gamma_state_distance(dealer_panel)
+    dealer_gamma_intraday_selection_audit = build_dealer_gamma_intraday_selection_audit(root, lev_panel, cfg)
     expiry_calendar_panel, expiry_conditioned_panel, expiry_post_panel, expiry_audit, expiry_outcome_audit, calendar_availability_audit = build_dealer_gamma_expiry_event_panel(root, daily_outcomes, cfg)
     expiry_calendar_panel = attach_daily_baseline(expiry_calendar_panel, open_baseline)
     expiry_conditioned_panel = attach_daily_baseline(expiry_conditioned_panel, open_baseline)
@@ -5198,9 +5577,9 @@ def run(
     selection_parity_audit = pd.concat([cta_vol_selector_parity, selection_parity_audit, lev_selection_parity], ignore_index=True)
     selector_result_audit = build_selector_result_audit(source_candidate_audit, lev_input_audit)
     scope_integrity_gate_audit = build_scope_integrity_gate_audit(selection_parity_audit, lev_primary_input_integrity, expiry_classification_integrity_gate)
-    market_level_panel = build_market_level_feature_panel(daily_outcomes, daily_baseline, cta_panel, dealer_panel, lev_panel)
-    market_level_integrity = build_market_level_decision_integrity_snapshot(market_level_panel, scope_integrity_gate_audit)
-    market_level_predictions, market_level_fold_coefficients, market_level_metrics, market_level_incremental, market_level_regime, market_level_quality = run_market_level_oos_backtest(market_level_panel, market_level_integrity, cfg, base_cfg)
+    market_level_panel = build_market_level_feature_panel(daily_outcomes, daily_baseline, cta_panel, dealer_panel, lev_panel, dealer_gamma_intraday_selection_audit)
+    market_level_integrity = build_market_level_model_scope_integrity(market_level_panel)
+    market_level_predictions, market_level_fold_coefficients, market_level_fold_audit, market_level_metrics, market_level_incremental, market_level_regime, market_level_quality = run_market_level_oos_backtest(market_level_panel, market_level_integrity, cfg, base_cfg)
     blocked_modules = quality_blocked_modules(no_lookahead) | set(source_candidate_summary.loc[source_candidate_summary.get("module_gate_recommendation", pd.Series(dtype=str)).astype(str).eq("data_quality_blocked"), "module"].astype(str).tolist())
     if not lev_primary_input_integrity.empty and lev_primary_input_integrity.get("leveraged_etf_primary_input_integrity_status", pd.Series(dtype=str)).astype(str).eq("data_quality_blocked").any():
         blocked_modules.add("LeveragedETF")
@@ -5304,6 +5683,7 @@ def run(
     (out / "source_feature_candidate_quality_summary.md").write_text("# Source Feature Candidate Quality Summary\n\n" + markdown_table(source_candidate_summary) + "\n", encoding="utf-8")
     write_table(selector_result_audit, out / "selector_result_audit.csv")
     write_table(selection_parity_audit, out / "source_selection_parity_audit.csv")
+    write_table(cta_vol_selector_parity, out / "cta_vol_source_selection_parity_audit.csv")
     write_table(scope_integrity_gate_audit, out / "scope_integrity_gate_audit.csv")
     write_table(post_selection_panel_audit, out / "post_selection_panel_quality_audit.csv")
     write_table(post_selection_panel_audit, out / "raw_feature_candidate_quality_audit.csv")
@@ -5356,6 +5736,7 @@ def run(
     write_table(lev_input_summary, out / "leveraged_etf_input_candidate_summary.csv")
     write_table(lev_universe_input_audit, out / "leveraged_etf_universe_input_completeness_audit.csv")
     write_table(lev_selection_parity, out / "leveraged_etf_source_selection_parity_audit.csv")
+    write_table(lev_panel_component_manifest, out / "leveraged_etf_panel_selection_components_v1.csv")
     write_table(lev_primary_input_integrity, out / "leveraged_etf_primary_input_integrity_audit.csv")
     write_table(lev_primary_input_gate_summary, out / "leveraged_etf_primary_input_gate_summary.csv")
     write_table(lev_aum_selector_parity, out / "leveraged_etf_aum_selector_parity_audit.csv")
@@ -5364,9 +5745,11 @@ def run(
     write_table(expiry_classification_historical_availability, out / "expiry_classification_historical_availability_audit.csv")
     write_table(expiry_classification_primary_eligibility, out / "expiry_classification_primary_eligibility_audit.csv")
     write_table(market_level_panel, out / "market_level_feature_panel_v1.csv")
+    write_table(market_level_integrity, out / "market_level_model_scope_integrity_v1.csv")
     write_table(market_level_integrity, out / "market_level_decision_integrity_snapshot_v1.csv")
     write_table(market_level_predictions, out / "market_level_oos_predictions_v1.csv")
     write_table(market_level_fold_coefficients, out / "market_level_oos_fold_coefficients_v1.csv")
+    write_table(market_level_fold_audit, out / "market_level_oos_fold_audit_v1.csv")
     write_table(market_level_metrics, out / "market_level_oos_metrics_v1.csv")
     write_table(market_level_incremental, out / "market_level_incremental_comparison_v1.csv")
     write_table(market_level_regime, out / "market_level_regime_summary_v1.csv")
@@ -5383,6 +5766,7 @@ def run(
     write_table(cta_panel, out / "cta_vol_market_impact_panel.csv", out / "cta_vol_market_impact_panel.parquet")
     write_table(lev_panel, out / "leveraged_etf_intraday_panel.csv", out / "leveraged_etf_intraday_panel.parquet")
     write_table(dealer_panel, out / "dealer_gamma_observed_panel.csv", out / "dealer_gamma_observed_panel.parquet")
+    write_table(dealer_gamma_intraday_selection_audit, out / "dealer_gamma_intraday_selection_audit_v1.csv")
     summary.to_csv(out / "model_comparison_summary.csv", index=False)
     expiry_calendar_out = expiry_calendar.copy()
     if not expiry_calendar_out.empty:
@@ -5408,6 +5792,7 @@ def run(
         "source_feature_candidate_quality_summary": out / "source_feature_candidate_quality_summary.csv",
         "selector_result_audit": out / "selector_result_audit.csv",
         "source_selection_parity_audit": out / "source_selection_parity_audit.csv",
+        "cta_vol_source_selection_parity_audit": out / "cta_vol_source_selection_parity_audit.csv",
         "scope_integrity_gate_audit": out / "scope_integrity_gate_audit.csv",
         "raw_feature_candidate_quality_audit": out / "raw_feature_candidate_quality_audit.csv",
         "module_data_quality_propagation_audit": out / "module_data_quality_propagation_audit.csv",
@@ -5424,6 +5809,7 @@ def run(
         "leveraged_etf_input_candidate_summary": out / "leveraged_etf_input_candidate_summary.csv",
         "leveraged_etf_universe_input_completeness_audit": out / "leveraged_etf_universe_input_completeness_audit.csv",
         "leveraged_etf_source_selection_parity_audit": out / "leveraged_etf_source_selection_parity_audit.csv",
+        "leveraged_etf_panel_selection_components_v1": out / "leveraged_etf_panel_selection_components_v1.csv",
         "leveraged_etf_primary_input_integrity_audit": out / "leveraged_etf_primary_input_integrity_audit.csv",
         "leveraged_etf_primary_input_gate_summary": out / "leveraged_etf_primary_input_gate_summary.csv",
         "leveraged_etf_aum_selector_parity_audit": out / "leveraged_etf_aum_selector_parity_audit.csv",
@@ -5432,15 +5818,18 @@ def run(
         "expiry_classification_historical_availability_audit": out / "expiry_classification_historical_availability_audit.csv",
         "expiry_classification_primary_eligibility_audit": out / "expiry_classification_primary_eligibility_audit.csv",
         "market_level_feature_panel_v1": out / "market_level_feature_panel_v1.csv",
+        "market_level_model_scope_integrity_v1": out / "market_level_model_scope_integrity_v1.csv",
         "market_level_decision_integrity_snapshot_v1": out / "market_level_decision_integrity_snapshot_v1.csv",
         "market_level_oos_predictions_v1": out / "market_level_oos_predictions_v1.csv",
         "market_level_oos_fold_coefficients_v1": out / "market_level_oos_fold_coefficients_v1.csv",
+        "market_level_oos_fold_audit_v1": out / "market_level_oos_fold_audit_v1.csv",
         "market_level_oos_metrics_v1": out / "market_level_oos_metrics_v1.csv",
         "market_level_incremental_comparison_v1": out / "market_level_incremental_comparison_v1.csv",
         "market_level_regime_summary_v1": out / "market_level_regime_summary_v1.csv",
         "market_level_data_quality_audit_v1": out / "market_level_data_quality_audit_v1.csv",
         "market_level_model_spec_v1": out / "market_level_model_spec_v1.json",
         "market_level_backtest_report_v1": out / "market_level_backtest_report_v1.md",
+        "dealer_gamma_intraday_selection_audit_v1": out / "dealer_gamma_intraday_selection_audit_v1.csv",
         "gate": root / "market_impact_backtest_gate_audit.md",
     }
 

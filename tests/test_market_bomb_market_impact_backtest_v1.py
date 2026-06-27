@@ -1149,3 +1149,101 @@ def test_module_quality_block_only_blocks_offending_module():
     cta2 = m.apply_data_quality_block(cta, "CTA_Vol", blocked)
     assert lev2.loc[0, "research_execution_gate"] == "data_quality_blocked"
     assert cta2.loc[0, "research_execution_gate"] == "insufficient_data"
+
+
+def test_v118_cta_latest_low_quality_is_skipped_for_earlier_clean():
+    rows = pd.DataFrame([
+        {"asset": "QQQ", "feature_as_of_timestamp_utc": "2026-01-05T20:00:00Z", "effective_available_at_utc": "2026-01-05T20:00:00Z", "cta_exposure_change_1d": 1.0, "quality_flag": "high"},
+        {"asset": "QQQ", "feature_as_of_timestamp_utc": "2026-01-05T21:00:00Z", "effective_available_at_utc": "2026-01-05T21:00:00Z", "cta_exposure_change_1d": -9.0, "quality_flag": "low"},
+    ])
+    selected = m.select_latest_clean_feature(family="CTA", target="QQQ", decision_timestamp_utc="2026-01-05T21:30:00Z", target_vol=None, source_rows=rows)
+    assert selected["selection_status"] == "selected"
+    assert selected["selected_source_quality_value"] == "high"
+    assert selected["row"]["cta_exposure_change_1d"] == 1.0
+
+
+def test_v118_vol_latest_low_quality_target_vol_is_skipped_for_earlier_clean():
+    rows = pd.DataFrame([
+        {"asset": "QQQ", "target_vol": 0.12, "feature_as_of_timestamp_utc": "2026-01-05T20:00:00Z", "effective_available_at_utc": "2026-01-05T20:00:00Z", "vol_control_exposure_change_1d": 2.0, "quality_flag": "medium"},
+        {"asset": "QQQ", "target_vol": 0.12, "feature_as_of_timestamp_utc": "2026-01-05T21:00:00Z", "effective_available_at_utc": "2026-01-05T21:00:00Z", "vol_control_exposure_change_1d": -5.0, "quality_flag": "bad"},
+        {"asset": "QQQ", "target_vol": 0.10, "feature_as_of_timestamp_utc": "2026-01-05T21:10:00Z", "effective_available_at_utc": "2026-01-05T21:10:00Z", "vol_control_exposure_change_1d": 99.0, "quality_flag": "high"},
+    ])
+    selected = m.select_latest_clean_feature(family="VolControl", target="QQQ", decision_timestamp_utc="2026-01-05T21:30:00Z", target_vol=0.12, source_rows=rows)
+    assert selected["selection_status"] == "selected"
+    assert selected["row"]["vol_control_exposure_change_1d"] == 2.0
+
+
+def test_v118_required_quality_field_missing_is_selected_invalid():
+    rows = pd.DataFrame([
+        {"asset": "QQQ", "feature_as_of_timestamp_utc": "2026-01-05T20:00:00Z", "effective_available_at_utc": "2026-01-05T20:00:00Z", "cta_exposure_change_1d": 1.0},
+    ])
+    selected = m.select_latest_clean_feature(family="CTA", target="QQQ", decision_timestamp_utc="2026-01-05T21:30:00Z", target_vol=None, source_rows=rows)
+    assert selected["selection_status"] == "selected_invalid"
+    assert "required_quality_field_missing" in selected["invalid_reason"]
+
+
+def test_v118_strict_rth_reference_uses_most_recent_valid_sessions():
+    rows = []
+    sessions = []
+    for i, day in enumerate(pd.date_range("2026-01-02", periods=6, freq="B")):
+        d = day.date()
+        sessions.append({"session_date": d.isoformat(), "is_regular_session": True, "regular_open_et": "09:30", "regular_close_et": "16:00", "is_early_close": False})
+        volume = [10, 20, 30, 40, 50, 100][i]
+        rows.append({"timestamp_utc": pd.Timestamp.combine(d, pd.Timestamp("15:30").time()).tz_localize("America/New_York").tz_convert("UTC"), "volume": volume})
+    ref = m.strict_rth_volume_reference(pd.DataFrame(rows), "2026-01-09", pd.Timestamp("15:30").time(), pd.DataFrame(sessions), window=2, min_valid_sessions=2)
+    assert ref["rth_volume_reference_session_dates"] == "2026-01-07;2026-01-08"
+    assert np.isclose(ref["volume_ratio"], 100 / 45)
+
+
+def test_v118_local_flip_alone_does_not_create_negative_gamma(tmp_path: Path):
+    cfg = tmp_path / "market_bomb_config"
+    cfg.mkdir()
+    (cfg / "dealer_gamma_observed_rules_v1.json").write_text('{"sign_convention":"positive_net_gex_proxy_means_long_gamma_proxy_not_dealer_inventory"}', encoding="utf-8")
+    pd.DataFrame([
+        {"ticker": "QQQ", "feature_as_of_timestamp_utc": "2026-01-05T20:00:00Z", "effective_available_at_utc": "2026-01-05T20:00:00Z", "raw_chain_present": True, "raw_chain_quality": "high", "gamma_flip_state": "local_flip_found", "net_gex_proxy": 10.0},
+    ]).to_csv(tmp_path / "dealer_gamma_proxy_history.csv", index=False)
+    outcomes = pd.DataFrame([{"target_market": "QQQ", "decision_date": "2026-01-05", "decision_timestamp_utc": "2026-01-05T21:00:00Z"}])
+    panel, _ = m.build_dealer_gamma_panel(tmp_path, outcomes, m.rules(tmp_path))
+    assert panel.iloc[0]["local_flip_found_flag"] == 1
+    assert panel.iloc[0]["negative_gamma_proxy_indicator"] == 0
+
+
+def test_v118_invalid_cta_blocks_only_dependent_scope_and_target():
+    panel = pd.DataFrame([
+        {"target_market": "QQQ", "decision_timestamp_utc": "2026-01-05T21:00:00Z", "model_clock": "EOD", "cta_selection_status": "selected_invalid", "cta_primary_eligible": False, "cta_invalid_reason": "required_quality_field_missing", "vol_selection_status": "selected", "vol_primary_eligible": True},
+        {"target_market": "SPY", "decision_timestamp_utc": "2026-01-05T21:00:00Z", "model_clock": "EOD", "cta_selection_status": "selected", "cta_primary_eligible": True, "vol_selection_status": "selected", "vol_primary_eligible": True},
+    ])
+    integrity = m.build_market_level_model_scope_integrity(panel)
+    qqq_b1 = integrity[(integrity["target_market"] == "QQQ") & (integrity["model_scope"] == "B1")]
+    qqq_b2 = integrity[(integrity["target_market"] == "QQQ") & (integrity["model_scope"] == "B2")]
+    spy_b1 = integrity[(integrity["target_market"] == "SPY") & (integrity["model_scope"] == "B1")]
+    assert set(qqq_b1["scope_integrity_status"]) == {"selected_invalid"}
+    assert set(qqq_b2["scope_integrity_status"]) == {"valid"}
+    assert set(spy_b1["scope_integrity_status"]) == {"valid"}
+
+
+def test_v118_c1_survives_missing_intraday_gamma_but_c2_does_not():
+    panel = pd.DataFrame([
+        {"target_market": "QQQ", "decision_timestamp_utc": "2026-01-05T20:30:00Z", "model_clock": "INTRADAY", "aggregate_pressure_usd": 100.0, "leveraged_etf_primary_input_gate": "eligible_primary"},
+    ])
+    integrity = m.build_market_level_model_scope_integrity(panel)
+    assert set(integrity[integrity["model_scope"] == "C1"]["scope_integrity_status"]) == {"valid"}
+    assert set(integrity[integrity["model_scope"] == "C2"]["scope_integrity_status"]) == {"unavailable_coverage"}
+
+
+def test_v118_paired_oos_uses_identical_parent_and_augmented_rows():
+    n = 380
+    dates = pd.bdate_range("2024-01-01", periods=n)
+    frame = pd.DataFrame({
+        "target_market": "QQQ",
+        "decision_timestamp_utc": [pd.Timestamp(d).tz_localize("America/New_York").tz_convert("UTC").isoformat() for d in dates],
+        "baseline": np.linspace(0, 1, n),
+        "feature": np.linspace(1, 2, n),
+        "outcome": np.linspace(0, 1, n) + 0.1,
+    })
+    cfg = {"walk_forward": {"minimum_train_observations": 252}, "statistical": {"ridge_alpha": 1.0}}
+    preds, _, coefs = m.market_level_paired_walk_forward(frame, "outcome", "B0", "B1", "EOD", ["baseline"], [], ["feature"], cfg)
+    assert not preds.empty
+    assert preds["parent_pred"].notna().all()
+    assert preds["augmented_pred"].notna().all()
+    assert set(coefs["fold_status"]) == {"tested"}
