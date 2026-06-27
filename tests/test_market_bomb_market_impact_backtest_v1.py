@@ -1491,7 +1491,7 @@ def _gamma_rows(rows):
     return pd.DataFrame([base | row for row in rows])
 
 
-@pytest.mark.parametrize("context", ["EOD_CLOSE", "INTRADAY_1530"])
+@pytest.mark.parametrize("context", ["EOD_CLOSE", "INTRADAY_1530", "EXPIRY_0930"])
 def test_v110_gamma_selector_newer_invalid_does_not_poison_earlier_clean(context):
     rows = _gamma_rows([
         {"effective_available_at_utc": "2026-01-05T18:00:00Z", "feature_as_of_timestamp_utc": "2026-01-05T18:00:00Z", "net_gex_proxy": 0.0},
@@ -1503,7 +1503,7 @@ def test_v110_gamma_selector_newer_invalid_does_not_poison_earlier_clean(context
     assert selected["row"]["net_gex_proxy"] == 0.0
 
 
-@pytest.mark.parametrize("context", ["EOD_CLOSE", "INTRADAY_1530"])
+@pytest.mark.parametrize("context", ["EOD_CLOSE", "INTRADAY_1530", "EXPIRY_0930"])
 def test_v110_gamma_selector_older_invalid_allows_newer_clean(context):
     rows = _gamma_rows([
         {"effective_available_at_utc": "2026-01-05T18:00:00Z", "feature_as_of_timestamp_utc": "2026-01-05T18:00:00Z", "data_type": "dealer_inventory_observed"},
@@ -1740,6 +1740,81 @@ def test_v111_intraday_universe_keeps_missing_outcome_day_beyond_eligible_panel(
     universe = m.build_market_level_intraday_decision_universe(tmp_path, cfg)
     assert len(universe) == 2
     assert "outcome_unavailable" in set(universe["intraday_outcome_availability_status"])
+
+
+def test_v112_eod_actual_feature_lineage_drives_parity(tmp_path: Path):
+    rows = _gamma_rows([{"source_row_identifier": "gamma-row-1", "net_gex_proxy": -2.0}])
+    rows.to_csv(tmp_path / "dealer_gamma_proxy_history.csv", index=False)
+    daily = pd.DataFrame([{
+        "target_market": "QQQ",
+        "decision_date": "2026-01-05",
+        "decision_timestamp_utc": "2026-01-05T20:30:00Z",
+    }])
+    selection = m.build_dealer_gamma_eod_selection_audit(tmp_path, daily, m.rules(tmp_path))
+    lineage = m.build_dealer_gamma_eod_actual_feature_lineage(tmp_path, selection)
+    assert lineage.iloc[0]["actual_feature_row_present"] is True or lineage.iloc[0]["actual_feature_row_present"] == True
+    assert lineage.iloc[0]["actual_selected_source_row_identifier"] == "gamma-row-1"
+    parity = m.build_dealer_gamma_source_selection_parity_audit(tmp_path, lineage, pd.DataFrame(), m.rules(tmp_path))
+    assert parity.iloc[0]["selection_parity_status"] == "matched"
+
+    missing = lineage.copy()
+    missing["actual_feature_row_present"] = False
+    missing["actual_feature_hydration_failure_reason"] = "unit_test_missing_lineage"
+    parity_missing = m.build_dealer_gamma_source_selection_parity_audit(tmp_path, missing, pd.DataFrame(), m.rules(tmp_path))
+    assert parity_missing.iloc[0]["selection_parity_status"] == "audit_missing"
+
+
+def test_v112_intraday_universe_does_not_synthesize_business_days_without_calendar(tmp_path: Path):
+    bars_dir = tmp_path / "market_bomb_history" / "intraday_bars"
+    bars_dir.mkdir(parents=True)
+    pd.DataFrame([
+        {"timestamp_utc": "2026-01-05T20:30:00Z", "close": 100, "high": 100, "low": 100},
+        {"timestamp_utc": "2026-01-05T21:00:00Z", "close": 101, "high": 101, "low": 100},
+    ]).to_csv(bars_dir / "QQQ_5m.csv", index=False)
+    cfg = m.rules(tmp_path)
+    cfg["targets"] = ["QQQ"]
+    universe, gate = m.build_market_level_intraday_universe_with_gate(tmp_path, cfg)
+    assert universe.empty
+    assert gate.iloc[0]["universe_generation_status"] == "selected_invalid"
+    assert "nyse_calendar" in gate.iloc[0]["universe_generation_reason"]
+
+
+def test_v112_leveraged_input_audit_iterates_full_intraday_universe(tmp_path: Path):
+    write_nyse_calendar(tmp_path, [
+        {"session_date": "2026-01-15", "is_regular_session": True, "regular_open_et": "09:30", "regular_close_et": "16:00", "is_early_close": False},
+        {"session_date": "2026-01-16", "is_regular_session": True, "regular_open_et": "09:30", "regular_close_et": "16:00", "is_early_close": False},
+    ])
+    write_expiry_intraday_rules(tmp_path, verified=True)
+    hist = tmp_path / "market_bomb_history"
+    hist.mkdir(parents=True, exist_ok=True)
+    pd.DataFrame([
+        {"ticker": t, "effective_available_at_utc": "2026-01-14T21:00:00Z", "as_of_timestamp_utc": "2026-01-14T21:00:00Z", "net_assets_usd": 100.0, "aum_value_type": "net_assets_usd"}
+        for t in ["TQQQ", "SQQQ"]
+    ]).to_csv(hist / "leveraged_etf_aum_history.csv", index=False)
+    bars_dir = hist / "intraday_bars"
+    bars_dir.mkdir(exist_ok=True)
+    pd.DataFrame([
+        {"timestamp_utc": "2026-01-16T20:30:00Z", "open": 100, "high": 100, "low": 100, "close": 100, "volume": 100, "prior_regular_session_close": 100},
+        {"timestamp_utc": "2026-01-16T21:00:00Z", "open": 102, "high": 102, "low": 102, "close": 102, "volume": 100, "prior_regular_session_close": 100},
+    ]).to_csv(bars_dir / "QQQ_5m.csv", index=False)
+    universe = pd.DataFrame([
+        {"target_market": "QQQ", "decision_timestamp_utc": "2026-01-15T20:30:00Z"},
+        {"target_market": "QQQ", "decision_timestamp_utc": "2026-01-16T20:30:00Z"},
+    ])
+    candidate, _, _, _ = m.build_leveraged_etf_input_candidate_audits(tmp_path, m.rules(tmp_path), universe)
+    day15 = candidate[candidate["decision_timestamp_utc"].astype(str).eq("2026-01-15T20:30:00+00:00")]
+    assert not day15.empty
+    assert "decision_bar_1530" in set(day15["input_component"])
+    assert day15[day15["input_component"].eq("decision_bar_1530")].iloc[0]["primary_eligible"] is False or day15[day15["input_component"].eq("decision_bar_1530")].iloc[0]["primary_eligible"] == False
+
+
+def test_v112_expiry_gamma_selection_uses_canonical_context():
+    raw = _gamma_rows([{"source_row_identifier": "expiry-gamma-1", "net_gex_proxy": -3.0}])
+    selected, audit = m.select_strict_gamma_snapshot_for_event(raw, "QQQ", pd.Timestamp("2026-01-05T20:30:00Z", tz="UTC"), m.rules(Path(".")))
+    assert selected is not None
+    assert audit["selector_context"] == "EXPIRY_0930"
+    assert audit["selection_status"] == "selected"
+    assert audit["selected_source_row_identifier"] == "expiry-gamma-1"
 
 
 def test_v111_decision_bucket_audit_assigns_exactly_one_bucket():
