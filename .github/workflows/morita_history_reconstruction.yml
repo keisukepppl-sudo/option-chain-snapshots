@@ -1,0 +1,134 @@
+name: Morita History Reconstruction
+
+on:
+  workflow_dispatch:
+    inputs:
+      include_repo_sources:
+        description: "Parse raw sources already present in the repository"
+        required: true
+        default: true
+        type: boolean
+      include_github_action_artifacts:
+        description: "Attempt to retrieve available GitHub Actions artifacts with actions:read"
+        required: true
+        default: false
+        type: boolean
+      build_underlying_outcomes:
+        description: "Build reconstructed underlying outcome panel"
+        required: true
+        default: true
+        type: boolean
+      persist_reports:
+        description: "Commit normalized reconstruction outputs and reports"
+        required: true
+        default: false
+        type: boolean
+
+jobs:
+  reconstruct:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      actions: read
+    steps:
+      - name: Checkout main
+        uses: actions/checkout@v4
+        with:
+          ref: main
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Snapshot raw reconstruction source hashes before
+        run: |
+          if [ -d market_bomb_reconstruction/raw_sources ]; then
+            find market_bomb_reconstruction/raw_sources -type f -print0 | sort -z | xargs -0 sha256sum > /tmp/raw_sources_before.sha256
+          else
+            touch /tmp/raw_sources_before.sha256
+          fi
+
+      - name: Reconstruct Morita history
+        run: |
+          ARGS=""
+          if [ "${{ inputs.include_repo_sources }}" != "true" ]; then
+            ARGS="$ARGS --skip-repo-sources"
+          fi
+          if [ "${{ inputs.include_github_action_artifacts }}" = "true" ]; then
+            ARGS="$ARGS --include-github-action-artifacts"
+          fi
+          if [ "${{ inputs.build_underlying_outcomes }}" != "true" ]; then
+            ARGS="$ARGS --skip-underlying-outcomes"
+          fi
+          python market_bomb_phase3_2b_morita_history_reconstruction.py $ARGS
+
+      - name: Verify raw reconstruction sources were not mutated
+        run: |
+          if [ -d market_bomb_reconstruction/raw_sources ]; then
+            find market_bomb_reconstruction/raw_sources -type f -print0 | sort -z | xargs -0 sha256sum > /tmp/raw_sources_after.sha256
+          else
+            touch /tmp/raw_sources_after.sha256
+          fi
+          if diff -u /tmp/raw_sources_before.sha256 /tmp/raw_sources_after.sha256 > raw_source_mutation_report.txt; then
+            echo "raw_source_mutation_count=0" > raw_source_mutation_count.txt
+          else
+            grep -E '^[+-][^+-]' raw_source_mutation_report.txt | wc -l | awk '{print "raw_source_mutation_count="$1}' > raw_source_mutation_count.txt
+            cat raw_source_mutation_report.txt
+            exit 1
+          fi
+
+      - name: Upload reconstruction artifacts
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: morita-history-reconstruction-${{ github.run_id }}
+          path: |
+            market_bomb_reconstruction/source_inventory.csv
+            market_bomb_reconstruction/source_inventory.md
+            market_bomb_reconstruction/source_file_manifest.csv
+            market_bomb_reconstruction/source_ingestion_audit.md
+            market_bomb_reconstruction/normalized/*.csv
+            market_bomb_reconstruction/normalized/*.parquet
+            market_bomb_reconstruction/audit/*.csv
+            market_bomb_reconstruction/audit/*.md
+            market_bomb_reconstruction/analysis/*.csv
+            market_bomb_reconstruction/analysis/*.parquet
+            market_bomb_reconstruction/analysis/*.md
+            market_bomb_reconstruction/templates/*.csv
+            market_bomb_reconstruction/templates/*.md
+            morita_history_reconstruction_gate_audit.md
+            raw_source_mutation_count.txt
+            raw_source_mutation_report.txt
+          if-no-files-found: warn
+
+  persist:
+    needs: reconstruct
+    if: ${{ inputs.persist_reports == true && needs.reconstruct.result == 'success' }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout main
+        uses: actions/checkout@v4
+        with:
+          ref: main
+
+      - name: Download reconstruction artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: morita-history-reconstruction-${{ github.run_id }}
+          path: .
+
+      - name: Commit reconstruction outputs
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add market_bomb_reconstruction/source_inventory.* market_bomb_reconstruction/source_file_manifest.csv market_bomb_reconstruction/source_ingestion_audit.md || true
+          git add market_bomb_reconstruction/normalized market_bomb_reconstruction/audit market_bomb_reconstruction/analysis market_bomb_reconstruction/templates || true
+          git add morita_history_reconstruction_gate_audit.md raw_source_mutation_count.txt raw_source_mutation_report.txt || true
+          git diff --cached --quiet || git commit -m "Update Morita history reconstruction outputs"
+          git push
