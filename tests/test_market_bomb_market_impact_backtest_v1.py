@@ -91,15 +91,17 @@ def test_leveraged_pressure_uses_1530_return_not_close_to_close(tmp_path: Path):
     aum.mkdir(parents=True)
     pd.DataFrame(
         [
-            {"ticker": "TQQQ", "as_of_timestamp_utc": "2026-01-04T21:00:00Z", "net_assets_usd": 100.0},
-            {"ticker": "SQQQ", "as_of_timestamp_utc": "2026-01-04T21:00:00Z", "net_assets_usd": 100.0},
+            {"ticker": "TQQQ", "effective_available_at_utc": "2026-01-02T21:00:00Z", "net_assets_usd": 100.0},
+            {"ticker": "SQQQ", "effective_available_at_utc": "2026-01-02T21:00:00Z", "net_assets_usd": 100.0},
+            {"ticker": "QLD", "effective_available_at_utc": "2026-01-02T21:00:00Z", "net_assets_usd": 100.0},
+            {"ticker": "QID", "effective_available_at_utc": "2026-01-02T21:00:00Z", "net_assets_usd": 100.0},
         ]
     ).to_csv(aum / "leveraged_etf_aum_history.csv", index=False)
     bars_dir = tmp_path / "market_bomb_history" / "intraday_bars"
     bars_dir.mkdir(parents=True)
     pd.DataFrame(
         [
-            {"timestamp_utc": "2026-01-05T14:30:00Z", "open": 100, "high": 100, "low": 100, "close": 100, "volume": 100, "prior_close": 100},
+            {"timestamp_utc": "2026-01-05T14:30:00Z", "open": 100, "high": 100, "low": 100, "close": 100, "volume": 100, "prior_regular_session_close": 100},
             {"timestamp_utc": "2026-01-05T20:30:00Z", "open": 101, "high": 101, "low": 101, "close": 101, "volume": 100},
             {"timestamp_utc": "2026-01-05T21:00:00Z", "open": 110, "high": 110, "low": 110, "close": 110, "volume": 100},
         ]
@@ -113,7 +115,7 @@ def test_leveraged_pressure_uses_1530_return_not_close_to_close(tmp_path: Path):
 def test_intraday_missing_day_is_excluded_from_leveraged_panel(tmp_path: Path):
     bars_dir = tmp_path / "market_bomb_history" / "intraday_bars"
     bars_dir.mkdir(parents=True)
-    pd.DataFrame([{"timestamp_utc": "2026-01-05T14:30:00Z", "close": 100, "prior_close": 100}]).to_csv(bars_dir / "QQQ_5m.csv", index=False)
+    pd.DataFrame([{"timestamp_utc": "2026-01-05T14:30:00Z", "close": 100, "prior_regular_session_close": 100}]).to_csv(bars_dir / "QQQ_5m.csv", index=False)
     panel, audit = m.build_leveraged_etf_panel(tmp_path, m.rules(tmp_path))
     assert panel.empty
     assert "unavailable" in set(audit["availability_status"])
@@ -187,3 +189,67 @@ def test_run_writes_outputs_and_actionization_false(tmp_path: Path):
     assert "actionization_gate: `false`" in gate
     manifest = pd.read_json(tmp_path / "market_bomb_market_impact" / "analysis_manifest.json", typ="series")
     assert manifest["actionization_allowed"] is False
+
+
+def test_empty_feature_join_makes_no_lookahead_not_run_and_data_gate_insufficient(tmp_path: Path):
+    m.run(tmp_path, run_cta_vol_analysis=False, run_leveraged_etf_analysis=False, run_dealer_observed_analysis=False)
+    gate = (tmp_path / "market_impact_backtest_gate_audit.md").read_text(encoding="utf-8")
+    assert "market_impact_data_gate: `insufficient_data`" in gate
+    assert "no_lookahead_status: `not_run`" in gate
+
+
+def test_expanding_oos_uses_previous_months_only_with_train_scaler():
+    dates = pd.bdate_range("2025-01-01", periods=90)
+    panel = pd.DataFrame(
+        {
+            "target_market": ["QQQ"] * len(dates),
+            "decision_timestamp_utc": [m.et_close_utc(d).isoformat() for d in dates],
+            "baseline": np.linspace(0, 1, len(dates)),
+            "feature": np.linspace(1, 2, len(dates)),
+            "outcome": np.linspace(0, 0.1, len(dates)),
+        }
+    )
+    cfg = m.rules(Path("."))
+    cfg["walk_forward"]["minimum_train_observations"] = 20
+    result, folds = m.run_oos_comparison(
+        panel,
+        module="Test",
+        test_family="unit",
+        feature_sets={"feature_set": ["feature"]},
+        outcomes=["outcome"],
+        baseline_cols=["baseline"],
+        cfg=cfg,
+        min_oos_rows=1,
+        min_test_months=1,
+    )
+    tested = folds[folds["fold_status"].eq("tested")]
+    assert not result.empty
+    assert not tested.empty
+    assert tested["sample_count_train"].min() >= 20
+    assert result.loc[0, "evidence_engine"] == "expanding_window_oos_ridge"
+
+
+def test_prior_available_aum_rejects_date_only_same_day_primary():
+    aum = pd.DataFrame([{"ticker": "TQQQ", "date": "2026-01-05", "net_assets_usd": 100.0}])
+    value, reason, proxy = m.prior_available_aum(aum, "TQQQ", pd.Timestamp("2026-01-05T20:30:00Z"), pd.Timestamp("2026-01-02T21:00:00Z"))
+    assert pd.isna(value)
+    assert reason == "date_only_aum_not_primary"
+    assert proxy is False
+
+
+def test_no_lookahead_audit_fails_effective_after_decision():
+    join = pd.DataFrame(
+        [
+            {
+                "module": "X",
+                "feature_family": "X",
+                "target_market": "QQQ",
+                "decision_timestamp_utc": "2026-01-05T20:30:00Z",
+                "feature_as_of_timestamp_utc": "2026-01-05T20:00:00Z",
+                "effective_available_at_utc": "2026-01-05T21:00:00Z",
+            }
+        ]
+    )
+    audit, status = m.build_no_lookahead_audit(join)
+    assert status == "failed"
+    assert audit.loc[0, "no_lookahead_passed"] is False or audit.loc[0, "no_lookahead_passed"] == False

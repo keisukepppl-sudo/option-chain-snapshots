@@ -1,0 +1,24 @@
+{
+  "version": "market_impact_baseline_v1",
+  "daily": [
+    "prior_return_1d",
+    "prior_return_5d",
+    "prior_realized_vol_20d",
+    "distance_from_20d_moving_average",
+    "weekday",
+    "month_end_flag",
+    "monthly_expiry_flag",
+    "quarterly_expiry_flag"
+  ],
+  "intraday": [
+    "return_prior_regular_close_to_1530",
+    "absolute_return_prior_regular_close_to_1530",
+    "intraday_realized_vol_to_1530",
+    "intraday_volume_share_to_1530",
+    "prior_session_return",
+    "prior_20d_realized_vol",
+    "weekday",
+    "monthly_expiry_flag",
+    "quarterly_expiry_flag"
+  ]
+}

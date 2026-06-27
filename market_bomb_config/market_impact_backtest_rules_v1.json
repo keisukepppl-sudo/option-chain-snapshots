@@ -12,7 +12,22 @@
   },
   "statistical": {
     "bootstrap_method": "moving_block",
-    "multiple_testing_method": "benjamini_hochberg"
+    "multiple_testing_method": "benjamini_hochberg",
+    "bootstrap_block_length": 5,
+    "bootstrap_iterations": 1000,
+    "random_seed": 42,
+    "ridge_alpha": 1.0
   },
+  "minimum_samples": {
+    "cta_vol_min_oos_rows_per_target": 252,
+    "cta_vol_min_test_months": 6,
+    "leveraged_etf_min_oos_rows": 126,
+    "leveraged_etf_min_test_months": 6,
+    "leveraged_etf_complete_universe_coverage_min": 0.8,
+    "dealer_gamma_min_oos_rows": 100,
+    "dealer_gamma_min_test_months": 6,
+    "dealer_expiry_min_event_rows_per_comparison_group": 20
+  },
+  "bar_timestamp_convention": "bar_end",
   "actionization_allowed": false
 }
