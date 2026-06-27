@@ -104,6 +104,33 @@ def write_expiry_intraday_rules(root: Path, verified=True, method="first_regular
     )
 
 
+def write_expiry_friday_classification(root: Path, day="2026-01-16", group="monthly_expiry_non_quarterly"):
+    cfg = root / "market_bomb_config"
+    cfg.mkdir(parents=True, exist_ok=True)
+    pd.DataFrame([{
+        "session_date": day,
+        "market": "US",
+        "is_regular_session": True,
+        "is_early_close": False,
+        "classification_status": "available_complete",
+        "classification_basis": "unit_test",
+        "classification_complete": True,
+        "comparison_group": group,
+        "is_expiry_session": group != "non_expiry_friday",
+        "expiry_type": "monthly" if "monthly" in group else "",
+        "monthly_expiry_flag": group != "non_expiry_friday",
+        "quarterly_expiry_flag": "quarterly" in group or "triple" in group,
+        "triple_witching_flag": "triple" in group,
+        "holiday_adjusted_flag": False,
+        "schedule_source_identifier": "unit_test_expiry_schedule",
+        "schedule_rule_version": "expiry_schedule_availability_rules_v1",
+        "schedule_rule_revision_hash": "unit_test_rule_hash",
+        "classification_effective_available_at_utc": "2025-01-01T00:00:00Z",
+        "schedule_published_at_utc": "2025-01-01T00:00:00Z",
+        "source_hash_or_revision": "unit_test_rule_hash",
+    }]).to_csv(cfg / "expiry_friday_classification_v1.csv", index=False)
+
+
 def write_expiry_intraday_bars(root: Path, ticker="QQQ", day="2026-01-16"):
     bars_dir = root / "market_bomb_history" / "intraday_bars"
     bars_dir.mkdir(parents=True, exist_ok=True)
@@ -472,6 +499,7 @@ def test_previous_regular_session_skips_2026_juneteenth():
 def test_expiry_calendar_and_gamma_conditioned_are_separate(tmp_path: Path):
     write_nyse_calendar(tmp_path)
     write_expiry_intraday_rules(tmp_path, verified=True)
+    write_expiry_friday_classification(tmp_path)
     write_expiry_intraday_bars(tmp_path)
     cfg = tmp_path / "market_bomb_config"
     cfg.mkdir(exist_ok=True)
@@ -517,6 +545,7 @@ def test_expiry_calendar_and_gamma_conditioned_are_separate(tmp_path: Path):
 def test_expiry_rejects_gamma_snapshot_after_0930(tmp_path: Path):
     write_nyse_calendar(tmp_path)
     write_expiry_intraday_rules(tmp_path, verified=True)
+    write_expiry_friday_classification(tmp_path)
     write_expiry_intraday_bars(tmp_path)
     cfg = tmp_path / "market_bomb_config"
     cfg.mkdir(exist_ok=True)
@@ -800,6 +829,91 @@ def test_nyse_early_close_at_1600_fails(tmp_path: Path):
     write_nyse_calendar(tmp_path, [{"session_date": "2026-01-02", "is_regular_session": True, "regular_open_et": "09:30", "regular_close_et": "16:00", "is_early_close": True}])
     result = m.validate_nyse_calendar_provenance(tmp_path, m.load_nyse_calendar(tmp_path))
     assert result["reason"] == "nyse_calendar_early_close_close_not_early"
+
+
+def test_missing_expiry_classification_does_not_create_non_expiry_reference():
+    group = m.expiry_comparison_group(pd.Timestamp("2026-01-16"), pd.DataFrame(), pd.DataFrame(), pd.Timestamp("2026-01-16T14:30:00Z"))
+    assert group == "unavailable_incomplete_schedule"
+
+
+def test_group_contrast_baseline_excludes_expiry_flags():
+    panel = pd.DataFrame([
+        {"target_market": "QQQ", "decision_timestamp_utc": "2026-01-16T14:30:00Z", "comparison_group": "triple_witching", "y": 0.1, "event_group_indicator": 1, "monthly_expiry_flag": 1, "quarterly_expiry_flag": 1, "triple_witching_flag": 1, "prior_return_1d": 0.0},
+        {"target_market": "QQQ", "decision_timestamp_utc": "2026-01-23T14:30:00Z", "comparison_group": "non_expiry_friday", "y": 0.0, "event_group_indicator": 0, "monthly_expiry_flag": 0, "quarterly_expiry_flag": 0, "triple_witching_flag": 0, "prior_return_1d": 0.0},
+    ])
+    cfg = m.rules(Path("."))
+    cfg["walk_forward"]["minimum_train_observations"] = 1
+    result, _, _ = m.run_expiry_group_contrast_oos(panel, module="ExpiryCalendar", feature_family="ExpiryCalendar", feature_name="calendar_group_contrast", feature_cols=["event_group_indicator"], outcomes=["y"], baseline_cols=["prior_return_1d", "monthly_expiry_flag", "quarterly_expiry_flag", "triple_witching_flag"], cfg=cfg, min_oos_rows_per_group=1, min_test_months_per_group=1)
+    assert "monthly_expiry_flag" not in ",".join(result.get("baseline_feature_columns", pd.Series(dtype=str)).astype(str))
+
+
+def test_coverage_not_started_is_not_data_quality_blocked():
+    audit = pd.DataFrame([
+        {"module": "CTA", "feature_family": "CTA", "target_market": "QQQ", "decision_timestamp_utc": "2026-01-01T20:00:00Z", "effective_available_at_utc": "2026-01-02T20:00:00Z", "candidate_eligibility_status": "excluded", "candidate_exclusion_reason": "effective_after_decision", "selected_for_panel": False}
+    ])
+    summary = m.summarize_source_feature_candidate_audit(audit)
+    assert summary.loc[0, "decision_level_availability_state"] == "coverage_not_started"
+    assert summary.loc[0, "module_gate_recommendation"] == "insufficient_data"
+
+
+def test_missing_timestamp_without_clean_replacement_blocks_scope():
+    audit = pd.DataFrame([
+        {"module": "CTA", "feature_family": "CTA", "target_market": "QQQ", "decision_timestamp_utc": "2026-01-01T20:00:00Z", "effective_available_at_utc": "", "candidate_eligibility_status": "excluded", "candidate_exclusion_reason": "effective_available_timestamp_missing;feature_age_missing", "selected_for_panel": False}
+    ])
+    summary = m.summarize_source_feature_candidate_audit(audit)
+    assert summary.loc[0, "module_gate_recommendation"] == "data_quality_blocked"
+
+
+def test_expiry_classification_provenance_detects_missing_friday(tmp_path: Path):
+    write_nyse_calendar(tmp_path, [
+        {"session_date": "2026-01-02", "is_regular_session": True, "regular_open_et": "09:30", "regular_close_et": "16:00", "is_early_close": False},
+        {"session_date": "2026-01-09", "is_regular_session": True, "regular_open_et": "09:30", "regular_close_et": "16:00", "is_early_close": False},
+    ])
+    cfg = tmp_path / "market_bomb_config"
+    pd.DataFrame([{"date": "2026-01-16", "market": "US", "expiry_type": "monthly", "monthly_expiry_flag": True, "quarterly_expiry_flag": False, "triple_witching_flag": False, "holiday_adjusted_flag": False}]).to_csv(cfg / "options_expiry_calendar_v1.csv", index=False)
+    write_expiry_intraday_rules(tmp_path, verified=True)
+    write_expiry_friday_classification(tmp_path, day="2026-01-02", group="non_expiry_friday")
+    import json
+    for path_name in ["options_expiry_calendar_metadata_v1.json", "expiry_friday_classification_metadata_v1.json"]:
+        meta_path = cfg / path_name
+        meta = {
+            "calendar_source_file_sha256": m.hash_file(cfg / "options_expiry_calendar_v1.csv"),
+            "schedule_rules_file_sha256": m.hash_file(cfg / "expiry_schedule_availability_rules_v1.json"),
+            "classification_calendar_file_sha256": m.hash_file(cfg / "expiry_friday_classification_v1.csv"),
+            "source_identifier": "unit_test_source",
+            "source_retrieved_at_utc": "2026-01-01T00:00:00Z",
+            "generation_method": "unit_test_generation",
+            "coverage_start": "2026-01-02",
+            "coverage_end": "2026-01-09",
+        }
+        meta_path.write_text(json.dumps(meta), encoding="utf-8")
+    result = m.validate_expiry_classification_provenance(tmp_path, m.load_expiry_friday_classification(tmp_path), m.load_nyse_calendar(tmp_path))
+    assert result["reason"] == "expiry_classification_coverage_incomplete"
+
+
+def test_leveraged_etf_input_candidate_audit_has_aum_and_exact_bars(tmp_path: Path):
+    write_nyse_calendar(tmp_path, [
+        {"session_date": "2026-01-15", "is_regular_session": True, "regular_open_et": "09:30", "regular_close_et": "16:00", "is_early_close": False},
+        {"session_date": "2026-01-16", "is_regular_session": True, "regular_open_et": "09:30", "regular_close_et": "16:00", "is_early_close": False},
+    ])
+    hist = tmp_path / "market_bomb_history"
+    hist.mkdir(parents=True)
+    pd.DataFrame([
+        {"ticker": t, "effective_available_at_utc": "2026-01-15T21:00:00Z", "as_of_timestamp_utc": "2026-01-15T21:00:00Z", "net_assets_usd": 100.0, "aum_value_type": "net_assets_usd"}
+        for t in ["TQQQ", "SQQQ", "QLD", "QID"]
+    ]).to_csv(hist / "leveraged_etf_aum_history.csv", index=False)
+    bars_dir = hist / "intraday_bars"
+    bars_dir.mkdir()
+    pd.DataFrame([
+        {"timestamp_utc": "2026-01-16T14:30:00Z", "open": 100, "high": 100, "low": 100, "close": 100, "volume": 100, "prior_regular_session_close": 100},
+        {"timestamp_utc": "2026-01-16T20:25:00Z", "open": 100, "high": 100, "low": 100, "close": 100, "volume": 100, "prior_regular_session_close": 100},
+        {"timestamp_utc": "2026-01-16T20:30:00Z", "open": 101, "high": 101, "low": 101, "close": 101, "volume": 100, "prior_regular_session_close": 100},
+        {"timestamp_utc": "2026-01-16T21:00:00Z", "open": 102, "high": 102, "low": 102, "close": 102, "volume": 100, "prior_regular_session_close": 100},
+    ]).to_csv(bars_dir / "QQQ_5m.csv", index=False)
+    candidate, _, universe, _ = m.build_leveraged_etf_input_candidate_audits(tmp_path, m.rules(tmp_path))
+    assert {"aum", "decision_bar_1530", "close_bar_1600"}.issubset(set(candidate["input_component"]))
+    assert "2026-01-16T20:25:00Z" not in set(candidate.get("actual_bar_timestamp_utc", pd.Series(dtype=str)).astype(str))
+    assert not universe.empty
 
 
 def test_oos_no_predictions_has_null_pvalue_not_run():

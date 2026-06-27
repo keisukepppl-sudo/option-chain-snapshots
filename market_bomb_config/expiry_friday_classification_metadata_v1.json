@@ -1,0 +1,11 @@
+{
+  "calendar_source_file_sha256": "166809fb16e35b0860760d7fee3d82c93e60c9610718f0e80f64e39ec85abbe2",
+  "calendar_version": "expiry_friday_classification_v1",
+  "classification_calendar_file_sha256": "e0eb240e493247617863f4da4aefd2afe848a3fb20db6be570fbbabefd8cdeb4",
+  "coverage_end": "2026-12-31",
+  "coverage_start": "2022-01-03",
+  "generation_method": "deterministic_rule_with_explicit_event_overrides",
+  "schedule_rules_file_sha256": "c0568f4212947e318ed8e448deda3e605720f194889a4747ab5664cdf466526f",
+  "source_identifier": "occ_nyse_friday_expiry_classification_static_verified_export",
+  "source_retrieved_at_utc": "2026-06-27T00:00:00Z"
+}

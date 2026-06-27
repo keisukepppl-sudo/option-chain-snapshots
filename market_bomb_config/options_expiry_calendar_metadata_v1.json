@@ -1,10 +1,13 @@
 {
+  "availability_contract_version": "expiry_schedule_availability_rules_v1",
+  "calendar_source_file_sha256": "166809fb16e35b0860760d7fee3d82c93e60c9610718f0e80f64e39ec85abbe2",
   "calendar_version": "options_expiry_calendar_v1",
-  "source_name": "OCC standard options expiration schedule with NYSE holiday adjustment",
-  "source_identifier": "occ_standard_options_expiration_schedule_2026_static_verified_export",
-  "source_retrieved_at_utc": "2026-06-27T00:00:00Z",
-  "generation_method": "repo_pinned_validated_calendar_export",
-  "coverage_start": "2026-03-20",
+  "classification_calendar_file_sha256": "e0eb240e493247617863f4da4aefd2afe848a3fb20db6be570fbbabefd8cdeb4",
   "coverage_end": "2026-12-18",
-  "availability_contract_version": "expiry_schedule_availability_rules_v1"
+  "coverage_start": "2026-03-20",
+  "generation_method": "validated_static_export_with_hashes",
+  "schedule_rules_file_sha256": "c0568f4212947e318ed8e448deda3e605720f194889a4747ab5664cdf466526f",
+  "source_identifier": "occ_standard_options_expiration_schedule_2026_static_verified_export",
+  "source_name": "OCC standard options expiration schedule with NYSE holiday adjustment",
+  "source_retrieved_at_utc": "2026-06-27T00:00:00Z"
 }

@@ -20,5 +20,12 @@
     "weekday",
     "monthly_expiry_flag",
     "quarterly_expiry_flag"
+  ],
+  "expiry_group_contrast": [
+    "prior_return_1d",
+    "prior_return_5d",
+    "prior_realized_vol_20d",
+    "distance_from_20d_moving_average",
+    "month_end_flag"
   ]
 }

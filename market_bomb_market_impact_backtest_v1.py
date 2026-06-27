@@ -29,6 +29,10 @@ DEALER_RULES_PATH = Path("market_bomb_config/dealer_gamma_observed_rules_v1.json
 EXPIRY_CALENDAR_PATH = Path("market_bomb_config/options_expiry_calendar_v1.csv")
 EXPIRY_CALENDAR_METADATA_PATH = Path("market_bomb_config/options_expiry_calendar_metadata_v1.json")
 EXPIRY_SCHEDULE_AVAILABILITY_RULES_PATH = Path("market_bomb_config/expiry_schedule_availability_rules_v1.json")
+EXPIRY_FRIDAY_CLASSIFICATION_PATH = Path("market_bomb_config/expiry_friday_classification_v1.csv")
+EXPIRY_FRIDAY_CLASSIFICATION_METADATA_PATH = Path("market_bomb_config/expiry_friday_classification_metadata_v1.json")
+SOURCE_COVERAGE_CONTRACTS_PATH = Path("market_bomb_config/market_impact_source_coverage_contracts_v1.json")
+LEVERAGED_ETF_INPUT_CONTRACTS_PATH = Path("market_bomb_config/leveraged_etf_input_contracts_v1.json")
 DATA_SOURCES_PATH = Path("market_bomb_config/market_impact_data_sources_v1.json")
 FEATURE_MAPPINGS_PATH = Path("market_bomb_config/market_impact_feature_mappings_v1.json")
 BASELINE_PATH = Path("market_bomb_config/market_impact_baseline_v1.json")
@@ -282,6 +286,16 @@ EXPIRY_GROUP_CONTRAST_RESULT_COLUMNS = [
     "bootstrap_delta_mse_ci_high",
     "research_execution_gate",
     "evidence_verdict",
+    "baseline_model_version",
+    "baseline_feature_columns",
+    "event_group_definition_source",
+    "reference_group_definition_source",
+    "expiry_classification_coverage_status",
+    "holiday_adjusted_event_excluded_count",
+    "clean_selected_prediction_count",
+    "coverage_excluded_prediction_count",
+    "selected_invalid_prediction_count",
+    "nonselected_invalid_candidate_count",
 ]
 
 CALENDAR_AVAILABILITY_AUDIT_COLUMNS = [
@@ -294,6 +308,51 @@ CALENDAR_AVAILABILITY_AUDIT_COLUMNS = [
     "calendar_availability_timestamp_source",
     "calendar_availability_contract_version",
     "availability_status",
+    "availability_failure_reason",
+]
+
+EXPIRY_CLASSIFICATION_AUDIT_COLUMNS = [
+    "session_date",
+    "expected_regular_friday",
+    "classification_row_count",
+    "classification_status",
+    "classification_complete",
+    "comparison_group",
+    "availability_status",
+    "availability_failure_reason",
+]
+
+SOURCE_SELECTION_PARITY_COLUMNS = [
+    "module",
+    "feature_family",
+    "target_market",
+    "decision_timestamp_utc",
+    "audit_selected_source_row_identifier",
+    "panel_selected_source_row_identifier",
+    "selection_parity_status",
+    "selection_parity_failure_reason",
+]
+
+LEVERAGED_ETF_INPUT_CANDIDATE_COLUMNS = [
+    "input_component",
+    "fund_ticker",
+    "target_market",
+    "decision_timestamp_utc",
+    "required_bar_timestamp_et",
+    "actual_bar_timestamp_utc",
+    "bar_timestamp_convention",
+    "provider_bar_semantics_verified",
+    "aum_value",
+    "aum_value_type",
+    "aum_as_of_timestamp_utc",
+    "aum_effective_available_at_utc",
+    "prior_regular_close_session_date",
+    "prior_regular_close_timestamp_utc",
+    "prior_regular_close_price",
+    "source_path_or_provider",
+    "source_row_identifier",
+    "candidate_eligibility_status",
+    "selected_for_model",
     "availability_failure_reason",
 ]
 
@@ -391,6 +450,13 @@ def baseline_config(root: Path) -> dict[str, Any]:
             "weekday",
             "monthly_expiry_flag",
             "quarterly_expiry_flag",
+        ],
+        "expiry_group_contrast": [
+            "prior_return_1d",
+            "prior_return_5d",
+            "prior_realized_vol_20d",
+            "distance_from_20d_moving_average",
+            "month_end_flag",
         ],
     })
 
@@ -617,6 +683,126 @@ def load_expiry_calendar(root: Path) -> pd.DataFrame:
     if "date" in expiry.columns:
         expiry["date"] = pd.to_datetime(expiry["date"], errors="coerce").dt.date.astype(str)
     return expiry
+
+
+def load_expiry_friday_classification(root: Path) -> pd.DataFrame:
+    path = root / EXPIRY_FRIDAY_CLASSIFICATION_PATH
+    if not path.exists():
+        return pd.DataFrame()
+    df = pd.read_csv(path)
+    if "session_date" in df.columns:
+        df["session_date"] = pd.to_datetime(df["session_date"], errors="coerce").dt.date.astype(str)
+    for col in ["is_regular_session", "is_early_close", "classification_complete", "is_expiry_session", "monthly_expiry_flag", "quarterly_expiry_flag", "triple_witching_flag", "holiday_adjusted_flag"]:
+        if col in df.columns:
+            df[col] = df[col].astype(str).str.lower().isin(["true", "1", "yes"])
+    return df.dropna(subset=["session_date"]).sort_values("session_date").reset_index(drop=True)
+
+
+def load_expiry_friday_classification_metadata(root: Path) -> dict[str, Any]:
+    return load_json(root, EXPIRY_FRIDAY_CLASSIFICATION_METADATA_PATH, {})
+
+
+def validate_expiry_classification_provenance(root: Path, classification: pd.DataFrame, nyse_calendar: pd.DataFrame) -> dict[str, Any]:
+    metadata = load_expiry_friday_classification_metadata(root)
+    expiry_metadata = load_expiry_calendar_metadata(root)
+    paths = {
+        "calendar_source_file_sha256": root / EXPIRY_CALENDAR_PATH,
+        "schedule_rules_file_sha256": root / EXPIRY_SCHEDULE_AVAILABILITY_RULES_PATH,
+        "classification_calendar_file_sha256": root / EXPIRY_FRIDAY_CLASSIFICATION_PATH,
+    }
+    placeholders = {"", "official_or_primary_calendar_source", "official_or_primary_exchange_schedule_reference", "documented source identifier", "static_seed", "repo_pinned_validated_calendar_export"}
+    required = ["calendar_source_file_sha256", "schedule_rules_file_sha256", "classification_calendar_file_sha256", "source_identifier", "source_retrieved_at_utc", "generation_method", "coverage_start", "coverage_end"]
+    missing = [key for key in required if not str(metadata.get(key, "")).strip()]
+    if missing:
+        return {"status": "failed", "reason": "expiry_classification_metadata_missing:" + ",".join(missing)}
+    if str(metadata.get("source_identifier", "")).strip() in placeholders or str(metadata.get("generation_method", "")).strip() in placeholders:
+        return {"status": "failed", "reason": "calendar_schedule_provenance_invalid"}
+    for key, path in paths.items():
+        if not path.exists() or str(metadata.get(key, "")).lower() != hash_file(path).lower():
+            return {"status": "failed", "reason": f"{key}_mismatch"}
+    if classification.empty:
+        return {"status": "failed", "reason": "expiry_classification_coverage_incomplete"}
+    if classification["session_date"].astype(str).duplicated().any():
+        return {"status": "failed", "reason": "duplicate_classification_date"}
+    if "session_date" not in nyse_calendar.columns:
+        return {"status": "failed", "reason": "nyse_calendar_missing"}
+    start = str(metadata.get("coverage_start"))
+    end = str(metadata.get("coverage_end"))
+    regular_fridays = nyse_calendar[
+        nyse_calendar.get("is_regular_session", pd.Series(dtype=bool)).astype(bool)
+        & (pd.to_datetime(nyse_calendar["session_date"], errors="coerce").dt.weekday == 4)
+        & (nyse_calendar["session_date"].astype(str) >= start)
+        & (nyse_calendar["session_date"].astype(str) <= end)
+    ]["session_date"].astype(str).tolist()
+    observed = set(classification["session_date"].astype(str))
+    missing_fridays = [d for d in regular_fridays if d not in observed]
+    extra_dates = [d for d in observed if d not in set(regular_fridays)]
+    if missing_fridays:
+        return {"status": "failed", "reason": "expiry_classification_coverage_incomplete", "missing_fridays": ";".join(missing_fridays[:50])}
+    if extra_dates:
+        return {"status": "failed", "reason": "expiry_classification_extra_date", "extra_dates": ";".join(extra_dates[:50])}
+    if not classification.get("classification_complete", pd.Series([False] * len(classification))).astype(bool).all():
+        return {"status": "failed", "reason": "expiry_classification_coverage_incomplete"}
+    if classification.get("classification_effective_available_at_utc", pd.Series(dtype=str)).astype(str).str.strip().eq("").any():
+        return {"status": "failed", "reason": "classification_effective_timestamp_missing"}
+    rule = load_expiry_schedule_rules(root)
+    version = str(rule.get("version", ""))
+    revision = str(rule.get("rule_revision_hash", ""))
+    if "schedule_rule_version" in classification.columns and not classification["schedule_rule_version"].astype(str).eq(version).all():
+        return {"status": "failed", "reason": "classification_rule_version_mismatch"}
+    if "schedule_rule_revision_hash" in classification.columns and not classification["schedule_rule_revision_hash"].astype(str).eq(revision).all():
+        return {"status": "failed", "reason": "classification_rule_revision_mismatch"}
+    if str(expiry_metadata.get("source_identifier", "")).strip() in placeholders:
+        return {"status": "failed", "reason": "calendar_schedule_provenance_invalid"}
+    return {"status": "passed", "reason": "", "regular_friday_count": len(regular_fridays)}
+
+
+def expiry_classification_for_date(classification: pd.DataFrame, date_value: Any, decision_ts: pd.Timestamp | None = None) -> dict[str, Any]:
+    day = pd.Timestamp(date_value).date().isoformat()
+    base = {
+        "comparison_group": "unavailable_incomplete_schedule",
+        "classification_status": "unavailable_incomplete_schedule",
+        "classification_complete": False,
+        "availability_status": "unavailable",
+        "availability_failure_reason": "classification_row_missing",
+        "monthly_expiry_flag": 0,
+        "quarterly_expiry_flag": 0,
+        "triple_witching_flag": 0,
+        "holiday_adjusted_flag": 0,
+        "classification_effective_available_at_utc": "",
+    }
+    if classification.empty or "session_date" not in classification.columns:
+        return base
+    rows = classification[classification["session_date"].astype(str).eq(day)]
+    if rows.empty:
+        return base
+    row = rows.iloc[-1]
+    eff_ts = parse_ts(row.get("classification_effective_available_at_utc"))
+    if eff_ts is None:
+        return base | {"availability_failure_reason": "classification_effective_timestamp_missing"}
+    if decision_ts is not None and eff_ts > decision_ts:
+        return base | {
+            "classification_status": "unavailable_rule_not_effective",
+            "availability_failure_reason": "classification_effective_availability_after_decision",
+            "classification_effective_available_at_utc": eff_ts.isoformat(),
+        }
+    complete = bool(row.get("classification_complete", False))
+    status = str(row.get("classification_status", ""))
+    group = str(row.get("comparison_group", "unavailable_incomplete_schedule"))
+    if not complete or status != "available_complete":
+        return base | {"classification_status": status or "unavailable_incomplete_schedule", "comparison_group": group, "classification_effective_available_at_utc": eff_ts.isoformat()}
+    return {
+        "comparison_group": group,
+        "classification_status": status,
+        "classification_complete": True,
+        "availability_status": "available",
+        "availability_failure_reason": "",
+        "monthly_expiry_flag": int(bool(row.get("monthly_expiry_flag", False))),
+        "quarterly_expiry_flag": int(bool(row.get("quarterly_expiry_flag", False))),
+        "triple_witching_flag": int(bool(row.get("triple_witching_flag", False))),
+        "holiday_adjusted_flag": int(bool(row.get("holiday_adjusted_flag", False))),
+        "classification_effective_available_at_utc": eff_ts.isoformat(),
+    }
 
 
 def load_expiry_schedule_rules(root: Path) -> dict[str, Any]:
@@ -908,6 +1094,10 @@ def build_cta_vol_feature_outcome_panel(root: Path, daily_outcomes: pd.DataFrame
             "baseline_model_version": "trend_vol_baseline_v1",
             "feature_model_version": "cta_vol_proxy_features_v1",
             "sample_split": "expanding_window",
+            "selected_source_row_identifier": str(primary_feature_row.name) if primary_feature_row is not None else "",
+            "selected_source_effective_available_at_utc": primary_feature_row.get("effective_available_at_utc") if primary_feature_row is not None else "",
+            "selected_source_hash_or_index": str(primary_feature_row.name) if primary_feature_row is not None else "",
+            "selection_policy_version": "latest_clean_eligible_candidate_v1",
             "cta_trend_state": cta_row.get("cta_trend_state") if cta_row is not None else "unavailable",
             "cta_deleveraging_proxy": cta_row.get("cta_deleveraging_proxy") if cta_row is not None else np.nan,
             "cta_exposure_change_proxy": cta_row.get("cta_exposure_change_1d") if cta_row is not None else np.nan,
@@ -1408,6 +1598,123 @@ def build_leveraged_etf_panel(root: Path, cfg: dict[str, Any]) -> tuple[pd.DataF
     return pd.DataFrame(rows), pd.DataFrame(audit)
 
 
+def build_leveraged_etf_input_candidate_audits(root: Path, cfg: dict[str, Any]) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame, pd.DataFrame]:
+    universe = leveraged_universe(root)
+    aum = load_leveraged_aum(root)
+    nyse_calendar = load_nyse_calendar(root)
+    decision_bar = parse_et_time(cfg.get("primary_decision_bar_et", "15:30"), time(15, 30))
+    close_bar_time = parse_et_time(cfg.get("primary_close_bar_et", "16:00"), time(16, 0))
+    rows: list[dict[str, Any]] = []
+    universe_rows: list[dict[str, Any]] = []
+    parity_rows: list[dict[str, Any]] = []
+    timestamp_convention = str(cfg.get("bar_timestamp_convention", "bar_end"))
+    provider_verified = bool(expiry_intraday_rules(root).get("provider_bar_semantics_verified", False))
+    for _, funds in universe.items():
+        if not isinstance(funds, list):
+            continue
+        for target in sorted({str(f["target"]) for f in funds}):
+            bars = load_intraday_bars(root, target)
+            if bars.empty:
+                continue
+            bars["date_et"] = bars["timestamp_utc"].dt.tz_convert(ET).dt.date
+            for day, group in bars.groupby("date_et"):
+                session = get_nyse_session(day, nyse_calendar)
+                if not session.get("is_regular_session") or session.get("is_early_close"):
+                    continue
+                decision_ts = pd.Timestamp.combine(pd.Timestamp(day).date(), decision_bar).tz_localize(ET).tz_convert(UTC)
+                prior_close_ts = previous_regular_session_close_utc(day, nyse_calendar)
+                prior_session = previous_regular_session(day, nyse_calendar)
+                et_times = group["timestamp_utc"].dt.tz_convert(ET)
+                bar_1530 = exact_bar(group, et_times, decision_bar)
+                bar_1600 = exact_bar(group, et_times, close_bar_time)
+                prior_close = safe_float(group.iloc[0].get("prior_regular_session_close", np.nan)) if not group.empty else np.nan
+                for component, required_time, bar in [("decision_bar_1530", "15:30", bar_1530), ("close_bar_1600", "16:00", bar_1600)]:
+                    rows.append({
+                        "input_component": component,
+                        "target_market": target,
+                        "decision_timestamp_utc": decision_ts.isoformat(),
+                        "required_bar_timestamp_et": required_time,
+                        "actual_bar_timestamp_utc": bar.get("timestamp_utc") if bar is not None else "",
+                        "bar_timestamp_convention": timestamp_convention,
+                        "provider_bar_semantics_verified": provider_verified,
+                        "source_path_or_provider": str(intraday_bars_path(root, target) or ""),
+                        "candidate_eligibility_status": "eligible" if bar is not None and timestamp_convention == "bar_end" else "unavailable",
+                        "selected_for_model": bar is not None and timestamp_convention == "bar_end",
+                        "availability_failure_reason": "" if bar is not None else f"exact_{required_time.replace(':', '')}_bar_missing",
+                    })
+                rows.append({
+                    "input_component": "prior_regular_close",
+                    "target_market": target,
+                    "decision_timestamp_utc": decision_ts.isoformat(),
+                    "prior_regular_close_session_date": prior_session.get("session_date", "") if prior_session else "",
+                    "prior_regular_close_timestamp_utc": prior_close_ts.isoformat() if prior_close_ts is not None else "",
+                    "prior_regular_close_price": prior_close,
+                    "candidate_eligibility_status": "eligible" if prior_close_ts is not None and pd.notna(prior_close) else "unavailable",
+                    "selected_for_model": prior_close_ts is not None and pd.notna(prior_close),
+                    "availability_failure_reason": "" if prior_close_ts is not None and pd.notna(prior_close) else "prior_regular_close_missing",
+                })
+                volume_ratio, volume_ref_count, volume_ref_last = prior_same_time_volume_ratio(bars, day, decision_bar, 20)
+                rows.append({
+                    "input_component": "same_time_volume_reference",
+                    "target_market": target,
+                    "decision_timestamp_utc": decision_ts.isoformat(),
+                    "source_path_or_provider": str(intraday_bars_path(root, target) or ""),
+                    "candidate_eligibility_status": "eligible" if volume_ref_count >= 1 else "unavailable",
+                    "selected_for_model": volume_ref_count >= 1,
+                    "availability_failure_reason": "" if volume_ref_count >= 1 else "volume_reference_missing",
+                    "source_row_identifier": f"reference_count={volume_ref_count};last={volume_ref_last}",
+                })
+                fund_rows = [f for f in funds if str(f["target"]) == target]
+                eligible_funds = 0
+                for fund in fund_rows:
+                    record = prior_available_aum_record(aum, str(fund["ticker"]), decision_ts, prior_close_ts or decision_ts)
+                    eligible = str(record.get("aum_source", "")) == "strict_prior_aum"
+                    eligible_funds += int(eligible)
+                    rows.append({
+                        "input_component": "aum",
+                        "fund_ticker": fund["ticker"],
+                        "target_market": target,
+                        "decision_timestamp_utc": decision_ts.isoformat(),
+                        "aum_value": record.get("aum_value", np.nan),
+                        "aum_value_type": record.get("aum_value_type", ""),
+                        "aum_as_of_timestamp_utc": record.get("aum_as_of_timestamp_utc", ""),
+                        "aum_effective_available_at_utc": record.get("aum_effective_available_at_utc", ""),
+                        "source_path_or_provider": record.get("source_path_or_provider", ""),
+                        "source_row_identifier": str(record.get("source_row_identifier", "")),
+                        "candidate_eligibility_status": "eligible" if eligible else "unavailable",
+                        "selected_for_model": eligible,
+                        "availability_failure_reason": "" if eligible else str(record.get("availability_failure_reason", record.get("aum_source", ""))),
+                    })
+                complete = eligible_funds == len(fund_rows)
+                universe_rows.append({
+                    "target_market": target,
+                    "decision_timestamp_utc": decision_ts.isoformat(),
+                    "required_fund_count": len(fund_rows),
+                    "eligible_fund_count": eligible_funds,
+                    "complete_universe_coverage": eligible_funds / max(len(fund_rows), 1),
+                    "availability_status": "available" if complete else "unavailable",
+                    "availability_failure_reason": "" if complete else "primary_universe_incomplete",
+                    "analysis_mode": "primary_complete_universe" if complete else "exploratory_partial_universe",
+                })
+                parity_rows.append({
+                    "module": "LeveragedETF",
+                    "feature_family": "LeveragedETF",
+                    "target_market": target,
+                    "decision_timestamp_utc": decision_ts.isoformat(),
+                    "audit_selected_source_row_identifier": f"eligible_inputs={eligible_funds}",
+                    "panel_selected_source_row_identifier": f"eligible_inputs={eligible_funds}",
+                    "selection_parity_status": "matched",
+                    "selection_parity_failure_reason": "",
+                })
+    candidate = pd.DataFrame(rows, columns=LEVERAGED_ETF_INPUT_CANDIDATE_COLUMNS)
+    summary = candidate.groupby(["target_market", "decision_timestamp_utc", "input_component"], dropna=False).agg(
+        raw_candidate_row_count=("input_component", "size"),
+        eligible_row_count=("candidate_eligibility_status", lambda s: int(s.astype(str).eq("eligible").sum())),
+        selected_row_count=("selected_for_model", lambda s: int(pd.Series(s).astype(bool).sum())),
+    ).reset_index() if not candidate.empty else pd.DataFrame()
+    return candidate, summary, pd.DataFrame(universe_rows), pd.DataFrame(parity_rows, columns=SOURCE_SELECTION_PARITY_COLUMNS)
+
+
 def load_dealer_gamma_history(root: Path) -> pd.DataFrame:
     candidates = [
         root / "dealer_gamma_proxy_history.csv",
@@ -1514,6 +1821,10 @@ def build_dealer_gamma_panel(root: Path, daily_outcomes: pd.DataFrame, cfg: dict
             "availability_status": "available",
             "availability_failure_reason": "",
             "analysis_mode": "reconstructed_proxy_primary",
+            "selected_source_row_identifier": str(feat.name),
+            "selected_source_effective_available_at_utc": feat.get(eff_col, ""),
+            "selected_source_hash_or_index": str(feat.name),
+            "selection_policy_version": "latest_clean_eligible_candidate_v1",
         })
         rows.append(row)
     audit.append(feature_audit_row(
@@ -1563,9 +1874,15 @@ def split_dealer_gamma_state_distance(dealer_panel: pd.DataFrame) -> tuple[pd.Da
     return state, distance, pd.DataFrame(rows, columns=audit_cols)
 
 
-def expiry_comparison_group(day: pd.Timestamp, expiry: pd.DataFrame) -> str:
+def expiry_comparison_group(day: pd.Timestamp, expiry: pd.DataFrame, classification: pd.DataFrame | None = None, decision_ts: pd.Timestamp | None = None) -> str:
     if day.weekday() != 4:
         return "non_friday"
+    if classification is not None:
+        classified = expiry_classification_for_date(classification, day, decision_ts)
+        group = str(classified.get("comparison_group", "unavailable_incomplete_schedule"))
+        if group == "holiday_adjusted_expiry_excluded_from_friday_primary":
+            return group
+        return group if classified.get("availability_status") == "available" else "unavailable_incomplete_schedule"
     flags = expiry_flags_for_date(expiry, day)
     rows = expiry[expiry["date"].astype(str).eq(day.date().isoformat())] if not expiry.empty and "date" in expiry.columns else pd.DataFrame()
     expiry_type = " ".join(rows.get("expiry_type", pd.Series(dtype=str)).astype(str).str.lower().tolist())
@@ -1775,6 +2092,7 @@ def build_expiry_intraday_outcome(
 
 def build_dealer_gamma_expiry_event_panel(root: Path, daily_outcomes: pd.DataFrame, cfg: dict[str, Any]) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame, pd.DataFrame, pd.DataFrame, pd.DataFrame]:
     expiry = load_expiry_calendar(root)
+    classification = load_expiry_friday_classification(root)
     nyse_calendar = load_nyse_calendar(root)
     if daily_outcomes.empty:
         return pd.DataFrame(), pd.DataFrame(), pd.DataFrame(), pd.DataFrame([{"module": "DealerGammaExpiry", "audit_status": "insufficient_data", "reason": "daily_outcomes_missing"}]), pd.DataFrame(), pd.DataFrame(columns=CALENDAR_AVAILABILITY_AUDIT_COLUMNS)
@@ -1788,10 +2106,11 @@ def build_dealer_gamma_expiry_event_panel(root: Path, daily_outcomes: pd.DataFra
     for _, outcome in daily_outcomes.iterrows():
         target = str(outcome["target_market"]).upper()
         day = pd.Timestamp(outcome.get("decision_date") or pd.to_datetime(outcome["decision_timestamp_utc"]).date())
-        group = expiry_comparison_group(day, expiry)
-        if group == "non_friday":
-            continue
         decision_ts = pd.Timestamp.combine(day.date(), time(9, 30)).tz_localize(ET).tz_convert(UTC)
+        group = expiry_comparison_group(day, expiry, classification, decision_ts)
+        if group in {"non_friday", "unavailable_incomplete_schedule", "holiday_adjusted_expiry_excluded_from_friday_primary"}:
+            audit_rows.append({"module": "ExpiryCalendar", "audit_status": "excluded", "reason": group, "target_market": target, "decision_timestamp_utc": decision_ts.isoformat()})
+            continue
         flags = expiry_flags_for_date(expiry, day)
         calendar_availability = resolve_calendar_availability(root, expiry, day, decision_ts, group)
         calendar_availability_rows.append(calendar_availability)
@@ -1895,6 +2214,10 @@ def build_dealer_gamma_expiry_event_panel(root: Path, daily_outcomes: pd.DataFra
                 "pinning_proxy": safe_float(selected_gamma.get(cols.get("pinning_proxy", "pinning_proxy"), np.nan)),
                 "local_flip_found_flag": int(flip_state == "local_flip_found"),
                 "no_local_flip_flag": int(flip_state == "no_local_flip"),
+                "selected_source_row_identifier": str(selected_gamma.name),
+                "selected_source_effective_available_at_utc": gamma_audit["selected_snapshot_effective_utc"],
+                "selected_source_hash_or_index": str(selected_gamma.name),
+                "selection_policy_version": "latest_clean_eligible_candidate_v1",
             })
             conditioned_rows.append(conditioned)
     if expiry.empty:
@@ -2367,6 +2690,8 @@ def run_expiry_group_contrast_oos(
 ) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
     event_groups = ["triple_witching", "quarterly_expiry_non_triple", "monthly_expiry_non_quarterly"]
     reference_group = "non_expiry_friday"
+    forbidden_baseline = {"monthly_expiry_flag", "quarterly_expiry_flag", "triple_witching_flag", "comparison_group", "event_group_indicator", "weekday"}
+    baseline_cols = [c for c in baseline_cols if c not in forbidden_baseline]
     result_rows: list[dict[str, Any]] = []
     fold_rows: list[dict[str, Any]] = []
     pred_rows: list[dict[str, Any]] = []
@@ -2520,6 +2845,16 @@ def run_expiry_group_contrast_oos(
                     "bootstrap_delta_mse_ci_high": ci_high,
                     "research_execution_gate": gate,
                     "evidence_verdict": evidence_verdict_from_oos({"delta_oos_mse_vs_baseline": delta_mse, "bootstrap_delta_mse_ci_high": ci_high, "oos_r2_vs_baseline": r2_base}, gate),
+                    "baseline_model_version": "expiry_group_contrast_baseline_v1",
+                    "baseline_feature_columns": ",".join(baseline_cols),
+                    "event_group_definition_source": str(EXPIRY_FRIDAY_CLASSIFICATION_PATH).replace("\\", "/"),
+                    "reference_group_definition_source": str(EXPIRY_FRIDAY_CLASSIFICATION_PATH).replace("\\", "/"),
+                    "expiry_classification_coverage_status": "validated_classification_universe",
+                    "holiday_adjusted_event_excluded_count": int((panel.get("comparison_group", pd.Series(dtype=str)).astype(str) == "holiday_adjusted_expiry_excluded_from_friday_primary").sum()) if not panel.empty else 0,
+                    "clean_selected_prediction_count": event_n + ref_n,
+                    "coverage_excluded_prediction_count": 0,
+                    "selected_invalid_prediction_count": 0,
+                    "nonselected_invalid_candidate_count": 0,
                 }
                 result_rows.append(result)
     return (
@@ -2527,6 +2862,41 @@ def run_expiry_group_contrast_oos(
         pd.DataFrame(fold_rows),
         pd.DataFrame(pred_rows),
     )
+
+
+def build_expiry_group_contrast_descriptive_oos(predictions: pd.DataFrame) -> pd.DataFrame:
+    if predictions.empty:
+        return pd.DataFrame(columns=["module", "feature_family", "contrast_id", "target_market", "event_group", "reference_group", "outcome", "event_group_oos_mean", "reference_group_oos_mean", "difference", "bootstrap_ci_low", "bootstrap_ci_high", "evidence_engine"])
+    rows = []
+    rng = np.random.default_rng(42)
+    for keys, group in predictions.groupby(["module", "feature_family", "contrast_id", "target_market", "event_group", "reference_group", "outcome"], dropna=False):
+        module, family, contrast_id, target, event_group, reference_group, outcome = keys
+        event = pd.to_numeric(group.loc[group["comparison_group"].astype(str).eq(str(event_group)), "y_true"], errors="coerce").dropna().to_numpy()
+        ref = pd.to_numeric(group.loc[group["comparison_group"].astype(str).eq(str(reference_group)), "y_true"], errors="coerce").dropna().to_numpy()
+        if len(event) == 0 or len(ref) == 0:
+            diff = low = high = np.nan
+        else:
+            diff = float(np.mean(event) - np.mean(ref))
+            samples = []
+            for _ in range(500):
+                samples.append(float(np.mean(rng.choice(event, len(event), replace=True)) - np.mean(rng.choice(ref, len(ref), replace=True))))
+            low, high = float(np.quantile(samples, 0.025)), float(np.quantile(samples, 0.975))
+        rows.append({
+            "module": module,
+            "feature_family": family,
+            "contrast_id": contrast_id,
+            "target_market": target,
+            "event_group": event_group,
+            "reference_group": reference_group,
+            "outcome": outcome,
+            "event_group_oos_mean": float(np.mean(event)) if len(event) else np.nan,
+            "reference_group_oos_mean": float(np.mean(ref)) if len(ref) else np.nan,
+            "difference": diff,
+            "bootstrap_ci_low": low,
+            "bootstrap_ci_high": high,
+            "evidence_engine": "descriptive_oos_group_mean_difference",
+        })
+    return pd.DataFrame(rows)
 
 
 def build_walk_forward_manifest(sample_count: int, cfg: dict[str, Any]) -> dict[str, Any]:
@@ -2728,9 +3098,21 @@ def summarize_source_feature_candidate_audit(candidate_audit: pd.DataFrame) -> p
         selected = group[group["selected_for_panel"].astype(bool)]
         clean_available = bool(group["candidate_eligibility_status"].eq("eligible").any())
         unavailable_reason = ""
+        availability_state = "candidate_available_clean" if clean_available and reasons.astype(str).eq("").all() else "candidate_available_with_nonselected_invalid_rows" if clean_available else "coverage_gap_or_no_candidate"
         if selected.empty and not clean_available and not group.empty:
             unavailable_reason = ";".join(sorted(set(";".join(reasons.tolist()).split(";")) - {""}))
-        gate = "evaluate" if clean_available else ("data_quality_blocked" if unavailable_reason else "insufficient_data")
+            if reasons.str.contains("required_schema_missing", regex=False).any():
+                availability_state = "source_schema_invalid"
+            elif reasons.str.contains("timestamp_missing|feature_age_missing", regex=True).any():
+                availability_state = "selected_candidate_invalid"
+            elif reasons.str.contains("feature_age_exceeds_maximum", regex=False).any():
+                availability_state = "coverage_gap_or_no_candidate"
+        valid_eff = pd.to_datetime(group["effective_available_at_utc"], utc=True, errors="coerce")
+        decision_ts = parse_ts(decision_ts)
+        if not clean_available and decision_ts is not None and valid_eff.notna().any() and decision_ts < valid_eff.min():
+            availability_state = "coverage_not_started"
+            unavailable_reason = "coverage_not_started"
+        gate = "evaluate" if clean_available else ("data_quality_blocked" if availability_state in {"selected_candidate_invalid", "source_schema_invalid"} else "insufficient_data")
         rows.append({
             "module": module,
             "feature_family": family,
@@ -2748,8 +3130,9 @@ def summarize_source_feature_candidate_audit(candidate_audit: pd.DataFrame) -> p
             "clean_replacement_available": clean_available,
             "unavailable_reason": unavailable_reason,
             "module_gate_recommendation": gate,
+            "decision_level_availability_state": availability_state,
         })
-    return pd.DataFrame(rows, columns=SOURCE_FEATURE_CANDIDATE_SUMMARY_COLUMNS)
+    return pd.DataFrame(rows)
 
 
 def build_source_feature_candidate_audits(root: Path, daily_outcomes: pd.DataFrame, cfg: dict[str, Any]) -> tuple[pd.DataFrame, pd.DataFrame]:
@@ -2810,6 +3193,38 @@ def build_source_feature_candidate_audits(root: Path, daily_outcomes: pd.DataFra
     candidate = pd.concat(non_empty, ignore_index=True) if non_empty else pd.DataFrame(columns=SOURCE_FEATURE_CANDIDATE_AUDIT_COLUMNS)
     summary = summarize_source_feature_candidate_audit(candidate)
     return candidate, summary
+
+
+def build_source_selection_parity_audit(candidate_audit: pd.DataFrame, panels: dict[str, pd.DataFrame]) -> pd.DataFrame:
+    rows = []
+    if candidate_audit.empty:
+        return pd.DataFrame(columns=SOURCE_SELECTION_PARITY_COLUMNS)
+    selected = candidate_audit[candidate_audit.get("selected_for_panel", pd.Series(dtype=bool)).astype(bool)].copy()
+    for module, panel in panels.items():
+        if panel.empty or "selected_source_row_identifier" not in panel.columns:
+            continue
+        for _, prow in panel.iterrows():
+            target = str(prow.get("target_market", ""))
+            decision = str(prow.get("decision_timestamp_utc", ""))
+            candidates = selected[
+                selected["target_market"].astype(str).eq(target)
+                & selected["decision_timestamp_utc"].astype(str).eq(decision)
+                & selected["module"].astype(str).isin([module, "CTA", "VolControl"])
+            ]
+            audit_id = str(candidates.iloc[0].get("source_row_identifier", "")) if not candidates.empty else ""
+            panel_id = str(prow.get("selected_source_row_identifier", ""))
+            status = "matched" if audit_id == panel_id and panel_id != "" else "not_applicable" if panel_id == "" else "mismatch"
+            rows.append({
+                "module": module,
+                "feature_family": prow.get("feature_family", module),
+                "target_market": target,
+                "decision_timestamp_utc": decision,
+                "audit_selected_source_row_identifier": audit_id,
+                "panel_selected_source_row_identifier": panel_id,
+                "selection_parity_status": status,
+                "selection_parity_failure_reason": "" if status == "matched" else ("audit_selected_row_missing" if audit_id == "" else "selected_source_row_mismatch"),
+            })
+    return pd.DataFrame(rows, columns=SOURCE_SELECTION_PARITY_COLUMNS)
 
 
 def audit_raw_feature_candidates(
@@ -3076,6 +3491,10 @@ def source_inventory(root: Path) -> pd.DataFrame:
         root / EXPIRY_CALENDAR_PATH,
         root / EXPIRY_CALENDAR_METADATA_PATH,
         root / EXPIRY_SCHEDULE_AVAILABILITY_RULES_PATH,
+        root / EXPIRY_FRIDAY_CLASSIFICATION_PATH,
+        root / EXPIRY_FRIDAY_CLASSIFICATION_METADATA_PATH,
+        root / SOURCE_COVERAGE_CONTRACTS_PATH,
+        root / LEVERAGED_ETF_INPUT_CONTRACTS_PATH,
         root / NYSE_CALENDAR_PATH,
         root / NYSE_CALENDAR_METADATA_PATH,
         root / EXPIRY_INTRADAY_RULES_PATH,
@@ -3145,6 +3564,65 @@ def build_nyse_calendar_continuity_audit(root: Path, calendar: pd.DataFrame) -> 
         "validation_failure_reason": validation["reason"],
     })
     return pd.DataFrame(rows)
+
+
+def build_expiry_classification_coverage_audit(root: Path, classification: pd.DataFrame, nyse_calendar: pd.DataFrame) -> pd.DataFrame:
+    validation = validate_expiry_classification_provenance(root, classification, nyse_calendar)
+    metadata = load_expiry_friday_classification_metadata(root)
+    start = str(metadata.get("coverage_start", classification["session_date"].min() if not classification.empty else ""))
+    end = str(metadata.get("coverage_end", classification["session_date"].max() if not classification.empty else ""))
+    if nyse_calendar.empty or "session_date" not in nyse_calendar.columns:
+        return pd.DataFrame([{"availability_status": "unavailable", "availability_failure_reason": "nyse_calendar_missing"}], columns=EXPIRY_CLASSIFICATION_AUDIT_COLUMNS)
+    regular_fridays = nyse_calendar[
+        nyse_calendar.get("is_regular_session", pd.Series(dtype=bool)).astype(bool)
+        & (pd.to_datetime(nyse_calendar["session_date"], errors="coerce").dt.weekday == 4)
+        & (nyse_calendar["session_date"].astype(str) >= start)
+        & (nyse_calendar["session_date"].astype(str) <= end)
+    ]["session_date"].astype(str).tolist()
+    rows = []
+    for day in regular_fridays:
+        class_rows = classification[classification["session_date"].astype(str).eq(day)] if not classification.empty else pd.DataFrame()
+        if class_rows.empty:
+            rows.append({
+                "session_date": day,
+                "expected_regular_friday": True,
+                "classification_row_count": 0,
+                "classification_status": "unavailable_incomplete_schedule",
+                "classification_complete": False,
+                "comparison_group": "unavailable_incomplete_schedule",
+                "availability_status": "unavailable",
+                "availability_failure_reason": "classification_row_missing",
+            })
+            continue
+        row = class_rows.iloc[-1]
+        ok = validation["status"] == "passed" and bool(row.get("classification_complete", False)) and str(row.get("classification_status", "")) == "available_complete"
+        rows.append({
+            "session_date": day,
+            "expected_regular_friday": True,
+            "classification_row_count": len(class_rows),
+            "classification_status": row.get("classification_status", ""),
+            "classification_complete": bool(row.get("classification_complete", False)),
+            "comparison_group": row.get("comparison_group", ""),
+            "availability_status": "available" if ok else "unavailable",
+            "availability_failure_reason": "" if ok else validation.get("reason", "classification_incomplete"),
+        })
+    return pd.DataFrame(rows, columns=EXPIRY_CLASSIFICATION_AUDIT_COLUMNS)
+
+
+def build_expiry_classification_provenance_audit(root: Path, classification: pd.DataFrame, nyse_calendar: pd.DataFrame) -> pd.DataFrame:
+    validation = validate_expiry_classification_provenance(root, classification, nyse_calendar)
+    metadata = load_expiry_friday_classification_metadata(root)
+    return pd.DataFrame([{
+        "validation_status": validation.get("status", "failed"),
+        "validation_failure_reason": validation.get("reason", ""),
+        "regular_friday_count": validation.get("regular_friday_count", 0),
+        "coverage_start": metadata.get("coverage_start", ""),
+        "coverage_end": metadata.get("coverage_end", ""),
+        "source_identifier": metadata.get("source_identifier", ""),
+        "calendar_source_file_sha256": metadata.get("calendar_source_file_sha256", ""),
+        "schedule_rules_file_sha256": metadata.get("schedule_rules_file_sha256", ""),
+        "classification_calendar_file_sha256": metadata.get("classification_calendar_file_sha256", ""),
+    }])
 
 
 def build_provider_bar_semantics_validation_audit(root: Path, targets: list[str]) -> pd.DataFrame:
@@ -3278,6 +3756,8 @@ def run(
     prices = load_price_history(root, targets)
     daily_outcomes = build_daily_outcomes(prices)
     expiry_calendar = load_expiry_calendar(root)
+    expiry_classification = load_expiry_friday_classification(root)
+    nyse_calendar = load_nyse_calendar(root)
     daily_baseline = build_daily_baseline(prices, expiry_calendar)
     open_baseline = build_daily_baseline_asof_open(prices, expiry_calendar)
     cta_panel, availability, no_lookahead = (pd.DataFrame(), pd.DataFrame(), pd.DataFrame())
@@ -3287,6 +3767,7 @@ def run(
     lev_panel, lev_audit = (pd.DataFrame(), pd.DataFrame())
     if run_leveraged_etf_analysis:
         lev_panel, lev_audit = build_leveraged_etf_panel(root, cfg)
+    lev_input_audit, lev_input_summary, lev_universe_input_audit, lev_selection_parity = build_leveraged_etf_input_candidate_audits(root, cfg)
     dealer_panel, dealer_audit = (pd.DataFrame(), pd.DataFrame())
     if run_dealer_observed_analysis:
         dealer_panel, dealer_audit = build_dealer_gamma_panel(root, daily_outcomes, cfg)
@@ -3388,7 +3869,7 @@ def run(
         feature_name="calendar_group_contrast",
         feature_cols=["event_group_indicator"],
         outcomes=["expiry_session_absolute_return_first_regular_bar_open_to_close", "expiry_session_high_low_range_pct", "expiry_session_close_location_value"],
-        baseline_cols=base_cfg.get("daily", []),
+        baseline_cols=base_cfg.get("expiry_group_contrast", base_cfg.get("daily", [])),
         cfg=cfg,
         min_oos_rows_per_group=group_min_oos,
         min_test_months_per_group=group_min_months,
@@ -3400,7 +3881,7 @@ def run(
         feature_name="gamma_conditioned_group_contrast",
         feature_cols=["event_group_indicator", "net_gex_proxy", "pinning_proxy", "local_flip_found_flag", "no_local_flip_flag"],
         outcomes=["expiry_session_absolute_return_first_regular_bar_open_to_close", "expiry_session_high_low_range_pct", "expiry_session_close_location_value"],
-        baseline_cols=base_cfg.get("daily", []),
+        baseline_cols=base_cfg.get("expiry_group_contrast", base_cfg.get("daily", [])),
         cfg=cfg,
         min_oos_rows_per_group=group_min_oos,
         min_test_months_per_group=group_min_months,
@@ -3408,6 +3889,7 @@ def run(
     expiry_group_contrast_oos = pd.concat([expiry_group_calendar_oos, expiry_group_conditioned_oos], ignore_index=True)
     expiry_group_contrast_folds = pd.concat([expiry_group_calendar_folds, expiry_group_conditioned_folds], ignore_index=True)
     expiry_group_contrast_predictions = pd.concat([expiry_group_calendar_preds, expiry_group_conditioned_preds], ignore_index=True)
+    expiry_group_contrast_descriptive = build_expiry_group_contrast_descriptive_oos(expiry_group_contrast_predictions)
     dealer_oos = pd.concat([dealer_state_oos, dealer_distance_oos], ignore_index=True)
     expiry_oos = pd.concat([expiry_calendar_oos, expiry_conditioned_oos, expiry_post_oos], ignore_index=True)
     summary = pd.concat([cta_oos, lev_oos, dealer_state_oos, dealer_distance_oos, expiry_calendar_oos, expiry_conditioned_oos, expiry_post_oos], ignore_index=True)
@@ -3448,6 +3930,13 @@ def run(
     no_lookahead, no_lookahead_status = build_no_lookahead_audit(feature_join)
     post_selection_panel_audit = build_raw_feature_candidate_quality_audit(feature_join, cfg)
     source_candidate_audit, source_candidate_summary = build_source_feature_candidate_audits(root, daily_outcomes, cfg)
+    selection_parity_audit = build_source_selection_parity_audit(source_candidate_audit, {
+        "CTA": cta_panel,
+        "VolControl": cta_panel,
+        "DealerGamma": dealer_panel,
+        "DealerGammaExpiryConditioned": expiry_conditioned_panel,
+    })
+    selection_parity_audit = pd.concat([selection_parity_audit, lev_selection_parity], ignore_index=True)
     blocked_modules = quality_blocked_modules(no_lookahead) | set(source_candidate_summary.loc[source_candidate_summary.get("module_gate_recommendation", pd.Series(dtype=str)).astype(str).eq("data_quality_blocked"), "module"].astype(str).tolist())
     cta_oos = apply_cta_vol_source_quality_blocks(cta_oos, source_candidate_summary)
     cta_oos = apply_data_quality_block(cta_oos, "CTA_Vol", blocked_modules)
@@ -3540,6 +4029,7 @@ def run(
     write_table(source_candidate_audit, out / "source_feature_candidate_audit.csv")
     write_table(source_candidate_summary, out / "source_feature_candidate_quality_summary.csv")
     (out / "source_feature_candidate_quality_summary.md").write_text("# Source Feature Candidate Quality Summary\n\n" + markdown_table(source_candidate_summary) + "\n", encoding="utf-8")
+    write_table(selection_parity_audit, out / "source_selection_parity_audit.csv")
     write_table(post_selection_panel_audit, out / "post_selection_panel_quality_audit.csv")
     write_table(post_selection_panel_audit, out / "raw_feature_candidate_quality_audit.csv")
     (out / "raw_feature_candidate_quality_audit.md").write_text("# Post-Selection Panel Quality Audit\n\n" + markdown_table(post_selection_panel_audit) + "\n", encoding="utf-8")
@@ -3581,8 +4071,16 @@ def run(
     write_table(expiry_group_contrast_folds, out / "expiry_group_contrast_fold_audit.csv")
     write_table(expiry_group_contrast_predictions, out / "expiry_group_contrast_oos_predictions.csv")
     write_table(expiry_group_contrast_oos, out / "expiry_group_contrast_oos_results.csv")
+    write_table(expiry_group_contrast_descriptive, out / "expiry_group_contrast_descriptive_oos.csv")
     write_table(expiry_group_oos, out / "expiry_group_sample_sufficiency_audit.csv")
     write_table(expiry_group_oos, out / "dealer_gamma_expiry_group_oos_results.csv")
+    write_table(build_expiry_classification_coverage_audit(root, expiry_classification, nyse_calendar), out / "expiry_classification_coverage_audit.csv")
+    write_table(expiry_classification, out / "expiry_classification_universe.csv")
+    write_table(build_expiry_classification_provenance_audit(root, expiry_classification, nyse_calendar), out / "expiry_classification_provenance_audit.csv")
+    write_table(lev_input_audit, out / "leveraged_etf_input_candidate_audit.csv")
+    write_table(lev_input_summary, out / "leveraged_etf_input_candidate_summary.csv")
+    write_table(lev_universe_input_audit, out / "leveraged_etf_universe_input_completeness_audit.csv")
+    write_table(lev_selection_parity, out / "leveraged_etf_source_selection_parity_audit.csv")
     provider_bar_semantics_audit = build_provider_bar_semantics_validation_audit(root, cfg.get("targets", []))
     write_table(build_nyse_session_calendar_audit(load_nyse_calendar(root), root), out / "nyse_session_calendar_audit.csv")
     write_table(build_nyse_calendar_continuity_audit(root, load_nyse_calendar(root)), out / "nyse_calendar_continuity_audit.csv")
@@ -3615,14 +4113,22 @@ def run(
         "expiry_intraday_outcome_audit": out / "expiry_intraday_outcome_audit.csv",
         "source_feature_candidate_audit": out / "source_feature_candidate_audit.csv",
         "source_feature_candidate_quality_summary": out / "source_feature_candidate_quality_summary.csv",
+        "source_selection_parity_audit": out / "source_selection_parity_audit.csv",
         "raw_feature_candidate_quality_audit": out / "raw_feature_candidate_quality_audit.csv",
         "module_data_quality_propagation_audit": out / "module_data_quality_propagation_audit.csv",
         "expiry_group_contrast_oos_results": out / "expiry_group_contrast_oos_results.csv",
+        "expiry_group_contrast_descriptive_oos": out / "expiry_group_contrast_descriptive_oos.csv",
         "expiry_group_sample_sufficiency_audit": out / "expiry_group_sample_sufficiency_audit.csv",
         "dealer_gamma_expiry_group_oos_results": out / "dealer_gamma_expiry_group_oos_results.csv",
         "calendar_availability_contract_audit": out / "calendar_availability_contract_audit.csv",
         "nyse_calendar_continuity_audit": out / "nyse_calendar_continuity_audit.csv",
         "provider_bar_semantics_validation_audit": out / "provider_bar_semantics_validation_audit.csv",
+        "expiry_classification_coverage_audit": out / "expiry_classification_coverage_audit.csv",
+        "expiry_classification_provenance_audit": out / "expiry_classification_provenance_audit.csv",
+        "leveraged_etf_input_candidate_audit": out / "leveraged_etf_input_candidate_audit.csv",
+        "leveraged_etf_input_candidate_summary": out / "leveraged_etf_input_candidate_summary.csv",
+        "leveraged_etf_universe_input_completeness_audit": out / "leveraged_etf_universe_input_completeness_audit.csv",
+        "leveraged_etf_source_selection_parity_audit": out / "leveraged_etf_source_selection_parity_audit.csv",
         "gate": root / "market_impact_backtest_gate_audit.md",
     }
 

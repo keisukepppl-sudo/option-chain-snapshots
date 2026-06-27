@@ -15,6 +15,10 @@
     "expiry_calendar": "market_bomb_config/options_expiry_calendar_v1.csv",
     "expiry_calendar_metadata": "market_bomb_config/options_expiry_calendar_metadata_v1.json",
     "expiry_schedule_availability_rules": "market_bomb_config/expiry_schedule_availability_rules_v1.json",
+    "expiry_friday_classification": "market_bomb_config/expiry_friday_classification_v1.csv",
+    "expiry_friday_classification_metadata": "market_bomb_config/expiry_friday_classification_metadata_v1.json",
+    "source_coverage_contracts": "market_bomb_config/market_impact_source_coverage_contracts_v1.json",
+    "leveraged_etf_input_contracts": "market_bomb_config/leveraged_etf_input_contracts_v1.json",
     "nyse_regular_sessions": "market_bomb_config/nyse_regular_sessions_v1.csv",
     "nyse_regular_sessions_metadata": "market_bomb_config/nyse_regular_sessions_metadata_v1.json",
     "expiry_intraday_rules": "market_bomb_config/market_impact_expiry_intraday_rules_v1.json"

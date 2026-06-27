@@ -1,0 +1,45 @@
+{
+  "sources": {
+    "CTA": {
+      "coverage_policy": "derive_from_valid_effective_timestamps",
+      "effective_available_column": "effective_available_at_utc",
+      "expected_frequency": "daily_eod",
+      "feature_asof_column": "feature_as_of_timestamp_utc",
+      "source_path": "market_bomb_history/cta_proxy_history.csv",
+      "target_column": "asset"
+    },
+    "DealerGamma": {
+      "coverage_policy": "derive_from_valid_effective_timestamps",
+      "effective_available_column": "effective_available_at_utc",
+      "expected_frequency": "snapshot",
+      "feature_asof_column": "feature_as_of_timestamp_utc",
+      "source_path": "dealer_gamma_proxy_history.csv",
+      "target_column": "ticker"
+    },
+    "LeveragedETF_AUM": {
+      "coverage_policy": "derive_from_valid_effective_timestamps",
+      "effective_available_column": "effective_available_at_utc",
+      "expected_frequency": "daily_eod",
+      "feature_asof_column": "as_of_timestamp_utc",
+      "source_path": "market_bomb_history/leveraged_etf_aum_history.csv",
+      "target_column": "ticker"
+    },
+    "LeveragedETF_IntradayBars": {
+      "coverage_policy": "derive_from_valid_effective_timestamps",
+      "effective_available_column": "timestamp_utc",
+      "expected_frequency": "5m_bar_end",
+      "feature_asof_column": "timestamp_utc",
+      "source_path": "market_bomb_history/intraday_bars/{ticker}_5m.csv",
+      "target_column": "ticker"
+    },
+    "VolControl": {
+      "coverage_policy": "derive_from_valid_effective_timestamps",
+      "effective_available_column": "effective_available_at_utc",
+      "expected_frequency": "daily_eod",
+      "feature_asof_column": "feature_as_of_timestamp_utc",
+      "source_path": "market_bomb_history/vol_control_proxy_history.csv",
+      "target_column": "asset"
+    }
+  },
+  "version": "market_impact_source_coverage_contracts_v1"
+}

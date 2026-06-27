@@ -1,0 +1,30 @@
+{
+  "aum_primary": {
+    "as_of_must_be_lte": "prior_regular_session_close",
+    "aum_value_type": "net_assets_usd",
+    "effective_available_must_be_lte": "prior_regular_session_close"
+  },
+  "bar_primary": {
+    "bar_timestamp_convention": "bar_end",
+    "close_bar_et": "16:00",
+    "decision_bar_et": "15:30",
+    "exact_timestamp_required": true
+  },
+  "complete_universe": {
+    "QQQ": [
+      "TQQQ",
+      "SQQQ",
+      "QLD",
+      "QID"
+    ],
+    "SOXX": [
+      "SOXL",
+      "SOXS"
+    ]
+  },
+  "version": "leveraged_etf_input_contracts_v1",
+  "volume_reference": {
+    "same_day_full_session_forbidden": true,
+    "same_time_only": true
+  }
+}
