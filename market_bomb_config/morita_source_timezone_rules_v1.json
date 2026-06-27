@@ -1,0 +1,18 @@
+{
+  "version": "morita_source_timezone_rules_v1",
+  "default_policy": "unknown_blocks_strict_join",
+  "source_type_defaults": {
+    "scanner_alert_csv": "America/New_York",
+    "notified_candidates_csv": "Asia/Tokyo",
+    "daily_scan_log_csv": "Asia/Tokyo",
+    "notification_export_csv": "Asia/Tokyo",
+    "broker_execution_csv": "source_declared_or_unknown",
+    "broker_order_csv": "source_declared_or_unknown",
+    "manual_reconstruction_csv": "explicit_column_required",
+    "unknown": "unknown_blocks_strict_join"
+  },
+  "filename_overrides": {},
+  "column_overrides": {
+    "timezone_columns": ["timezone", "time_zone", "event_timezone", "timestamp_timezone"]
+  }
+}

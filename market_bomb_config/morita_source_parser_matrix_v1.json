@@ -1,0 +1,35 @@
+{
+  "version": "morita_source_parser_matrix_v1",
+  "scanner_alert_csv": {
+    "allow": ["signal"],
+    "evidence_level": "raw_scanner_output"
+  },
+  "notified_candidates_csv": {
+    "allow": ["signal"],
+    "evidence_level": "raw_scanner_output"
+  },
+  "daily_scan_log_csv": {
+    "allow": ["signal"],
+    "evidence_level": "raw_scanner_output"
+  },
+  "notification_export_csv": {
+    "allow": ["signal", "decision"],
+    "evidence_level": "raw_notification_export"
+  },
+  "broker_order_csv": {
+    "allow": ["decision"],
+    "evidence_level": "raw_broker_order"
+  },
+  "broker_execution_csv": {
+    "allow": ["fill", "exit"],
+    "evidence_level": "raw_broker_execution"
+  },
+  "manual_reconstruction_csv": {
+    "allow": ["signal", "decision", "fill", "exit"],
+    "evidence_level": "structured_manual_entry"
+  },
+  "unknown": {
+    "allow": [],
+    "evidence_level": "unknown"
+  }
+}

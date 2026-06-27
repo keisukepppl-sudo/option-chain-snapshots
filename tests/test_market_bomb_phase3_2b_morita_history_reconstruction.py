@@ -79,6 +79,12 @@ def test_after_close_signal_uses_next_regular_open_proxy():
     assert panel.loc[0, "entry_timestamp_utc"].startswith("2026-01-06")
 
 
+def test_next_regular_open_skips_nyse_holiday():
+    ts, _, _ = r.parse_timestamp("2026-07-02T22:00:00Z")
+    next_open = r.next_regular_open(ts)
+    assert next_open.tz_convert(r.ET).date().isoformat() == "2026-07-06"
+
+
 def test_broker_fill_is_observed_but_manual_is_not(tmp_path: Path):
     broker = pd.Series({"source_type": "broker_execution_csv", "source_hash": "h", "source_id": "s", "source_path": "broker.csv"})
     row = pd.Series({"ticker": "NVDA", "fill_timestamp_utc": "2026-01-05T15:00:00Z", "side": "buy", "quantity": 1, "fill_price": 10, "contract_symbol": "NVDA260120C00100000"})
@@ -122,3 +128,96 @@ def test_observed_and_modelled_pnl_are_separate(tmp_path: Path):
     assert "observed_option_pnl_pct" in panel.columns
     assert "modelled_option_pnl_pct" in panel.columns
     assert not bool(panel.loc[0, "observed_option_pnl_available"])
+
+
+def test_naive_jst_source_is_not_interpreted_as_et(tmp_path: Path):
+    src = tmp_path / "daily_scan_log"
+    src.mkdir()
+    pd.DataFrame([{"ticker": "NVDA", "alert_rank": "S", "timestamp_utc": "2026-01-05 10:00:00"}]).to_csv(src / "scan.csv", index=False)
+    inv, _ = r.build_source_inventory(tmp_path)
+    signals, _, _, _ = r.parse_sources(tmp_path, inv)
+    assert signals.loc[0, "event_timezone_original"] == "Asia/Tokyo"
+    assert signals.loc[0, "event_timestamp_utc"].startswith("2026-01-05T01:00:00")
+
+
+def test_timezone_unknown_blocks_strict_join_for_broker_order(tmp_path: Path):
+    src = tmp_path / "morita_decision_history"
+    src.mkdir()
+    pd.DataFrame([{"ticker": "NVDA", "decision_action": "enter", "decision_timestamp_utc": "2026-01-05 10:00:00"}]).to_csv(src / "order.csv", index=False)
+    inv, _ = r.build_source_inventory(tmp_path)
+    _, decisions, _, _ = r.parse_sources(tmp_path, inv)
+    assert decisions.empty
+    r.run(tmp_path)
+    audit = pd.read_csv(tmp_path / "market_bomb_reconstruction" / "audit" / "timestamp_resolution_audit.csv")
+    assert "timezone_unknown" in set(audit["timestamp_quality"])
+
+
+def test_parser_allowlist_prevents_scanner_fake_fill(tmp_path: Path):
+    src = tmp_path / "scanner_alerts"
+    src.mkdir()
+    pd.DataFrame([{"ticker": "NVDA", "alert_rank": "S", "timestamp_utc": "2026-01-05T15:00:00Z", "fill_price": 1.23, "quantity": 1}]).to_csv(src / "signals.csv", index=False)
+    inv, _ = r.build_source_inventory(tmp_path)
+    signals, _, fills, _ = r.parse_sources(tmp_path, inv)
+    assert len(signals) == 1
+    assert fills.empty
+    r.run(tmp_path)
+    parser_audit = pd.read_csv(tmp_path / "market_bomb_reconstruction" / "audit" / "parser_execution_audit.csv")
+    fill_row = parser_audit[parser_audit["parser_name"].eq("fill_normalizer")].iloc[0]
+    assert not bool(fill_row["parser_allowed"])
+
+
+def test_broker_order_is_decision_not_fill(tmp_path: Path):
+    src = tmp_path / "morita_decision_history"
+    src.mkdir()
+    pd.DataFrame([{"ticker": "NVDA", "decision_action": "enter", "decision_timestamp_utc": "2026-01-05T15:00:00Z", "fill_price": 10, "quantity": 1}]).to_csv(src / "orders.csv", index=False)
+    inv, _ = r.build_source_inventory(tmp_path)
+    _, decisions, fills, _ = r.parse_sources(tmp_path, inv)
+    assert len(decisions) == 1
+    assert fills.empty
+
+
+def test_date_only_signal_is_not_cta_vol_join_eligible(tmp_path: Path):
+    src = tmp_path / "scanner_alerts"
+    src.mkdir()
+    pd.DataFrame([{"ticker": "NVDA", "alert_rank": "S", "date": "2026-01-05"}]).to_csv(src / "signals.csv", index=False)
+    outputs = r.run(tmp_path, build_underlying_outcomes=False)
+    panel = pd.read_csv(outputs["outcome_panel"])
+    assert panel.loc[0, "entry_price_method"] == "unavailable_date_only"
+    assert not bool(panel.loc[0, "cta_vol_join_eligible"])
+    joined = pd.read_csv(outputs["cta_vol_join"])
+    assert joined.loc[0, "join_status"] == "skipped"
+
+
+def test_trade_panel_takes_priority_over_linked_signal(tmp_path: Path):
+    signals = pd.DataFrame([{"signal_event_id": "s1", "ticker": "NVDA", "strategy_bucket": "S_breakout_momentum", "original_rank": "S", "setup_type": "breakout", "event_timestamp_utc": "2026-01-05T15:00:00Z", "event_session_context": "regular_hours", "analysis_mode": "historical_reconstructed"}])
+    fills = pd.DataFrame([{"trade_id": "t1", "decision_id": "", "signal_event_id": "s1", "ticker": "NVDA", "fill_timestamp_utc": "2026-01-05T15:01:00Z", "fill_price": 10, "quantity": 1, "multiplier": 100, "source_evidence_level": "raw_broker_execution", "analysis_mode": "strict_live_replay", "cta_vol_join_eligible": True}])
+    panel = r.build_outcome_panel(tmp_path, signals, pd.DataFrame(), fills, pd.DataFrame(), False)
+    assert list(panel["analysis_unit"]) == ["trade"]
+    assert panel.loc[0, "entry_price_method"] == "actual_fill"
+
+
+def test_input_source_hash_manifest_detects_mutation(tmp_path: Path):
+    src = tmp_path / "scanner_alerts"
+    src.mkdir()
+    path = src / "signals.csv"
+    path.write_text("ticker,alert_rank,timestamp_utc\nNVDA,S,2026-01-05T15:00:00Z\n", encoding="utf-8")
+    before = r.input_source_hash_manifest(tmp_path)
+    path.write_text("ticker,alert_rank,timestamp_utc\nNVDA,S,2026-01-05T15:00:00Z\nAMD,A,2026-01-05T15:00:00Z\n", encoding="utf-8")
+    after = r.input_source_hash_manifest(tmp_path)
+    count, report = r.compare_input_source_manifests(before, after)
+    assert count == 1
+    assert "scanner_alerts/signals.csv" in report
+
+
+def test_canonical_selection_uses_numeric_source_priority(tmp_path: Path):
+    manual = tmp_path / "market_bomb_reconstruction" / "raw_sources"
+    scanner = tmp_path / "scanner_alerts"
+    manual.mkdir(parents=True)
+    scanner.mkdir()
+    pd.DataFrame([{"ticker": "NVDA", "alert_rank": "S", "timestamp_utc": "2026-01-05T15:00:00Z", "timezone": "UTC"}]).to_csv(manual / "manual_signals.csv", index=False)
+    pd.DataFrame([{"ticker": "NVDA", "alert_rank": "S", "timestamp_utc": "2026-01-05T15:30:00Z"}]).to_csv(scanner / "signals.csv", index=False)
+    inv, _ = r.build_source_inventory(tmp_path)
+    signals, _, _, _ = r.parse_sources(tmp_path, inv)
+    _, linkage, canonical = r.duplicate_audit(signals)
+    assert canonical.iloc[0]["source_evidence_level"] == "raw_scanner_output"
+    assert linkage.iloc[0]["canonical_source_priority"] < linkage.iloc[0]["duplicate_source_priority"]

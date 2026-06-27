@@ -31,10 +31,10 @@ jobs:
       contents: read
       actions: read
     steps:
-      - name: Checkout main
+      - name: Checkout analysis commit
         uses: actions/checkout@v4
         with:
-          ref: main
+          ref: ${{ github.sha }}
 
       - name: Set up Python
         uses: actions/setup-python@v5
@@ -44,13 +44,17 @@ jobs:
       - name: Install dependencies
         run: pip install -r requirements.txt
 
-      - name: Snapshot raw reconstruction source hashes before
+      - name: Snapshot input reconstruction source hashes before
         run: |
-          if [ -d market_bomb_reconstruction/raw_sources ]; then
-            find market_bomb_reconstruction/raw_sources -type f -print0 | sort -z | xargs -0 sha256sum > /tmp/raw_sources_before.sha256
-          else
-            touch /tmp/raw_sources_before.sha256
-          fi
+          python - <<'PY'
+          from pathlib import Path
+          import market_bomb_phase3_2b_morita_history_reconstruction as r
+          r.write_input_source_hash_manifest(
+              Path("."),
+              Path("market_bomb_reconstruction/audit/input_source_hash_manifest_before.csv"),
+              include_repo_sources="${{ inputs.include_repo_sources }}" == "true",
+          )
+          PY
 
       - name: Reconstruct Morita history
         run: |
@@ -66,20 +70,27 @@ jobs:
           fi
           python market_bomb_phase3_2b_morita_history_reconstruction.py $ARGS
 
-      - name: Verify raw reconstruction sources were not mutated
+      - name: Verify input reconstruction sources were not mutated
         run: |
-          if [ -d market_bomb_reconstruction/raw_sources ]; then
-            find market_bomb_reconstruction/raw_sources -type f -print0 | sort -z | xargs -0 sha256sum > /tmp/raw_sources_after.sha256
-          else
-            touch /tmp/raw_sources_after.sha256
-          fi
-          if diff -u /tmp/raw_sources_before.sha256 /tmp/raw_sources_after.sha256 > raw_source_mutation_report.txt; then
-            echo "raw_source_mutation_count=0" > raw_source_mutation_count.txt
-          else
-            grep -E '^[+-][^+-]' raw_source_mutation_report.txt | wc -l | awk '{print "raw_source_mutation_count="$1}' > raw_source_mutation_count.txt
-            cat raw_source_mutation_report.txt
-            exit 1
-          fi
+          python - <<'PY'
+          from pathlib import Path
+          import pandas as pd
+          import market_bomb_phase3_2b_morita_history_reconstruction as r
+          before_path = Path("market_bomb_reconstruction/audit/input_source_hash_manifest_before.csv")
+          after_path = Path("market_bomb_reconstruction/audit/input_source_hash_manifest_after.csv")
+          before = pd.read_csv(before_path) if before_path.exists() else pd.DataFrame()
+          after = r.input_source_hash_manifest(Path("."), include_repo_sources="${{ inputs.include_repo_sources }}" == "true")
+          after_path.parent.mkdir(parents=True, exist_ok=True)
+          after.to_csv(after_path, index=False)
+          count, report = r.compare_input_source_manifests(before, after)
+          Path("market_bomb_reconstruction/audit/input_source_mutation_report.txt").write_text(report, encoding="utf-8")
+          Path("input_source_mutation_count.txt").write_text(f"input_source_mutation_count={count}\n", encoding="utf-8")
+          Path("raw_source_mutation_count.txt").write_text(f"raw_source_mutation_count={count}\n", encoding="utf-8")
+          Path("raw_source_mutation_report.txt").write_text(report, encoding="utf-8")
+          if count:
+              print(report)
+              raise SystemExit(1)
+          PY
 
       - name: Upload reconstruction artifacts
         uses: actions/upload-artifact@v4
@@ -95,12 +106,15 @@ jobs:
             market_bomb_reconstruction/normalized/*.parquet
             market_bomb_reconstruction/audit/*.csv
             market_bomb_reconstruction/audit/*.md
+            market_bomb_reconstruction/audit/*.json
+            market_bomb_reconstruction/audit/*.txt
             market_bomb_reconstruction/analysis/*.csv
             market_bomb_reconstruction/analysis/*.parquet
             market_bomb_reconstruction/analysis/*.md
             market_bomb_reconstruction/templates/*.csv
             market_bomb_reconstruction/templates/*.md
             morita_history_reconstruction_gate_audit.md
+            input_source_mutation_count.txt
             raw_source_mutation_count.txt
             raw_source_mutation_report.txt
           if-no-files-found: warn
@@ -112,10 +126,10 @@ jobs:
     permissions:
       contents: write
     steps:
-      - name: Checkout main
+      - name: Checkout analysis commit
         uses: actions/checkout@v4
         with:
-          ref: main
+          ref: ${{ github.sha }}
 
       - name: Download reconstruction artifacts
         uses: actions/download-artifact@v4
@@ -123,12 +137,29 @@ jobs:
           name: morita-history-reconstruction-${{ github.run_id }}
           path: .
 
+      - name: Verify main did not advance after analysis
+        run: |
+          CURRENT_MAIN_SHA="$(git ls-remote origin refs/heads/main | awk '{print $1}')"
+          echo "analysis_base_commit_sha=${{ github.sha }}" > market_bomb_reconstruction/audit/persist_status.txt
+          echo "current_main_sha=${CURRENT_MAIN_SHA}" >> market_bomb_reconstruction/audit/persist_status.txt
+          if [ "${CURRENT_MAIN_SHA}" != "${{ github.sha }}" ]; then
+            echo "persist_status=skipped_main_advanced_since_analysis" >> market_bomb_reconstruction/audit/persist_status.txt
+            cat market_bomb_reconstruction/audit/persist_status.txt
+            exit 0
+          fi
+          echo "persist_status=ready_to_commit" >> market_bomb_reconstruction/audit/persist_status.txt
+
       - name: Commit reconstruction outputs
         run: |
+          if grep -q "persist_status=skipped_main_advanced_since_analysis" market_bomb_reconstruction/audit/persist_status.txt; then
+            echo "Main advanced since analysis; skipping persist commit."
+            exit 0
+          fi
+          git checkout -B main "${{ github.sha }}"
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add market_bomb_reconstruction/source_inventory.* market_bomb_reconstruction/source_file_manifest.csv market_bomb_reconstruction/source_ingestion_audit.md || true
           git add market_bomb_reconstruction/normalized market_bomb_reconstruction/audit market_bomb_reconstruction/analysis market_bomb_reconstruction/templates || true
-          git add morita_history_reconstruction_gate_audit.md raw_source_mutation_count.txt raw_source_mutation_report.txt || true
+          git add morita_history_reconstruction_gate_audit.md input_source_mutation_count.txt raw_source_mutation_count.txt raw_source_mutation_report.txt || true
           git diff --cached --quiet || git commit -m "Update Morita history reconstruction outputs"
           git push
