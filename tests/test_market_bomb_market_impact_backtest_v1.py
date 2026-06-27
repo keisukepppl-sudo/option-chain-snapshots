@@ -300,7 +300,7 @@ def test_intraday_missing_day_is_excluded_from_leveraged_panel(tmp_path: Path):
 def test_dealer_primary_requires_observed_raw_chain(tmp_path: Path):
     pd.DataFrame(
         [
-            {"ticker": "QQQ", "effective_available_at_utc": "2026-01-05T14:00:00Z", "feature_as_of_timestamp_utc": "2026-01-05T14:00:00Z", "raw_chain_present": False, "raw_chain_quality": "high", "data_type": "reconstructed_from_raw_chain", "dealer_position_observed": False, "gamma_flip_state": "local_flip_found"},
+            {"ticker": "QQQ", "effective_available_at_utc": "2026-01-05T14:00:00Z", "feature_as_of_timestamp_utc": "2026-01-05T14:00:00Z", "raw_chain_present": False, "raw_chain_quality": "high", "data_type": "reconstructed_from_raw_chain", "dealer_position_observed": False, "gamma_flip_state": "local_flip_found", "gamma_flip_distance_pct": 0.02, "net_gex_proxy": 1.0},
             {"ticker": "QQQ", "effective_available_at_utc": "2026-01-05T14:00:00Z", "feature_as_of_timestamp_utc": "2026-01-05T14:00:00Z", "raw_chain_present": True, "raw_chain_quality": "high", "data_type": "reconstructed_from_raw_chain", "dealer_position_observed": False, "gamma_flip_state": "no_local_flip", "net_gex_proxy": 1.0},
         ]
     ).to_csv(tmp_path / "dealer_gamma_proxy_history.csv", index=False)
@@ -323,7 +323,7 @@ def test_dealer_primary_requires_observed_raw_chain(tmp_path: Path):
 def test_no_local_flip_is_not_imputed_to_zero_or_spot(tmp_path: Path):
     pd.DataFrame(
         [
-            {"ticker": "QQQ", "effective_available_at_utc": "2026-01-05T14:00:00Z", "feature_as_of_timestamp_utc": "2026-01-05T14:00:00Z", "raw_chain_present": True, "raw_chain_quality": "high", "data_type": "reconstructed_from_raw_chain", "dealer_position_observed": False, "gamma_flip_state": "no_local_flip"}
+            {"ticker": "QQQ", "effective_available_at_utc": "2026-01-05T14:00:00Z", "feature_as_of_timestamp_utc": "2026-01-05T14:00:00Z", "raw_chain_present": True, "raw_chain_quality": "high", "data_type": "reconstructed_from_raw_chain", "dealer_position_observed": False, "gamma_flip_state": "no_local_flip", "net_gex_proxy": 1.0}
         ]
     ).to_csv(tmp_path / "dealer_gamma_proxy_history.csv", index=False)
     outcomes = pd.DataFrame([{"target_market": "QQQ", "decision_timestamp_utc": "2026-01-05T21:00:00Z"}])
@@ -1201,7 +1201,7 @@ def test_v118_local_flip_alone_does_not_create_negative_gamma(tmp_path: Path):
     cfg.mkdir()
     (cfg / "dealer_gamma_observed_rules_v1.json").write_text('{"sign_convention":"positive_net_gex_proxy_means_long_gamma_proxy_not_dealer_inventory"}', encoding="utf-8")
     pd.DataFrame([
-        {"ticker": "QQQ", "feature_as_of_timestamp_utc": "2026-01-05T20:00:00Z", "effective_available_at_utc": "2026-01-05T20:00:00Z", "raw_chain_present": True, "raw_chain_quality": "high", "data_type": "reconstructed_from_raw_chain", "dealer_position_observed": False, "gamma_flip_state": "local_flip_found", "net_gex_proxy": 10.0},
+        {"ticker": "QQQ", "feature_as_of_timestamp_utc": "2026-01-05T20:00:00Z", "effective_available_at_utc": "2026-01-05T20:00:00Z", "raw_chain_present": True, "raw_chain_quality": "high", "data_type": "reconstructed_from_raw_chain", "dealer_position_observed": False, "gamma_flip_state": "local_flip_found", "gamma_flip_distance_pct": 0.02, "net_gex_proxy": 10.0},
     ]).to_csv(tmp_path / "dealer_gamma_proxy_history.csv", index=False)
     outcomes = pd.DataFrame([{"target_market": "QQQ", "decision_date": "2026-01-05", "decision_timestamp_utc": "2026-01-05T21:00:00Z"}])
     panel, _ = m.build_dealer_gamma_panel(tmp_path, outcomes, m.rules(tmp_path))
@@ -1421,6 +1421,7 @@ def test_v119_intraday_gamma_rejects_observed_dealer_position(tmp_path: Path):
         "raw_chain_quality": "high",
         "data_type": "reconstructed_from_raw_chain",
         "dealer_position_observed": True,
+        "gamma_flip_state": "no_local_flip",
         "net_gex_proxy": -1.0,
     }]).to_csv(tmp_path / "dealer_gamma_proxy_history.csv", index=False)
     lev = pd.DataFrame([{"target_market": "QQQ", "decision_timestamp_utc": "2026-01-05T20:30:00Z"}])
@@ -1484,6 +1485,7 @@ def _gamma_rows(rows):
         "raw_chain_quality": "high",
         "data_type": "reconstructed_from_raw_chain",
         "dealer_position_observed": False,
+        "gamma_flip_state": "no_local_flip",
         "net_gex_proxy": -1.0,
     }
     return pd.DataFrame([base | row for row in rows])
@@ -1597,10 +1599,10 @@ def test_v110_dealer_gamma_parity_matched_and_mismatch(tmp_path: Path):
     rows = _gamma_rows([{"effective_available_at_utc": "2026-01-05T20:00:00Z", "feature_as_of_timestamp_utc": "2026-01-05T20:00:00Z"}])
     rows.to_csv(tmp_path / "dealer_gamma_proxy_history.csv", index=False)
     outcomes = pd.DataFrame([{"target_market": "QQQ", "decision_date": "2026-01-05", "decision_timestamp_utc": "2026-01-05T20:30:00Z"}])
-    panel, _ = m.build_dealer_gamma_panel(tmp_path, outcomes, m.rules(tmp_path))
-    parity = m.build_dealer_gamma_source_selection_parity_audit(tmp_path, panel, pd.DataFrame(), m.rules(tmp_path))
+    audit = m.build_dealer_gamma_eod_selection_audit(tmp_path, outcomes, m.rules(tmp_path))
+    parity = m.build_dealer_gamma_source_selection_parity_audit(tmp_path, audit, pd.DataFrame(), m.rules(tmp_path))
     assert parity.iloc[0]["selection_parity_status"] == "matched"
-    changed = panel.copy()
+    changed = audit.copy()
     changed.loc[0, "selected_source_content_hash"] = "wrong"
     mismatch = m.build_dealer_gamma_source_selection_parity_audit(tmp_path, changed, pd.DataFrame(), m.rules(tmp_path))
     assert mismatch.iloc[0]["selection_parity_status"] == "mismatch"
@@ -1611,6 +1613,9 @@ def test_v110_missing_dealer_gamma_parity_blocks_gamma_and_sign_scopes():
     dealer = pd.DataFrame([{
         "target_market": "QQQ",
         "decision_timestamp_utc": "2026-01-05T21:00:00Z",
+        "selection_status": "selected",
+        "availability_state": "valid",
+        "primary_eligible": True,
         "dealer_gamma_selection_status": "selected",
         "dealer_gamma_availability_state": "valid",
         "negative_gamma_proxy_indicator": 1,
@@ -1664,3 +1669,84 @@ def test_v110_oos_reconciliation_separates_all_exclusion_buckets():
     assert row["valid_included_decision_count"] == 1
     assert row["reconciliation_gap"] == 0
     assert row["reconciliation_status"] == "matched"
+
+
+def test_v111_eod_gamma_selection_audit_keeps_all_daily_decisions(tmp_path: Path):
+    rows = _gamma_rows([{"target_market": "QQQ", "ticker": "QQQ"}])
+    rows.to_csv(tmp_path / "dealer_gamma_proxy_history.csv", index=False)
+    outcomes = pd.DataFrame([
+        {"target_market": "QQQ", "decision_date": "2026-01-05", "decision_timestamp_utc": "2026-01-05T20:30:00Z"},
+        {"target_market": "SPY", "decision_date": "2026-01-05", "decision_timestamp_utc": "2026-01-05T20:30:00Z"},
+    ])
+    audit = m.build_dealer_gamma_eod_selection_audit(tmp_path, outcomes, m.rules(tmp_path))
+    assert len(audit) == 2
+    assert set(audit["target_market"]) == {"QQQ", "SPY"}
+    assert audit[audit["target_market"].eq("SPY")].iloc[0]["selection_status"] == "unavailable_coverage"
+
+
+def test_v111_gamma_payload_contract_rejects_missing_net_gex_and_local_flip_distance():
+    missing_net = _gamma_rows([{}]).drop(columns=["net_gex_proxy"])
+    selected = m.select_latest_clean_dealer_gamma(target_market="QQQ", decision_timestamp_utc="2026-01-05T20:30:00Z", source_rows=missing_net, selector_context="EOD_CLOSE", config=m.rules(Path(".")))
+    assert selected["selection_status"] == "selected_invalid"
+    assert "net_gex_proxy" in selected["invalid_reason"]
+    local_missing_distance = _gamma_rows([{"gamma_flip_state": "local_flip_found"}])
+    selected = m.select_latest_clean_dealer_gamma(target_market="QQQ", decision_timestamp_utc="2026-01-05T20:30:00Z", source_rows=local_missing_distance, selector_context="EOD_CLOSE", config=m.rules(Path(".")))
+    assert selected["selection_status"] == "selected_invalid"
+    assert selected["invalid_reason"] == "gamma_flip_distance_required_for_local_flip"
+
+
+def test_v111_gamma_sign_uses_derived_not_applicable_not_matched():
+    panel = _v119_base_market_panel("EOD", "QQQ")
+    dealer = pd.DataFrame([{
+        "target_market": "QQQ",
+        "decision_timestamp_utc": "2026-01-05T21:00:00Z",
+        "selection_status": "selected",
+        "availability_state": "valid",
+        "primary_eligible": True,
+        "negative_gamma_proxy_indicator": 1,
+        "selected_source_row_identifier": "g1",
+        "selected_source_content_hash": "gh",
+        "selected_source_effective_available_at_utc": "2026-01-05T20:00:00Z",
+    }])
+    provenance = m.build_market_level_component_provenance_status(
+        market_level_panel=panel,
+        cta_vol_selector_parity=_matched_cta_vol_parity(("QQQ",)),
+        leveraged_selector_parity=pd.DataFrame(),
+        leveraged_primary_integrity=pd.DataFrame(),
+        dealer_eod_panel=dealer,
+        dealer_intraday_selection=pd.DataFrame(),
+        dealer_gamma_source_parity=_matched_gamma_parity(),
+    )
+    sign = provenance[provenance["required_component"].eq("DealerGammaSignEOD")].iloc[0]
+    assert sign["source_parity_status"] == "not_applicable"
+    assert sign["provenance_evidence_type"] == "derived_from_base_component"
+    assert sign["provenance_dependency_component"] == "DealerGammaEOD"
+
+
+def test_v111_intraday_universe_keeps_missing_outcome_day_beyond_eligible_panel(tmp_path: Path):
+    write_nyse_calendar(tmp_path, [
+        {"session_date": "2026-01-05", "is_regular_session": True, "regular_open_et": "09:30", "regular_close_et": "16:00", "is_early_close": False},
+        {"session_date": "2026-01-06", "is_regular_session": True, "regular_open_et": "09:30", "regular_close_et": "16:00", "is_early_close": False},
+    ])
+    bars_dir = tmp_path / "market_bomb_history" / "intraday_bars"
+    bars_dir.mkdir(parents=True)
+    pd.DataFrame([
+        {"timestamp_utc": "2026-01-05T20:30:00Z", "close": 100, "high": 100, "low": 100},
+        {"timestamp_utc": "2026-01-05T21:00:00Z", "close": 101, "high": 101, "low": 100},
+        {"timestamp_utc": "2026-01-06T20:30:00Z", "close": 100, "high": 100, "low": 100},
+    ]).to_csv(bars_dir / "QQQ_5m.csv", index=False)
+    cfg = m.rules(tmp_path)
+    cfg["targets"] = ["QQQ"]
+    universe = m.build_market_level_intraday_decision_universe(tmp_path, cfg)
+    assert len(universe) == 2
+    assert "outcome_unavailable" in set(universe["intraday_outcome_availability_status"])
+
+
+def test_v111_decision_bucket_audit_assigns_exactly_one_bucket():
+    panel = _v119_base_market_panel("EOD", "QQQ")
+    panel["prior_return_1d"] = np.nan
+    integrity = pd.DataFrame([{"target_market": "QQQ", "decision_timestamp_utc": "2026-01-05T21:00:00Z", "model_clock": "EOD", "model_scope": "B0", "required_component": "baseline", "scope_integrity_status": "valid"}])
+    buckets = m.build_market_level_decision_bucket_audit(panel, integrity, {"daily": ["prior_return_1d"], "intraday": []})
+    row = buckets[(buckets["target_market"].eq("QQQ")) & (buckets["model_scope"].eq("B0")) & (buckets["outcome"].eq("next_session_return"))].iloc[0]
+    assert row["bucket"] == "feature_numeric_unavailable"
+    assert buckets.groupby(["target_market", "decision_timestamp_utc", "model_clock", "model_scope", "outcome"]).size().max() == 1
