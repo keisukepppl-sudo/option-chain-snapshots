@@ -43,8 +43,10 @@ OUTPUT_ROOT = Path("market_bomb_market_impact")
 CTA_VOL_QUALITY_CONTRACT_REVISION = "cta_vol_quality_contract_v1_1_8"
 CTA_VOL_SELECTION_POLICY_REVISION = "latest_clean_feature_selector_v1_1_8"
 LEVERAGED_BUNDLE_POLICY_REVISION = "leveraged_etf_input_bundle_v1_1_8"
-MARKET_LEVEL_INTEGRITY_REVISION = "market_level_decision_scope_integrity_v1_1_8"
+MARKET_LEVEL_INTEGRITY_REVISION = "market_level_decision_scope_integrity_v1_1_10"
 DEALER_GAMMA_SIGN_POLICY_REVISION = "dealer_gamma_negative_sign_policy_v1_1_8"
+DEALER_GAMMA_SOURCE_CONTRACT_REVISION = "dealer_gamma_source_contract_v1_1_10"
+DEALER_GAMMA_SELECTION_POLICY_REVISION = "latest_clean_dealer_gamma_selector_v1_1_10"
 
 FEATURE_AUDIT_COLUMNS = [
     "feature_family",
@@ -2528,6 +2530,177 @@ def load_dealer_gamma_history(root: Path) -> pd.DataFrame:
     return pd.DataFrame()
 
 
+DEALER_GAMMA_SELECTION_COLUMNS = [
+    "target_market",
+    "decision_timestamp_utc",
+    "selector_context",
+    "selection_status",
+    "availability_state",
+    "primary_eligible",
+    "invalid_reason",
+    "selected_source_row_identifier",
+    "selected_source_content_hash",
+    "selected_source_as_of_timestamp_utc",
+    "selected_source_effective_available_at_utc",
+    "selected_source_quality",
+    "selected_data_type",
+    "selected_dealer_position_observed",
+    "selected_raw_chain_present",
+    "feature_age_hours",
+    "dealer_gamma_source_contract_revision",
+    "selection_policy_revision",
+]
+
+
+def _truthy(value: Any) -> bool:
+    return str(value).strip().lower() in {"true", "1", "yes", "y"}
+
+
+def _dealer_gamma_columns(raw: pd.DataFrame) -> dict[str, str | None]:
+    cols = {str(c).lower(): c for c in raw.columns}
+    return {
+        "target": cols.get("ticker") or cols.get("asset") or cols.get("target_market"),
+        "effective": cols.get("effective_available_at_utc") or cols.get("snapshot_timestamp_utc") or cols.get("feature_as_of_timestamp_utc"),
+        "asof": cols.get("feature_as_of_timestamp_utc") or cols.get("option_chain_as_of_timestamp_utc") or cols.get("snapshot_timestamp_utc") or cols.get("effective_available_at_utc"),
+        "quality": cols.get("row_economic_quality") or cols.get("raw_chain_quality") or cols.get("economic_quality"),
+        "raw_chain": cols.get("raw_option_chain_snapshot") or cols.get("observed_raw_chain") or cols.get("raw_chain_present"),
+        "data_type": cols.get("data_type"),
+        "dealer_position_observed": cols.get("dealer_position_observed"),
+    }
+
+
+def select_latest_clean_dealer_gamma(
+    *,
+    target_market: str,
+    decision_timestamp_utc: Any,
+    source_rows: pd.DataFrame,
+    selector_context: str,
+    config: dict[str, Any],
+    source_contract_revision: str = DEALER_GAMMA_SOURCE_CONTRACT_REVISION,
+) -> dict[str, Any]:
+    target = str(target_market).upper()
+    decision_ts = parse_ts(decision_timestamp_utc)
+    base = {
+        "target_market": target,
+        "decision_timestamp_utc": "" if decision_timestamp_utc is None else str(decision_timestamp_utc),
+        "selector_context": selector_context,
+        "selection_status": "unavailable_coverage",
+        "availability_state": "coverage_missing",
+        "primary_eligible": False,
+        "invalid_reason": "",
+        "selected_source_row_identifier": "",
+        "selected_source_content_hash": "",
+        "selected_source_as_of_timestamp_utc": "",
+        "selected_source_effective_available_at_utc": "",
+        "selected_source_quality": "",
+        "selected_data_type": "",
+        "selected_dealer_position_observed": False,
+        "selected_raw_chain_present": False,
+        "feature_age_hours": np.nan,
+        "dealer_gamma_source_contract_revision": source_contract_revision,
+        "selection_policy_revision": DEALER_GAMMA_SELECTION_POLICY_REVISION,
+        "row": None,
+    }
+    if decision_ts is None:
+        return base | {"selection_status": "selected_invalid", "availability_state": "missing_required_field", "invalid_reason": "decision_timestamp_invalid"}
+    if source_rows.empty:
+        return base | {"invalid_reason": "dealer_gamma_history_missing"}
+    col = _dealer_gamma_columns(source_rows)
+    missing = [name for name in ["target", "effective", "asof", "quality", "raw_chain", "data_type", "dealer_position_observed"] if not col.get(name)]
+    if missing:
+        return base | {
+            "selection_status": "selected_invalid",
+            "availability_state": "missing_required_field",
+            "invalid_reason": "dealer_gamma_required_columns_missing:" + ",".join(missing),
+        }
+
+    work = source_rows.copy()
+    work["_selector_row_identifier"] = work.index.astype(str)
+    work["_target_market"] = work[col["target"]].astype(str).str.upper()
+    work["_effective_ts"] = pd.to_datetime(work[col["effective"]], utc=True, errors="coerce")
+    work["_asof_ts"] = pd.to_datetime(work[col["asof"]], utc=True, errors="coerce")
+    work["_quality"] = work[col["quality"]].astype(str).str.lower()
+    work["_raw_chain_present"] = work[col["raw_chain"]].map(_truthy)
+    work["_data_type"] = work[col["data_type"]].astype(str)
+    work["_data_type_ok"] = work["_data_type"].str.lower().str.contains("raw|reconstructed", na=False)
+    work["_dealer_position_observed"] = work[col["dealer_position_observed"]].map(_truthy)
+    work = work[work["_target_market"].eq(target)].copy()
+    if work.empty:
+        return base | {"availability_state": "coverage_missing", "invalid_reason": "no_target_history"}
+
+    work["_feature_age_hours"] = (decision_ts - work["_effective_ts"]).dt.total_seconds() / 3600
+    at_or_before = work[(work["_effective_ts"] <= decision_ts) & (work["_asof_ts"] <= decision_ts)].copy()
+    max_age = safe_float(config.get("max_feature_age_hours", 96), 96)
+    clean = at_or_before[
+        at_or_before["_effective_ts"].notna()
+        & at_or_before["_asof_ts"].notna()
+        & at_or_before["_raw_chain_present"]
+        & at_or_before["_quality"].isin(["medium", "high"])
+        & at_or_before["_data_type_ok"]
+        & ~at_or_before["_dealer_position_observed"]
+        & (at_or_before["_feature_age_hours"] <= max_age)
+    ].copy()
+
+    def pack(row: pd.Series, status: str, state: str, eligible: bool, reason: str) -> dict[str, Any]:
+        asof_ts = row.get("_asof_ts")
+        eff_ts = row.get("_effective_ts")
+        return base | {
+            "selection_status": status,
+            "availability_state": state,
+            "primary_eligible": eligible,
+            "invalid_reason": reason,
+            "selected_source_row_identifier": str(row.get("_selector_row_identifier", row.name)),
+            "selected_source_content_hash": row_content_hash(row.drop(labels=[c for c in row.index if str(c).startswith("_")], errors="ignore")),
+            "selected_source_as_of_timestamp_utc": asof_ts.isoformat() if isinstance(asof_ts, pd.Timestamp) and pd.notna(asof_ts) else str(row.get(col["asof"], "")),
+            "selected_source_effective_available_at_utc": eff_ts.isoformat() if isinstance(eff_ts, pd.Timestamp) and pd.notna(eff_ts) else str(row.get(col["effective"], "")),
+            "selected_source_quality": str(row.get("_quality", "")),
+            "selected_data_type": str(row.get("_data_type", "")),
+            "selected_dealer_position_observed": bool(row.get("_dealer_position_observed", False)),
+            "selected_raw_chain_present": bool(row.get("_raw_chain_present", False)),
+            "feature_age_hours": safe_float(row.get("_feature_age_hours")),
+            "row": row,
+        }
+
+    if not clean.empty:
+        selected = clean.sort_values(["_effective_ts", "_asof_ts", "_selector_row_identifier"]).iloc[-1]
+        return pack(selected, "selected", "valid", True, "")
+
+    invalid_contract = at_or_before[
+        at_or_before["_effective_ts"].notna()
+        & at_or_before["_asof_ts"].notna()
+        & (
+            ~at_or_before["_raw_chain_present"]
+            | ~at_or_before["_quality"].isin(["medium", "high"])
+            | ~at_or_before["_data_type_ok"]
+            | at_or_before["_dealer_position_observed"]
+        )
+    ].copy()
+    if not invalid_contract.empty:
+        bad = invalid_contract.sort_values(["_effective_ts", "_asof_ts", "_selector_row_identifier"]).iloc[-1]
+        if bool(bad.get("_dealer_position_observed", False)):
+            reason = "dealer_position_observed_true"
+        elif not bool(bad.get("_data_type_ok", False)):
+            reason = "dealer_gamma_data_type_invalid"
+        elif not bool(bad.get("_raw_chain_present", False)):
+            reason = "raw_chain_evidence_missing"
+        else:
+            reason = "dealer_gamma_quality_invalid"
+        return pack(bad, "selected_invalid", "data_quality_blocked", False, reason)
+
+    invalid_ts = work[work["_effective_ts"].isna() | work["_asof_ts"].isna()].copy()
+    if not invalid_ts.empty and at_or_before.empty:
+        bad = invalid_ts.iloc[-1]
+        return pack(bad, "selected_invalid", "missing_required_field", False, "dealer_gamma_timestamp_invalid")
+
+    prior_with_timestamps = at_or_before[at_or_before["_effective_ts"].notna() & at_or_before["_asof_ts"].notna()].copy()
+    if not prior_with_timestamps.empty:
+        stale = prior_with_timestamps.sort_values(["_effective_ts", "_asof_ts", "_selector_row_identifier"]).iloc[-1]
+        return pack(stale, "unavailable_coverage", "invalid_age", False, "feature_age_exceeds_maximum")
+    future = work[(work["_effective_ts"] > decision_ts) | (work["_asof_ts"] > decision_ts)].copy()
+    reason = "coverage_not_started" if not future.empty else "no_historical_gamma_before_decision"
+    return base | {"availability_state": reason, "invalid_reason": reason}
+
+
 def build_dealer_gamma_panel(root: Path, daily_outcomes: pd.DataFrame, cfg: dict[str, Any] | None = None) -> tuple[pd.DataFrame, pd.DataFrame]:
     cfg = cfg or rules(root)
     raw = load_dealer_gamma_history(root)
@@ -2536,51 +2709,21 @@ def build_dealer_gamma_panel(root: Path, daily_outcomes: pd.DataFrame, cfg: dict
     if raw.empty:
         return pd.DataFrame(), pd.DataFrame([{"feature_family": "DealerGamma", "availability_status": "unavailable", "availability_failure_reason": "dealer_gamma_history_missing"}])
     cols = {str(c).lower(): c for c in raw.columns}
-    target_col = cols.get("ticker") or cols.get("asset") or cols.get("target_market")
-    eff_col = cols.get("effective_available_at_utc") or cols.get("snapshot_timestamp_utc") or cols.get("feature_as_of_timestamp_utc")
-    asof_col = cols.get("feature_as_of_timestamp_utc") or cols.get("option_chain_as_of_timestamp_utc") or cols.get("snapshot_timestamp_utc") or eff_col
-    quality_col = cols.get("row_economic_quality") or cols.get("raw_chain_quality") or cols.get("economic_quality")
-    if target_col is None or eff_col is None:
-        return pd.DataFrame(), pd.DataFrame([{"feature_family": "DealerGamma", "availability_status": "unavailable", "availability_failure_reason": "required_columns_missing"}])
-    work = raw.copy()
-    work["target_market"] = work[target_col].astype(str).str.upper()
-    work["effective_ts"] = pd.to_datetime(work[eff_col], utc=True, errors="coerce")
-    work["feature_asof_ts"] = pd.to_datetime(work[asof_col], utc=True, errors="coerce")
-    work["quality"] = work[quality_col].astype(str).str.lower() if quality_col else "unknown"
-    observed_col = cols.get("raw_option_chain_snapshot") or cols.get("observed_raw_chain") or cols.get("raw_chain_present")
-    if observed_col:
-        observed_mask = work[observed_col].astype(str).str.lower().isin(["true", "1", "yes"])
-    else:
-        observed_mask = work.get("dealer_feature_sample_type", pd.Series([""] * len(work))).astype(str).eq("observed_raw_chain_primary")
-    data_type_col = cols.get("data_type")
-    if data_type_col:
-        data_type_mask = work[data_type_col].astype(str).str.lower().str.contains("raw|reconstructed")
-    else:
-        data_type_mask = pd.Series([True] * len(work), index=work.index)
-    dealer_observed_col = cols.get("dealer_position_observed")
-    if dealer_observed_col:
-        dealer_position_unobserved = ~work[dealer_observed_col].astype(str).str.lower().isin(["true", "1", "yes"])
-    else:
-        dealer_position_unobserved = pd.Series([True] * len(work), index=work.index)
-    work = work[observed_mask & data_type_mask & dealer_position_unobserved & work["quality"].isin(["medium", "high"])]
-    if work.empty:
-        return pd.DataFrame(), pd.DataFrame([{"feature_family": "DealerGamma", "availability_status": "unavailable", "availability_failure_reason": "no_observed_medium_or_better_raw_chain"}])
     for _, outcome in daily_outcomes.iterrows():
         decision_ts = parse_ts(outcome["decision_timestamp_utc"])
         if decision_ts is None:
             continue
         target = str(outcome["target_market"]).upper()
-        max_age = safe_float(cfg.get("max_feature_age_hours", 96), 96)
-        subset = work[
-            (work["target_market"].eq(target))
-            & (work["effective_ts"] <= decision_ts)
-            & (work["feature_asof_ts"] <= decision_ts)
-        ].copy()
-        subset["feature_age_hours"] = (decision_ts - subset["effective_ts"]).dt.total_seconds() / 3600
-        subset = subset[subset["feature_age_hours"] <= max_age]
-        if subset.empty:
+        selection = select_latest_clean_dealer_gamma(
+            target_market=target,
+            decision_timestamp_utc=outcome.get("decision_timestamp_utc", ""),
+            source_rows=raw,
+            selector_context="EOD_CLOSE",
+            config=cfg,
+        )
+        if selection["selection_status"] != "selected" or not bool(selection["primary_eligible"]):
             continue
-        feat = subset.sort_values("effective_ts").iloc[-1]
+        feat = selection["row"]
         row = outcome.to_dict()
         flip_state = str(feat.get(cols.get("gamma_flip_state", "gamma_flip_state"), "unavailable"))
         distance = safe_float(feat.get(cols.get("gamma_flip_distance_pct", "gamma_flip_distance_pct"), np.nan))
@@ -2596,39 +2739,46 @@ def build_dealer_gamma_panel(root: Path, daily_outcomes: pd.DataFrame, cfg: dict
             "feature_name": "observed_raw_chain_proxy_set",
             "feature_value": net_gex,
             "feature_unit": "proxy",
-            "feature_as_of_timestamp_utc": feat.get(asof_col, ""),
-            "effective_available_at_utc": feat.get(eff_col, ""),
-            "feature_age_hours": safe_float(feat.get("feature_age_hours")),
+            "feature_as_of_timestamp_utc": selection.get("selected_source_as_of_timestamp_utc", ""),
+            "effective_available_at_utc": selection.get("selected_source_effective_available_at_utc", ""),
+            "feature_age_hours": safe_float(selection.get("feature_age_hours")),
             "availability_basis": "effective_available_at_utc",
             "availability_confidence": "medium",
             "source_path_or_provider": feat.get("source_path_or_provider", ""),
-            "source_hash_or_request_id": "",
+            "source_hash_or_request_id": selection.get("selected_source_content_hash", ""),
             "dealer_feature_sample_type": "observed_raw_chain_primary",
             "gamma_flip_state": flip_state if flip_state in {"local_flip_found", "no_local_flip", "unavailable"} else "unavailable",
             "gamma_flip_distance_pct": distance,
             "net_gex_proxy": net_gex,
             "negative_gamma_proxy_indicator": negative_gamma if sign_verified else np.nan,
             "dealer_gamma_sign_policy_revision": DEALER_GAMMA_SIGN_POLICY_REVISION if sign_verified else "unverified_sign_convention",
-            "dealer_gamma_selection_status": "selected",
-            "dealer_gamma_effective_available_at_utc": feat.get(eff_col, ""),
+            "dealer_gamma_selection_status": selection.get("selection_status", ""),
+            "dealer_gamma_availability_state": selection.get("availability_state", ""),
+            "dealer_gamma_invalid_reason": selection.get("invalid_reason", ""),
+            "dealer_gamma_source_contract_revision": DEALER_GAMMA_SOURCE_CONTRACT_REVISION,
+            "dealer_gamma_selection_policy_revision": DEALER_GAMMA_SELECTION_POLICY_REVISION,
+            "dealer_gamma_effective_available_at_utc": selection.get("selected_source_effective_available_at_utc", ""),
             "pinning_proxy": safe_float(feat.get(cols.get("pinning_proxy", "pinning_proxy"), np.nan)),
             "local_flip_found_flag": int(flip_state == "local_flip_found"),
             "no_local_flip_flag": int(flip_state == "no_local_flip"),
             "sign_convention": "positive_net_gex_proxy_means_long_gamma_proxy_not_dealer_inventory",
             "is_proxy": True,
-            "dealer_position_observed": False,
-            "data_type": "reconstructed_from_raw_chain",
+            "dealer_position_observed": selection.get("selected_dealer_position_observed", False),
+            "data_type": selection.get("selected_data_type", "reconstructed_from_raw_chain"),
             "observed_flow": False,
-            "raw_chain_quality": feat.get("quality", "unknown"),
-            "row_economic_quality": feat.get("quality", "unknown"),
-            "quality_grade": feat.get("quality", "unknown"),
+            "raw_chain_quality": selection.get("selected_source_quality", "unknown"),
+            "row_economic_quality": selection.get("selected_source_quality", "unknown"),
+            "quality_grade": selection.get("selected_source_quality", "unknown"),
             "availability_status": "available",
             "availability_failure_reason": "",
             "analysis_mode": "reconstructed_proxy_primary",
-            "selected_source_row_identifier": str(feat.name),
-            "selected_source_effective_available_at_utc": feat.get(eff_col, ""),
-            "selected_source_hash_or_index": str(feat.name),
-            "selection_policy_version": "latest_clean_eligible_candidate_v1",
+            "selected_source_row_identifier": selection.get("selected_source_row_identifier", ""),
+            "selected_source_effective_available_at_utc": selection.get("selected_source_effective_available_at_utc", ""),
+            "selected_source_hash_or_index": selection.get("selected_source_content_hash", ""),
+            "selected_source_content_hash": selection.get("selected_source_content_hash", ""),
+            "selected_source_as_of_timestamp_utc": selection.get("selected_source_as_of_timestamp_utc", ""),
+            "selected_raw_chain_present": selection.get("selected_raw_chain_present", False),
+            "selection_policy_version": DEALER_GAMMA_SELECTION_POLICY_REVISION,
         })
         rows.append(row)
     audit.append(feature_audit_row(
@@ -2650,109 +2800,158 @@ def build_dealer_gamma_intraday_selection_audit(root: Path, lev_panel: pd.DataFr
         "target_market", "decision_timestamp_utc", "selection_status", "availability_state",
         "primary_eligible", "selected_source_row_identifier", "selected_source_content_hash",
         "selected_source_as_of_timestamp_utc", "selected_source_effective_available_at_utc",
+        "selected_source_quality", "selected_data_type", "selected_dealer_position_observed", "selected_raw_chain_present",
         "raw_chain_quality", "data_type", "dealer_position_observed", "dealer_gamma_sign_policy_revision", "net_gex_proxy",
         "negative_gamma_proxy_indicator", "gamma_flip_state", "gamma_flip_distance_pct",
-        "invalid_reason",
+        "invalid_reason", "feature_age_hours", "dealer_gamma_source_contract_revision", "selection_policy_revision",
     ]
     if lev_panel.empty:
         return pd.DataFrame(columns=cols_out)
-    if raw.empty:
-        rows = [
-            {
-                "target_market": row.get("target_market", ""),
-                "decision_timestamp_utc": row.get("decision_timestamp_utc", ""),
-                "selection_status": "unavailable_coverage",
-                "availability_state": "coverage_missing",
-                "primary_eligible": False,
-                "invalid_reason": "dealer_gamma_history_missing",
-            }
-            for _, row in lev_panel.iterrows()
-        ]
-        return pd.DataFrame(rows, columns=cols_out)
     cols = {str(c).lower(): c for c in raw.columns}
-    target_col = cols.get("ticker") or cols.get("asset") or cols.get("target_market")
-    eff_col = cols.get("effective_available_at_utc") or cols.get("snapshot_timestamp_utc") or cols.get("feature_as_of_timestamp_utc")
-    asof_col = cols.get("feature_as_of_timestamp_utc") or cols.get("option_chain_as_of_timestamp_utc") or cols.get("snapshot_timestamp_utc") or eff_col
-    quality_col = cols.get("row_economic_quality") or cols.get("raw_chain_quality") or cols.get("economic_quality")
-    if target_col is None or eff_col is None or asof_col is None:
-        return pd.DataFrame([{
-            "target_market": row.get("target_market", ""),
-            "decision_timestamp_utc": row.get("decision_timestamp_utc", ""),
-            "selection_status": "selected_invalid",
-            "availability_state": "missing_required_field",
-            "primary_eligible": False,
-            "invalid_reason": "dealer_gamma_required_columns_missing",
-        } for _, row in lev_panel.iterrows()], columns=cols_out)
-    work = raw.copy()
-    work["target_market"] = work[target_col].astype(str).str.upper()
-    work["effective_ts"] = pd.to_datetime(work[eff_col], utc=True, errors="coerce")
-    work["feature_asof_ts"] = pd.to_datetime(work[asof_col], utc=True, errors="coerce")
-    work["quality"] = work[quality_col].astype(str).str.lower() if quality_col else "unknown"
-    observed_col = cols.get("raw_option_chain_snapshot") or cols.get("observed_raw_chain") or cols.get("raw_chain_present")
-    observed_mask = work[observed_col].astype(str).str.lower().isin(["true", "1", "yes"]) if observed_col else pd.Series([True] * len(work), index=work.index)
-    data_type_col = cols.get("data_type")
-    data_type_mask = work[data_type_col].astype(str).str.lower().str.contains("raw|reconstructed") if data_type_col else pd.Series([True] * len(work), index=work.index)
-    dealer_observed_col = cols.get("dealer_position_observed")
-    dealer_unobserved_mask = ~work[dealer_observed_col].astype(str).str.lower().isin(["true", "1", "yes"]) if dealer_observed_col else pd.Series([True] * len(work), index=work.index)
-    contract_invalid = work[observed_mask & work["quality"].isin(["medium", "high"]) & (~data_type_mask | ~dealer_unobserved_mask)].copy()
-    work = work[observed_mask & work["quality"].isin(["medium", "high"]) & data_type_mask & dealer_unobserved_mask].copy()
     sign_convention = str(load_json(root, DEALER_RULES_PATH, {}).get("sign_convention", ""))
     sign_verified = sign_convention == "positive_net_gex_proxy_means_long_gamma_proxy_not_dealer_inventory"
-    max_age = safe_float(cfg.get("max_feature_age_hours", 96), 96)
     rows: list[dict[str, Any]] = []
     for _, decision in lev_panel.iterrows():
         target = str(decision.get("target_market", "")).upper()
-        decision_ts = parse_ts(decision.get("decision_timestamp_utc"))
         base = {"target_market": target, "decision_timestamp_utc": decision.get("decision_timestamp_utc", "")}
-        if decision_ts is None:
-            rows.append(base | {"selection_status": "selected_invalid", "availability_state": "missing_required_field", "primary_eligible": False, "invalid_reason": "decision_timestamp_invalid"})
-            continue
-        subset = work[(work["target_market"].eq(target)) & (work["effective_ts"] <= decision_ts) & (work["feature_asof_ts"] <= decision_ts)].copy()
-        subset["feature_age_hours"] = (decision_ts - subset["effective_ts"]).dt.total_seconds() / 3600
-        subset = subset[subset["feature_age_hours"] <= max_age]
-        invalid_subset = contract_invalid[(contract_invalid["target_market"].eq(target)) & (contract_invalid["effective_ts"] <= decision_ts) & (contract_invalid["feature_asof_ts"] <= decision_ts)].copy()
-        if not invalid_subset.empty:
-            bad = invalid_subset.sort_values("effective_ts").iloc[-1]
-            reason = "dealer_position_observed_true" if dealer_observed_col and str(bad.get(dealer_observed_col, "")).lower() in {"true", "1", "yes"} else "dealer_gamma_data_type_invalid"
-            rows.append(base | {
-                "selection_status": "selected_invalid",
-                "availability_state": "data_quality_blocked",
-                "primary_eligible": False,
-                "selected_source_row_identifier": str(bad.name),
-                "selected_source_content_hash": row_content_hash(bad),
-                "selected_source_as_of_timestamp_utc": bad.get(asof_col, ""),
-                "selected_source_effective_available_at_utc": bad.get(eff_col, ""),
-                "raw_chain_quality": bad.get("quality", ""),
-                "data_type": bad.get(data_type_col, "") if data_type_col else "",
-                "dealer_position_observed": bad.get(dealer_observed_col, False) if dealer_observed_col else False,
-                "invalid_reason": reason,
-            })
-            continue
-        if subset.empty:
-            rows.append(base | {"selection_status": "unavailable_coverage", "availability_state": "unavailable_coverage", "primary_eligible": False, "invalid_reason": "no_gamma_available_by_1530"})
-            continue
-        feat = subset.sort_values("effective_ts").iloc[-1]
-        net_gex = safe_float(feat.get(cols.get("net_gex_proxy", "net_gex_proxy"), np.nan))
+        selection = select_latest_clean_dealer_gamma(
+            target_market=target,
+            decision_timestamp_utc=decision.get("decision_timestamp_utc", ""),
+            source_rows=raw,
+            selector_context="INTRADAY_1530",
+            config=cfg,
+        )
+        feat = selection.get("row")
+        net_gex = safe_float(feat.get(cols.get("net_gex_proxy", "net_gex_proxy"), np.nan)) if isinstance(feat, pd.Series) else np.nan
         negative_gamma = int(pd.notna(net_gex) and sign_verified and net_gex < 0)
-        rows.append(base | {
-            "selection_status": "selected",
-            "availability_state": "valid",
-            "primary_eligible": True,
-            "selected_source_row_identifier": str(feat.name),
-            "selected_source_content_hash": row_content_hash(feat),
-            "selected_source_as_of_timestamp_utc": feat.get(asof_col, ""),
-            "selected_source_effective_available_at_utc": feat.get(eff_col, ""),
-            "raw_chain_quality": feat.get("quality", ""),
-            "data_type": feat.get(data_type_col, "") if data_type_col else "",
-            "dealer_position_observed": feat.get(dealer_observed_col, False) if dealer_observed_col else False,
+        rows.append(base | {k: selection.get(k, "") for k in DEALER_GAMMA_SELECTION_COLUMNS if k not in {"target_market", "decision_timestamp_utc", "selector_context"}} | {
+            "raw_chain_quality": selection.get("selected_source_quality", ""),
+            "data_type": selection.get("selected_data_type", ""),
+            "dealer_position_observed": selection.get("selected_dealer_position_observed", False),
             "dealer_gamma_sign_policy_revision": DEALER_GAMMA_SIGN_POLICY_REVISION if sign_verified else "unverified_sign_convention",
             "net_gex_proxy": net_gex,
-            "negative_gamma_proxy_indicator": negative_gamma if sign_verified else np.nan,
-            "gamma_flip_state": feat.get(cols.get("gamma_flip_state", "gamma_flip_state"), "unavailable"),
-            "gamma_flip_distance_pct": safe_float(feat.get(cols.get("gamma_flip_distance_pct", "gamma_flip_distance_pct"), np.nan)),
-            "invalid_reason": "" if sign_verified else "gamma_sign_convention_unverified",
+            "negative_gamma_proxy_indicator": negative_gamma if sign_verified and selection.get("selection_status") == "selected" else np.nan,
+            "gamma_flip_state": feat.get(cols.get("gamma_flip_state", "gamma_flip_state"), "unavailable") if isinstance(feat, pd.Series) else "unavailable",
+            "gamma_flip_distance_pct": safe_float(feat.get(cols.get("gamma_flip_distance_pct", "gamma_flip_distance_pct"), np.nan)) if isinstance(feat, pd.Series) else np.nan,
+            "invalid_reason": selection.get("invalid_reason", "") if sign_verified or selection.get("selection_status") != "selected" else "gamma_sign_convention_unverified",
         })
     return pd.DataFrame(rows, columns=cols_out)
+
+
+DEALER_GAMMA_SOURCE_PARITY_COLUMNS = [
+    "target_market",
+    "decision_timestamp_utc",
+    "selector_context",
+    "required_source_family",
+    "actual_selection_status",
+    "fresh_selection_status",
+    "actual_selected_source_row_identifier",
+    "fresh_selected_source_row_identifier",
+    "actual_selected_source_content_hash",
+    "fresh_selected_source_content_hash",
+    "actual_selected_source_effective_available_at_utc",
+    "fresh_selected_source_effective_available_at_utc",
+    "actual_selected_source_as_of_timestamp_utc",
+    "fresh_selected_source_as_of_timestamp_utc",
+    "actual_primary_eligible",
+    "fresh_primary_eligible",
+    "selection_parity_status",
+    "selection_parity_failure_reason",
+    "dealer_gamma_source_contract_revision",
+    "selection_policy_revision",
+]
+
+
+def _dealer_gamma_parity_status(actual: dict[str, Any], fresh: dict[str, Any]) -> tuple[str, str]:
+    actual_status = str(actual.get("selection_status", ""))
+    fresh_status = str(fresh.get("selection_status", ""))
+    if actual_status == "selected_invalid" or fresh_status == "selected_invalid":
+        return "selected_invalid", fresh.get("invalid_reason", "") or actual.get("invalid_reason", "") or "dealer_gamma_selected_invalid"
+    if actual_status != "selected" and fresh_status != "selected":
+        return "unavailable_coverage", fresh.get("invalid_reason", "") or actual.get("invalid_reason", "") or "dealer_gamma_unavailable_coverage"
+    fields = [
+        ("selected_source_row_identifier", "selected_source_row_identifier"),
+        ("selected_source_content_hash", "selected_source_content_hash"),
+        ("selected_source_effective_available_at_utc", "selected_source_effective_available_at_utc"),
+        ("primary_eligible", "primary_eligible"),
+    ]
+    mismatches = [name for name, other in fields if str(actual.get(name, "")) != str(fresh.get(other, ""))]
+    if actual_status == "selected" and fresh_status == "selected" and not mismatches:
+        return "matched", ""
+    return "mismatch", "dealer_gamma_actual_fresh_mismatch:" + ",".join(mismatches or ["selection_status"])
+
+
+def build_dealer_gamma_source_selection_parity_audit(
+    root: Path,
+    dealer_eod_panel: pd.DataFrame,
+    dealer_intraday_selection: pd.DataFrame,
+    cfg: dict[str, Any] | None = None,
+) -> pd.DataFrame:
+    cfg = cfg or rules(root)
+    raw = load_dealer_gamma_history(root)
+    rows: list[dict[str, Any]] = []
+
+    def add_parity(actual: dict[str, Any], context: str, family: str) -> None:
+        target = str(actual.get("target_market", "")).upper()
+        decision = actual.get("decision_timestamp_utc", "")
+        fresh = select_latest_clean_dealer_gamma(
+            target_market=target,
+            decision_timestamp_utc=decision,
+            source_rows=raw,
+            selector_context=context,
+            config=cfg,
+        )
+        status, reason = _dealer_gamma_parity_status(actual, fresh)
+        rows.append({
+            "target_market": target,
+            "decision_timestamp_utc": decision,
+            "selector_context": context,
+            "required_source_family": family,
+            "actual_selection_status": actual.get("selection_status", ""),
+            "fresh_selection_status": fresh.get("selection_status", ""),
+            "actual_selected_source_row_identifier": actual.get("selected_source_row_identifier", ""),
+            "fresh_selected_source_row_identifier": fresh.get("selected_source_row_identifier", ""),
+            "actual_selected_source_content_hash": actual.get("selected_source_content_hash", ""),
+            "fresh_selected_source_content_hash": fresh.get("selected_source_content_hash", ""),
+            "actual_selected_source_effective_available_at_utc": actual.get("selected_source_effective_available_at_utc", ""),
+            "fresh_selected_source_effective_available_at_utc": fresh.get("selected_source_effective_available_at_utc", ""),
+            "actual_selected_source_as_of_timestamp_utc": actual.get("selected_source_as_of_timestamp_utc", ""),
+            "fresh_selected_source_as_of_timestamp_utc": fresh.get("selected_source_as_of_timestamp_utc", ""),
+            "actual_primary_eligible": bool(actual.get("primary_eligible", False)),
+            "fresh_primary_eligible": bool(fresh.get("primary_eligible", False)),
+            "selection_parity_status": status,
+            "selection_parity_failure_reason": reason,
+            "dealer_gamma_source_contract_revision": DEALER_GAMMA_SOURCE_CONTRACT_REVISION,
+            "selection_policy_revision": DEALER_GAMMA_SELECTION_POLICY_REVISION,
+        })
+
+    if not dealer_eod_panel.empty:
+        for _, row in dealer_eod_panel.iterrows():
+            add_parity({
+                "target_market": row.get("target_market", ""),
+                "decision_timestamp_utc": row.get("decision_timestamp_utc", ""),
+                "selection_status": row.get("dealer_gamma_selection_status", "selected"),
+                "primary_eligible": str(row.get("dealer_gamma_selection_status", "selected")) == "selected",
+                "invalid_reason": row.get("dealer_gamma_invalid_reason", ""),
+                "selected_source_row_identifier": row.get("selected_source_row_identifier", ""),
+                "selected_source_content_hash": row.get("selected_source_content_hash", row.get("source_hash_or_request_id", row.get("selected_source_hash_or_index", ""))),
+                "selected_source_effective_available_at_utc": row.get("selected_source_effective_available_at_utc", row.get("dealer_gamma_effective_available_at_utc", "")),
+                "selected_source_as_of_timestamp_utc": row.get("selected_source_as_of_timestamp_utc", row.get("feature_as_of_timestamp_utc", "")),
+            }, "EOD_CLOSE", "DealerGammaEOD")
+    if not dealer_intraday_selection.empty:
+        for _, row in dealer_intraday_selection.iterrows():
+            add_parity({
+                "target_market": row.get("target_market", ""),
+                "decision_timestamp_utc": row.get("decision_timestamp_utc", ""),
+                "selection_status": row.get("selection_status", ""),
+                "primary_eligible": bool(row.get("primary_eligible", False)),
+                "invalid_reason": row.get("invalid_reason", ""),
+                "selected_source_row_identifier": row.get("selected_source_row_identifier", ""),
+                "selected_source_content_hash": row.get("selected_source_content_hash", ""),
+                "selected_source_effective_available_at_utc": row.get("selected_source_effective_available_at_utc", ""),
+                "selected_source_as_of_timestamp_utc": row.get("selected_source_as_of_timestamp_utc", ""),
+            }, "INTRADAY_1530", "DealerGammaIntraday")
+    return pd.DataFrame(rows, columns=DEALER_GAMMA_SOURCE_PARITY_COLUMNS)
 
 
 def split_dealer_gamma_state_distance(dealer_panel: pd.DataFrame) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
@@ -5036,6 +5235,8 @@ def _aggregate_parity_status(statuses: list[str]) -> str:
     clean = [str(s) for s in statuses if str(s)]
     if any(s == "mismatch" for s in clean):
         return "mismatch"
+    if any(s == "audit_missing" for s in clean):
+        return "audit_missing"
     if any(s == "selected_invalid" for s in clean):
         return "selected_invalid"
     if any(s == "unavailable_coverage" for s in clean):
@@ -5050,6 +5251,8 @@ def _component_integrity_from_status(selection_status: str, availability_state: 
         return "selected_invalid", reason or "selected_invalid"
     if source_parity_status == "mismatch":
         return "selected_invalid", ";".join([r for r in [reason, "source_selection_parity_mismatch"] if r])
+    if source_parity_status == "audit_missing":
+        return "selected_invalid", reason or "required_parity_audit_missing"
     if source_parity_status == "selected_invalid":
         return "selected_invalid", reason or "source_selection_selected_invalid"
     if selection_status != "selected" or not primary_eligible:
@@ -5067,6 +5270,7 @@ def build_market_level_component_provenance_status(
     leveraged_primary_integrity: pd.DataFrame,
     dealer_eod_panel: pd.DataFrame,
     dealer_intraday_selection: pd.DataFrame,
+    dealer_gamma_source_parity: pd.DataFrame | None = None,
 ) -> pd.DataFrame:
     rows: list[dict[str, Any]] = []
     if market_level_panel.empty:
@@ -5116,10 +5320,8 @@ def build_market_level_component_provenance_status(
                         & cta_vol_selector_parity.get("decision_timestamp_utc", pd.Series(dtype=str)).astype(str).eq(decision)
                         & cta_vol_selector_parity.get("required_source_family", pd.Series(dtype=str)).astype(str).eq(family)
                     ]
-                parity_status = _aggregate_parity_status(parity.get("selection_parity_status", pd.Series(dtype=str)).astype(str).tolist()) if not parity.empty else "unavailable_coverage"
                 panel_primary = bool(prow.get(f"{prefix}_primary_eligible", False))
-                if parity.empty and panel_primary:
-                    parity_status = "matched"
+                parity_status = _aggregate_parity_status(parity.get("selection_parity_status", pd.Series(dtype=str)).astype(str).tolist()) if not parity.empty else ("audit_missing" if panel_primary else "unavailable_coverage")
                 add_row(
                     prow,
                     comp,
@@ -5141,9 +5343,19 @@ def build_market_level_component_provenance_status(
                 add_row(prow, "DealerGammaSignEOD", "unavailable_coverage", "unavailable_coverage", False, "unavailable_coverage", "dealer_gamma_sign_eod_unavailable")
             else:
                 drow = eod_match.iloc[-1]
-                add_row(prow, "DealerGammaEOD", str(drow.get("dealer_gamma_selection_status", "selected")), "valid", True, "matched", "", str(drow.get("selected_source_row_identifier", "")), str(drow.get("source_hash_or_request_id", "")), str(drow.get("dealer_gamma_effective_available_at_utc", "")))
+                gamma_parity = dealer_gamma_source_parity[
+                    dealer_gamma_source_parity.get("target_market", pd.Series(dtype=str)).astype(str).eq(target)
+                    & dealer_gamma_source_parity.get("decision_timestamp_utc", pd.Series(dtype=str)).astype(str).eq(decision)
+                    & dealer_gamma_source_parity.get("required_source_family", pd.Series(dtype=str)).astype(str).eq("DealerGammaEOD")
+                ] if dealer_gamma_source_parity is not None and not dealer_gamma_source_parity.empty else pd.DataFrame()
+                gamma_parity_status = _aggregate_parity_status(gamma_parity.get("selection_parity_status", pd.Series(dtype=str)).astype(str).tolist()) if not gamma_parity.empty else "audit_missing"
+                gamma_integrity, gamma_reason = _component_integrity_from_status(str(drow.get("dealer_gamma_selection_status", "selected")), str(drow.get("dealer_gamma_availability_state", "valid")), True, gamma_parity_status, str(drow.get("dealer_gamma_invalid_reason", "")))
+                add_row(prow, "DealerGammaEOD", str(drow.get("dealer_gamma_selection_status", "selected")), str(drow.get("dealer_gamma_availability_state", "valid")), True, gamma_parity_status, str(drow.get("dealer_gamma_invalid_reason", "")), str(drow.get("selected_source_row_identifier", "")), str(drow.get("selected_source_content_hash", drow.get("source_hash_or_request_id", ""))), str(drow.get("dealer_gamma_effective_available_at_utc", "")))
                 sign_ok = pd.notna(safe_float(drow.get("negative_gamma_proxy_indicator", np.nan)))
-                add_row(prow, "DealerGammaSignEOD", "selected" if sign_ok else "unavailable_coverage", "valid" if sign_ok else "unavailable_coverage", bool(sign_ok), "matched" if sign_ok else "unavailable_coverage", "" if sign_ok else "gamma_sign_convention_unverified", str(drow.get("selected_source_row_identifier", "")), str(drow.get("source_hash_or_request_id", "")), str(drow.get("dealer_gamma_effective_available_at_utc", "")))
+                if gamma_integrity == "selected_invalid":
+                    add_row(prow, "DealerGammaSignEOD", "selected_invalid", "selected_invalid", False, gamma_parity_status, gamma_reason, str(drow.get("selected_source_row_identifier", "")), str(drow.get("selected_source_content_hash", drow.get("source_hash_or_request_id", ""))), str(drow.get("dealer_gamma_effective_available_at_utc", "")))
+                else:
+                    add_row(prow, "DealerGammaSignEOD", "selected" if sign_ok else "unavailable_coverage", "valid" if sign_ok else "unavailable_coverage", bool(sign_ok), "matched" if sign_ok else "unavailable_coverage", "" if sign_ok else "gamma_sign_convention_unverified", str(drow.get("selected_source_row_identifier", "")), str(drow.get("selected_source_content_hash", drow.get("source_hash_or_request_id", ""))), str(drow.get("dealer_gamma_effective_available_at_utc", "")))
         elif clock == "INTRADAY":
             lev_parity = leveraged_selector_parity[
                 leveraged_selector_parity.get("target_market", pd.Series(dtype=str)).astype(str).eq(target)
@@ -5154,10 +5366,14 @@ def build_market_level_component_provenance_status(
                 & leveraged_primary_integrity.get("decision_timestamp_utc", pd.Series(dtype=str)).astype(str).eq(decision)
             ] if not leveraged_primary_integrity.empty else pd.DataFrame()
             panel_lev_eligible = str(prow.get("leveraged_etf_primary_input_gate", prow.get("leveraged_etf_primary_input_integrity_status", ""))) == "eligible_primary"
-            lev_parity_status = _aggregate_parity_status(lev_parity.get("selection_parity_status", pd.Series(dtype=str)).astype(str).tolist()) if not lev_parity.empty else ("matched" if panel_lev_eligible else "unavailable_coverage")
-            lev_gate = _aggregate_parity_status(lev_integrity.get("leveraged_etf_primary_input_gate", pd.Series(dtype=str)).astype(str).replace({"eligible_primary": "matched", "insufficient_data": "unavailable_coverage", "data_quality_blocked": "selected_invalid"}).tolist()) if not lev_integrity.empty else ("matched" if panel_lev_eligible else "unavailable_coverage")
+            lev_parity_status = _aggregate_parity_status(lev_parity.get("selection_parity_status", pd.Series(dtype=str)).astype(str).tolist()) if not lev_parity.empty else ("audit_missing" if panel_lev_eligible else "unavailable_coverage")
+            lev_gate = _aggregate_parity_status(lev_integrity.get("leveraged_etf_primary_input_gate", pd.Series(dtype=str)).astype(str).replace({"eligible_primary": "matched", "insufficient_data": "unavailable_coverage", "data_quality_blocked": "selected_invalid"}).tolist()) if not lev_integrity.empty else ("audit_missing" if panel_lev_eligible else "unavailable_coverage")
             lev_status = "selected_invalid" if lev_gate == "selected_invalid" else ("unavailable_coverage" if lev_gate == "unavailable_coverage" else "selected")
-            add_row(prow, "LeveragedETF", lev_status, "valid" if lev_status == "selected" else lev_status, lev_status == "selected", lev_parity_status, str(prow.get("availability_failure_reason", "")))
+            lev_reason = str(prow.get("availability_failure_reason", ""))
+            if lev_parity_status == "audit_missing" or lev_gate == "audit_missing":
+                lev_status = "selected_invalid"
+                lev_reason = lev_reason or "required_parity_audit_missing"
+            add_row(prow, "LeveragedETF", lev_status, "valid" if lev_status == "selected" else lev_status, lev_status == "selected", lev_parity_status, lev_reason)
             intraday_match = dealer_intraday_selection[
                 dealer_intraday_selection.get("target_market", pd.Series(dtype=str)).astype(str).eq(target)
                 & dealer_intraday_selection.get("decision_timestamp_utc", pd.Series(dtype=str)).astype(str).eq(decision)
@@ -5168,9 +5384,19 @@ def build_market_level_component_provenance_status(
             else:
                 drow = intraday_match.iloc[-1]
                 selected = bool(drow.get("primary_eligible", False)) and str(drow.get("selection_status", "")) == "selected"
-                add_row(prow, "DealerGammaIntraday", str(drow.get("selection_status", "unavailable_coverage")), str(drow.get("availability_state", "unavailable_coverage")), selected, "matched" if selected else str(drow.get("availability_state", "unavailable_coverage")), str(drow.get("invalid_reason", "")), str(drow.get("selected_source_row_identifier", "")), str(drow.get("selected_source_content_hash", "")), str(drow.get("selected_source_effective_available_at_utc", "")))
+                gamma_parity = dealer_gamma_source_parity[
+                    dealer_gamma_source_parity.get("target_market", pd.Series(dtype=str)).astype(str).eq(target)
+                    & dealer_gamma_source_parity.get("decision_timestamp_utc", pd.Series(dtype=str)).astype(str).eq(decision)
+                    & dealer_gamma_source_parity.get("required_source_family", pd.Series(dtype=str)).astype(str).eq("DealerGammaIntraday")
+                ] if dealer_gamma_source_parity is not None and not dealer_gamma_source_parity.empty else pd.DataFrame()
+                gamma_parity_status = _aggregate_parity_status(gamma_parity.get("selection_parity_status", pd.Series(dtype=str)).astype(str).tolist()) if not gamma_parity.empty else ("audit_missing" if selected else str(drow.get("availability_state", "unavailable_coverage")))
+                gamma_integrity, gamma_reason = _component_integrity_from_status(str(drow.get("selection_status", "unavailable_coverage")), str(drow.get("availability_state", "unavailable_coverage")), selected, gamma_parity_status, str(drow.get("invalid_reason", "")))
+                add_row(prow, "DealerGammaIntraday", str(drow.get("selection_status", "unavailable_coverage")), str(drow.get("availability_state", "unavailable_coverage")), selected, gamma_parity_status, str(drow.get("invalid_reason", "")), str(drow.get("selected_source_row_identifier", "")), str(drow.get("selected_source_content_hash", "")), str(drow.get("selected_source_effective_available_at_utc", "")))
                 sign_ok = pd.notna(safe_float(drow.get("negative_gamma_proxy_indicator", np.nan)))
-                add_row(prow, "DealerGammaSignIntraday", "selected" if sign_ok else "unavailable_coverage", "valid" if sign_ok else "unavailable_coverage", bool(sign_ok), "matched" if sign_ok else "unavailable_coverage", "" if sign_ok else "gamma_sign_convention_unverified", str(drow.get("selected_source_row_identifier", "")), str(drow.get("selected_source_content_hash", "")), str(drow.get("selected_source_effective_available_at_utc", "")))
+                if gamma_integrity == "selected_invalid":
+                    add_row(prow, "DealerGammaSignIntraday", "selected_invalid", "selected_invalid", False, gamma_parity_status, gamma_reason, str(drow.get("selected_source_row_identifier", "")), str(drow.get("selected_source_content_hash", "")), str(drow.get("selected_source_effective_available_at_utc", "")))
+                else:
+                    add_row(prow, "DealerGammaSignIntraday", "selected" if sign_ok else "unavailable_coverage", "valid" if sign_ok else "unavailable_coverage", bool(sign_ok), "matched" if sign_ok else "unavailable_coverage", "" if sign_ok else "gamma_sign_convention_unverified", str(drow.get("selected_source_row_identifier", "")), str(drow.get("selected_source_content_hash", "")), str(drow.get("selected_source_effective_available_at_utc", "")))
     return pd.DataFrame(rows, columns=MARKET_LEVEL_COMPONENT_PROVENANCE_COLUMNS)
 
 
@@ -5185,6 +5411,7 @@ def build_market_level_model_scope_integrity(panel_or_provenance: pd.DataFrame, 
             leveraged_primary_integrity=pd.DataFrame(),
             dealer_eod_panel=pd.DataFrame(),
             dealer_intraday_selection=pd.DataFrame(),
+            dealer_gamma_source_parity=pd.DataFrame(),
         )
     dependencies = {
         "B0": ["baseline"],
@@ -5276,21 +5503,51 @@ def run_market_level_oos_backtest(panel: pd.DataFrame, integrity: pd.DataFrame, 
                         & integrity.get("model_scope", pd.Series(dtype=str)).astype(str).eq(model_name)
                         & integrity.get("model_clock", pd.Series(dtype=str)).astype(str).eq(clock)
                     ] if not integrity.empty else pd.DataFrame()
-                    invalid_decisions = set(scope_rows.loc[scope_rows.get("scope_integrity_status", pd.Series(dtype=str)).astype(str).eq("selected_invalid"), "decision_timestamp_utc"].astype(str).tolist()) if not scope_rows.empty else set()
-                    unavailable_decisions = set(scope_rows.loc[scope_rows.get("scope_integrity_status", pd.Series(dtype=str)).astype(str).eq("unavailable_coverage"), "decision_timestamp_utc"].astype(str).tolist()) - invalid_decisions if not scope_rows.empty else set()
-                    valid_decisions = (set(scope_rows.loc[scope_rows.get("scope_integrity_status", pd.Series(dtype=str)).astype(str).eq("valid"), "decision_timestamp_utc"].astype(str).tolist()) - invalid_decisions - unavailable_decisions) if not scope_rows.empty else candidate_decisions
-                    valid_frame = target_panel[target_panel.get("decision_timestamp_utc", pd.Series(dtype=str)).astype(str).isin(valid_decisions)].copy() if not target_panel.empty else pd.DataFrame()
+                    status_by_decision: dict[str, str] = {}
+                    if not scope_rows.empty:
+                        for decision_key, sg in scope_rows.groupby(scope_rows["decision_timestamp_utc"].astype(str), dropna=False):
+                            statuses = sg.get("scope_integrity_status", pd.Series(dtype=str)).astype(str).tolist()
+                            if "selected_invalid" in statuses:
+                                status_by_decision[str(decision_key)] = "selected_invalid"
+                            elif "unavailable_coverage" in statuses:
+                                status_by_decision[str(decision_key)] = "unavailable_coverage"
+                            else:
+                                status_by_decision[str(decision_key)] = "valid"
+                    invalid_decisions = {d for d in candidate_decisions if status_by_decision.get(d) == "selected_invalid"}
+                    unavailable_decisions = {d for d in candidate_decisions if status_by_decision.get(d) == "unavailable_coverage"}
+                    missing_scope_decisions = candidate_decisions - set(status_by_decision)
+                    unavailable_decisions |= missing_scope_decisions
+                    valid_scope_decisions = candidate_decisions - invalid_decisions - unavailable_decisions
+
+                    scoped_frame = target_panel[target_panel.get("decision_timestamp_utc", pd.Series(dtype=str)).astype(str).isin(valid_scope_decisions)].copy() if not target_panel.empty else pd.DataFrame()
                     required = list(dict.fromkeys(baseline_cols + features + [outcome]))
                     for col in required:
-                        if col not in valid_frame.columns:
-                            valid_frame[col] = np.nan
-                    valid_frame = valid_frame.dropna(subset=[outcome])
+                        if col not in scoped_frame.columns:
+                            scoped_frame[col] = np.nan
+                    decision_col = scoped_frame.get("decision_timestamp_utc", pd.Series(dtype=str)).astype(str) if not scoped_frame.empty else pd.Series(dtype=str)
+                    outcome_numeric = pd.to_numeric(scoped_frame.get(outcome, pd.Series(dtype=float)), errors="coerce") if not scoped_frame.empty else pd.Series(dtype=float)
+                    outcome_available_mask = outcome_numeric.notna() if not scoped_frame.empty else pd.Series(dtype=bool)
+                    outcome_available_decisions = set(decision_col[outcome_available_mask].astype(str).tolist()) if not scoped_frame.empty else set()
+                    outcome_unavailable_decisions = valid_scope_decisions - outcome_available_decisions
+
+                    feature_frame = scoped_frame[outcome_available_mask].copy() if not scoped_frame.empty else pd.DataFrame()
+                    feature_available_mask = pd.Series([True] * len(feature_frame), index=feature_frame.index)
                     for col in baseline_cols + features:
-                        if col in valid_frame.columns:
-                            num = pd.to_numeric(valid_frame[col], errors="coerce")
-                            valid_frame = valid_frame[num.notna()]
-                    numeric_or_outcome_excluded = max(len(valid_decisions) - valid_frame.get("decision_timestamp_utc", pd.Series(dtype=str)).astype(str).nunique(), 0)
-                    unavailable = len(unavailable_decisions) + numeric_or_outcome_excluded
+                        if col not in feature_frame.columns:
+                            feature_frame[col] = np.nan
+                        feature_available_mask &= pd.to_numeric(feature_frame[col], errors="coerce").notna()
+                    valid_frame = feature_frame[feature_available_mask].copy()
+                    valid_included_decisions = set(valid_frame.get("decision_timestamp_utc", pd.Series(dtype=str)).astype(str).tolist()) if not valid_frame.empty else set()
+                    feature_numeric_unavailable_decisions = outcome_available_decisions - valid_included_decisions
+                    reconciliation_total = (
+                        len(invalid_decisions)
+                        + len(unavailable_decisions)
+                        + len(outcome_unavailable_decisions)
+                        + len(feature_numeric_unavailable_decisions)
+                        + len(valid_included_decisions)
+                    )
+                    reconciliation_gap = candidate_count - reconciliation_total
+                    reconciliation_status = "matched" if reconciliation_gap == 0 else "mismatch"
                     result_status = "data_quality_blocked" if invalid_decisions else "insufficient_data"
                     tested_folds = 0
                     oos_n = 0
@@ -5351,11 +5608,16 @@ def run_market_level_oos_backtest(panel: pd.DataFrame, integrity: pd.DataFrame, 
                         "model_scope": model_name,
                         "model_clock": clock,
                         "candidate_decision_count": candidate_count,
-                        "valid_included_decision_count": len(valid_frame),
+                        "valid_included_decision_count": len(valid_included_decisions),
                         "valid_oos_observation_count": oos_n,
-                        "unavailable_coverage_exclusion_count": unavailable,
-                        "outcome_unavailable_exclusion_count": numeric_or_outcome_excluded,
+                        "unavailable_coverage_exclusion_count": len(unavailable_decisions),
+                        "scope_unavailable_coverage_exclusion_count": len(unavailable_decisions),
+                        "outcome_unavailable_exclusion_count": len(outcome_unavailable_decisions),
+                        "feature_numeric_unavailable_exclusion_count": len(feature_numeric_unavailable_decisions),
                         "selected_invalid_exclusion_count": len(invalid_decisions),
+                        "reconciliation_total": reconciliation_total,
+                        "reconciliation_gap": reconciliation_gap,
+                        "reconciliation_status": reconciliation_status,
                         "affected_decision_timestamps": ";".join(sorted(invalid_decisions)[:50]),
                         "oos_fold_count": tested_folds,
                         "oos_r_squared_vs_historical_mean": oos_r2,
@@ -5373,7 +5635,7 @@ def run_market_level_oos_backtest(panel: pd.DataFrame, integrity: pd.DataFrame, 
                         "coefficient_fold_dispersion": coef_dispersion,
                         "coefficient_dispersion_method": "std_ddof0",
                         "interaction_coefficient_summary": interaction_summary,
-                        "feature_availability_rate": len(valid_frame) / max(candidate_count, 1),
+                        "feature_availability_rate": len(valid_included_decisions) / max(candidate_count, 1),
                         "decision_time_policy": policy,
                         "source_provenance_policy_revision": MARKET_LEVEL_INTEGRITY_REVISION,
                     })
@@ -5382,10 +5644,15 @@ def run_market_level_oos_backtest(panel: pd.DataFrame, integrity: pd.DataFrame, 
                         "model_scope": model_name,
                         "outcome": outcome,
                         "candidate_decision_count": candidate_count,
-                        "valid_included_decision_count": len(valid_frame),
-                        "unavailable_coverage_exclusion_count": unavailable,
-                        "outcome_unavailable_exclusion_count": numeric_or_outcome_excluded,
+                        "valid_included_decision_count": len(valid_included_decisions),
+                        "unavailable_coverage_exclusion_count": len(unavailable_decisions),
+                        "scope_unavailable_coverage_exclusion_count": len(unavailable_decisions),
+                        "outcome_unavailable_exclusion_count": len(outcome_unavailable_decisions),
+                        "feature_numeric_unavailable_exclusion_count": len(feature_numeric_unavailable_decisions),
                         "selected_invalid_exclusion_count": len(invalid_decisions),
+                        "reconciliation_total": reconciliation_total,
+                        "reconciliation_gap": reconciliation_gap,
+                        "reconciliation_status": reconciliation_status,
                         "result_status": result_status,
                     })
     metrics = pd.DataFrame(metric_rows)
@@ -5409,10 +5676,10 @@ def run_market_level_oos_backtest(panel: pd.DataFrame, integrity: pd.DataFrame, 
     pred_cols = ["target_market", "model_scope", "parent_model_scope", "outcome", "model_clock", "row_index", "decision_timestamp_utc", "test_month", "y_true", "parent_pred", "augmented_pred", "historical_mean_pred"]
     coef_cols = ["target_market", "model_scope", "parent_model_scope", "model_clock", "outcome", "test_month", "feature_name", "standardized_coefficient", "coefficient_sign", "sample_count_train", "sample_count_oos", "fold_status"]
     fold_cols = ["target_market", "model_scope", "parent_model_scope", "outcome", "model_clock", "test_month", "sample_count_train", "sample_count_oos", "unseen_category_count", "fold_status"]
-    metric_cols = ["result_status", "target_market", "outcome", "model_scope", "model_clock", "candidate_decision_count", "valid_included_decision_count", "valid_oos_observation_count", "unavailable_coverage_exclusion_count", "outcome_unavailable_exclusion_count", "selected_invalid_exclusion_count", "affected_decision_timestamps", "oos_fold_count", "oos_r_squared_vs_historical_mean", "parent_oos_r_squared_vs_historical_mean", "incremental_oos_r_squared_vs_parent", "oos_mse", "parent_oos_mse", "delta_oos_mse_vs_parent", "oos_mae", "parent_oos_mae", "delta_oos_mae_vs_parent", "directional_hit_rate", "coefficient_median_across_folds", "coefficient_sign_consistency", "coefficient_fold_dispersion", "coefficient_dispersion_method", "interaction_coefficient_summary", "feature_availability_rate", "decision_time_policy", "source_provenance_policy_revision"]
+    metric_cols = ["result_status", "target_market", "outcome", "model_scope", "model_clock", "candidate_decision_count", "valid_included_decision_count", "valid_oos_observation_count", "unavailable_coverage_exclusion_count", "scope_unavailable_coverage_exclusion_count", "outcome_unavailable_exclusion_count", "feature_numeric_unavailable_exclusion_count", "selected_invalid_exclusion_count", "reconciliation_total", "reconciliation_gap", "reconciliation_status", "affected_decision_timestamps", "oos_fold_count", "oos_r_squared_vs_historical_mean", "parent_oos_r_squared_vs_historical_mean", "incremental_oos_r_squared_vs_parent", "oos_mse", "parent_oos_mse", "delta_oos_mse_vs_parent", "oos_mae", "parent_oos_mae", "delta_oos_mae_vs_parent", "directional_hit_rate", "coefficient_median_across_folds", "coefficient_sign_consistency", "coefficient_fold_dispersion", "coefficient_dispersion_method", "interaction_coefficient_summary", "feature_availability_rate", "decision_time_policy", "source_provenance_policy_revision"]
     comp_cols = ["target_market", "outcome", "model_scope", "parent_model_scope", "result_status", "incremental_oos_r_squared_vs_parent", "delta_oos_mse_vs_parent", "delta_oos_mae_vs_parent", "feature_availability_difference", "interpretation_caveat"]
     regime_cols = ["regime_partition", "status", "threshold_policy"]
-    quality_cols = ["target_market", "model_scope", "outcome", "candidate_decision_count", "valid_included_decision_count", "unavailable_coverage_exclusion_count", "outcome_unavailable_exclusion_count", "selected_invalid_exclusion_count", "result_status"]
+    quality_cols = ["target_market", "model_scope", "outcome", "candidate_decision_count", "valid_included_decision_count", "unavailable_coverage_exclusion_count", "scope_unavailable_coverage_exclusion_count", "outcome_unavailable_exclusion_count", "feature_numeric_unavailable_exclusion_count", "selected_invalid_exclusion_count", "reconciliation_total", "reconciliation_gap", "reconciliation_status", "result_status"]
     return (
         pd.DataFrame(pred_rows, columns=pred_cols),
         pd.DataFrame(coef_rows_all, columns=coef_cols),
@@ -5426,12 +5693,29 @@ def run_market_level_oos_backtest(panel: pd.DataFrame, integrity: pd.DataFrame, 
 
 def market_level_report_text(metrics: pd.DataFrame, quality: pd.DataFrame) -> str:
     valid = int(metrics.get("result_status", pd.Series(dtype=str)).astype(str).eq("valid").sum()) if not metrics.empty else 0
+    reconciliation_cols = [
+        "target_market",
+        "model_scope",
+        "outcome",
+        "candidate_decision_count",
+        "selected_invalid_exclusion_count",
+        "scope_unavailable_coverage_exclusion_count",
+        "outcome_unavailable_exclusion_count",
+        "feature_numeric_unavailable_exclusion_count",
+        "valid_included_decision_count",
+        "reconciliation_gap",
+        "result_status",
+    ]
+    reconciliation = metrics[[c for c in reconciliation_cols if c in metrics.columns]].copy() if not metrics.empty else pd.DataFrame(columns=reconciliation_cols)
     return (
         "# Market-Level Market Impact Backtest v1\n\n"
         "actionization_gate=false\n\n"
         "This is research-only. It does not change live scanner, notification, sizing, broker, or execution behavior.\n\n"
         "CTA and VolControl are rule-based proxies, not observed fund flows. Leveraged ETF pressure is an estimated rebalance proxy, not confirmed execution. Dealer Gamma is reconstructed from option-chain assumptions, not observed dealer inventory or hedge flow. Results are associations, not causal attribution.\n\n"
         f"Valid metric rows: `{valid}`\n\n"
+        "## Reconciliation Summary\n\n"
+        + markdown_table(reconciliation)
+        + "\n\n"
         "## Metrics\n\n"
         + markdown_table(metrics)
         + "\n\n## Data Quality\n\n"
@@ -5577,6 +5861,7 @@ def run(
         dealer_panel = attach_daily_baseline(dealer_panel, daily_baseline)
     dealer_state_panel, dealer_distance_panel, dealer_sample_audit = split_dealer_gamma_state_distance(dealer_panel)
     dealer_gamma_intraday_selection_audit = build_dealer_gamma_intraday_selection_audit(root, lev_panel, cfg)
+    dealer_gamma_source_parity = build_dealer_gamma_source_selection_parity_audit(root, dealer_panel, dealer_gamma_intraday_selection_audit, cfg)
     expiry_calendar_panel, expiry_conditioned_panel, expiry_post_panel, expiry_audit, expiry_outcome_audit, calendar_availability_audit = build_dealer_gamma_expiry_event_panel(root, daily_outcomes, cfg)
     expiry_calendar_panel = attach_daily_baseline(expiry_calendar_panel, open_baseline)
     expiry_conditioned_panel = attach_daily_baseline(expiry_conditioned_panel, open_baseline)
@@ -5742,7 +6027,7 @@ def run(
         "DealerGamma": dealer_panel,
         "DealerGammaExpiryConditioned": expiry_conditioned_panel,
     })
-    selection_parity_audit = pd.concat([cta_vol_selector_parity, selection_parity_audit, lev_selection_parity], ignore_index=True)
+    selection_parity_audit = pd.concat([cta_vol_selector_parity, selection_parity_audit, lev_selection_parity, dealer_gamma_source_parity], ignore_index=True)
     selector_result_audit = build_selector_result_audit(source_candidate_audit, lev_input_audit)
     scope_integrity_gate_audit = build_scope_integrity_gate_audit(selection_parity_audit, lev_primary_input_integrity, expiry_classification_integrity_gate)
     market_level_panel = build_market_level_feature_panel(daily_outcomes, daily_baseline, cta_panel, dealer_panel, lev_panel, dealer_gamma_intraday_selection_audit)
@@ -5753,6 +6038,7 @@ def run(
         leveraged_primary_integrity=lev_primary_input_integrity,
         dealer_eod_panel=dealer_panel,
         dealer_intraday_selection=dealer_gamma_intraday_selection_audit,
+        dealer_gamma_source_parity=dealer_gamma_source_parity,
     )
     market_level_integrity = build_market_level_model_scope_integrity(market_level_panel, market_level_component_provenance)
     market_level_predictions, market_level_fold_coefficients, market_level_fold_audit, market_level_metrics, market_level_incremental, market_level_regime, market_level_quality = run_market_level_oos_backtest(market_level_panel, market_level_integrity, cfg, base_cfg)
@@ -5931,6 +6217,7 @@ def run(
     write_table(market_level_incremental, out / "market_level_incremental_comparison_v1.csv")
     write_table(market_level_regime, out / "market_level_regime_summary_v1.csv")
     write_table(market_level_quality, out / "market_level_data_quality_audit_v1.csv")
+    write_table(dealer_gamma_source_parity, out / "dealer_gamma_source_selection_parity_audit_v1.csv")
     with (out / "market_level_model_spec_v1.json").open("w", encoding="utf-8") as f:
         json.dump(market_level_model_spec(), f, indent=2, sort_keys=True)
     (out / "market_level_backtest_report_v1.md").write_text(market_level_report_text(market_level_metrics, market_level_quality), encoding="utf-8")
@@ -6008,6 +6295,7 @@ def run(
         "market_level_model_spec_v1": out / "market_level_model_spec_v1.json",
         "market_level_backtest_report_v1": out / "market_level_backtest_report_v1.md",
         "dealer_gamma_intraday_selection_audit_v1": out / "dealer_gamma_intraday_selection_audit_v1.csv",
+        "dealer_gamma_source_selection_parity_audit_v1": out / "dealer_gamma_source_selection_parity_audit_v1.csv",
         "gate": root / "market_impact_backtest_gate_audit.md",
     }
 
