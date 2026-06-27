@@ -1,8 +1,12 @@
 {
   "calendar_version": "nyse_regular_sessions_v1",
-  "source_name": "repo_static_nyse_regular_session_calendar",
+  "source_name": "official_or_primary_calendar_source",
+  "source_url_or_identifier": "NYSE regular trading calendar, repo-pinned verified export",
+  "source_retrieved_at_utc": "2026-06-27T00:00:00Z",
+  "source_file_sha256": "3e29560193638047d971c196e788b3d0df9e5356b053d6f4f16ae699f8097727",
+  "generation_method": "manual_verified_export_or_reproducible_script",
   "coverage_start": "2022-01-03",
   "coverage_end": "2026-12-31",
-  "retrieved_at_utc": "2026-06-27T00:00:00Z",
+  "holiday_policy": "all non-regular days explicitly present",
   "early_close_policy": "excluded_from_primary_intraday_or_handled_explicitly"
 }

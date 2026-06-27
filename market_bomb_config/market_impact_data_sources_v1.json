@@ -14,6 +14,7 @@
     "dealer_gamma": "dealer_gamma_proxy_history.csv",
     "expiry_calendar": "market_bomb_config/options_expiry_calendar_v1.csv",
     "nyse_regular_sessions": "market_bomb_config/nyse_regular_sessions_v1.csv",
+    "nyse_regular_sessions_metadata": "market_bomb_config/nyse_regular_sessions_metadata_v1.json",
     "expiry_intraday_rules": "market_bomb_config/market_impact_expiry_intraday_rules_v1.json"
   }
 }

@@ -87,6 +87,10 @@ LEVERAGED_AUDIT_COLUMNS = [
     "target_market",
     "decision_timestamp_utc",
     "bar_timestamp_convention",
+    "decision_price_method",
+    "decision_bar_timestamp_et",
+    "close_price_method",
+    "close_bar_timestamp_et",
     "actual_1530_bar_timestamp_utc",
     "actual_1600_bar_timestamp_utc",
     "prior_regular_close_timestamp_utc",
@@ -133,8 +137,16 @@ EXPIRY_INTRADAY_OUTCOME_AUDIT_COLUMNS = [
     "event_date",
     "comparison_group",
     "decision_timestamp_utc",
+    "bar_timestamp_convention",
+    "provider_bar_semantics_verified",
+    "provider_bar_semantics_source",
+    "provider_bar_semantics_verified_at_utc",
+    "session_open_price_method",
+    "session_open_price_source_field",
+    "session_open_price_timestamp_utc",
     "event_open_bar_timestamp_utc",
     "event_close_bar_timestamp_utc",
+    "outcome_window_label",
     "calendar_session_status",
     "is_early_close",
     "outcome_availability_status",
@@ -150,7 +162,52 @@ MODULE_QUALITY_AUDIT_COLUMNS = [
     "excluded_future_timestamp_count",
     "excluded_missing_timestamp_count",
     "excluded_age_count",
+    "excluded_quality_count",
+    "excluded_target_mismatch_count",
+    "selected_row_count",
     "data_quality_blocking_violation_count",
+    "research_execution_gate",
+    "evidence_verdict",
+]
+
+RAW_FEATURE_CANDIDATE_AUDIT_COLUMNS = [
+    "module",
+    "feature_family",
+    "target_market",
+    "decision_timestamp_utc",
+    "raw_candidate_row_count",
+    "eligible_row_count",
+    "selected_row_count",
+    "excluded_future_timestamp_count",
+    "excluded_missing_timestamp_count",
+    "excluded_age_count",
+    "excluded_quality_count",
+    "excluded_target_mismatch_count",
+    "data_quality_blocking_violation_count",
+    "selected_row_strictly_valid",
+    "clean_replacement_available",
+    "module_gate_recommendation",
+]
+
+EXPIRY_GROUP_OOS_COLUMNS = [
+    "target_market",
+    "comparison_group",
+    "reference_group",
+    "feature_family",
+    "feature_name",
+    "outcome",
+    "sample_count",
+    "oos_sample_count",
+    "test_month_count",
+    "minimum_oos_required",
+    "minimum_test_months_required",
+    "event_group_row_count",
+    "reference_group_row_count",
+    "event_group_oos_row_count",
+    "reference_group_oos_row_count",
+    "event_group_test_month_count",
+    "reference_group_test_month_count",
+    "group_sufficiency_status",
     "research_execution_gate",
     "evidence_verdict",
 ]
@@ -216,6 +273,8 @@ def rules(root: Path) -> dict[str, Any]:
             "dealer_gamma_min_oos_rows": 100,
             "dealer_gamma_min_test_months": 6,
             "dealer_expiry_min_event_rows_per_comparison_group": 20,
+            "dealer_expiry_min_oos_rows_per_group": 20,
+            "dealer_expiry_min_test_months_per_group": 3,
         },
         "primary_decision_bar_et": "15:30",
         "primary_close_bar_et": "16:00",
@@ -720,6 +779,55 @@ def load_nyse_calendar(root: Path) -> pd.DataFrame:
     return df.dropna(subset=["session_date"]).sort_values("session_date").reset_index(drop=True)
 
 
+def load_nyse_calendar_metadata(root: Path) -> dict[str, Any]:
+    return load_json(root, NYSE_CALENDAR_METADATA_PATH, {})
+
+
+def validate_nyse_calendar_provenance(root: Path, calendar: pd.DataFrame) -> dict[str, Any]:
+    metadata = load_nyse_calendar_metadata(root)
+    path = root / NYSE_CALENDAR_PATH
+    if calendar.empty or not path.exists():
+        return {"status": "failed", "reason": "nyse_calendar_file_missing"}
+    required = [
+        "calendar_version",
+        "source_name",
+        "source_url_or_identifier",
+        "source_retrieved_at_utc",
+        "source_file_sha256",
+        "generation_method",
+        "coverage_start",
+        "coverage_end",
+        "holiday_policy",
+        "early_close_policy",
+    ]
+    missing = [key for key in required if not str(metadata.get(key, "")).strip()]
+    if missing:
+        return {"status": "failed", "reason": "nyse_calendar_metadata_missing:" + ",".join(missing)}
+    expected_hash = str(metadata.get("source_file_sha256", "")).lower()
+    actual_hash = hash_file(path).lower()
+    if expected_hash != actual_hash:
+        return {"status": "failed", "reason": "nyse_calendar_source_hash_mismatch"}
+    if "session_date" not in calendar.columns:
+        return {"status": "failed", "reason": "nyse_calendar_session_date_missing"}
+    duplicate_count = int(calendar["session_date"].astype(str).duplicated().sum())
+    if duplicate_count:
+        return {"status": "failed", "reason": "nyse_calendar_duplicate_session_date"}
+    start = str(metadata.get("coverage_start"))
+    end = str(metadata.get("coverage_end"))
+    observed_start = str(calendar["session_date"].min())
+    observed_end = str(calendar["session_date"].max())
+    if start != observed_start or end != observed_end:
+        return {"status": "failed", "reason": "nyse_calendar_metadata_coverage_mismatch"}
+    regular = calendar[calendar.get("is_regular_session", pd.Series(dtype=bool)).astype(bool)]
+    if regular.empty:
+        return {"status": "failed", "reason": "nyse_calendar_regular_session_missing"}
+    if regular.get("regular_open_et", pd.Series(dtype=str)).astype(str).str.strip().eq("").any():
+        return {"status": "failed", "reason": "nyse_calendar_regular_open_missing"}
+    if regular.get("regular_close_et", pd.Series(dtype=str)).astype(str).str.strip().eq("").any():
+        return {"status": "failed", "reason": "nyse_calendar_regular_close_missing"}
+    return {"status": "passed", "reason": ""}
+
+
 def get_nyse_session(day: Any, calendar: pd.DataFrame) -> dict[str, Any]:
     date_str = pd.Timestamp(day).date().isoformat()
     base = {
@@ -764,6 +872,16 @@ def previous_regular_session(day: Any, calendar: pd.DataFrame) -> dict[str, Any]
     if work.empty:
         return None
     return get_nyse_session(work.sort_values("session_date").iloc[-1]["session_date"], calendar)
+
+
+def next_regular_session(day: Any, calendar: pd.DataFrame) -> dict[str, Any] | None:
+    if calendar.empty or "session_date" not in calendar.columns:
+        return None
+    date_str = pd.Timestamp(day).date().isoformat()
+    work = calendar[(calendar["session_date"].astype(str) > date_str) & calendar["is_regular_session"].astype(bool)].copy()
+    if work.empty:
+        return None
+    return get_nyse_session(work.sort_values("session_date").iloc[0]["session_date"], calendar)
 
 
 def session_timestamp_utc(session: dict[str, Any], field: str) -> pd.Timestamp | None:
@@ -1055,6 +1173,10 @@ def build_leveraged_etf_panel(root: Path, cfg: dict[str, Any]) -> tuple[pd.DataF
                     "analysis_mode": "reconstructed_proxy_primary",
                     "sample_split": "expanding_window",
                     "bar_timestamp_convention": cfg.get("bar_timestamp_convention", "bar_end"),
+                    "decision_price_method": "completed_bar_close",
+                    "decision_bar_timestamp_et": "15:30",
+                    "close_price_method": "completed_regular_close_bar_close",
+                    "close_bar_timestamp_et": "16:00",
                     "actual_1530_bar_timestamp_utc": bar_1530.get("timestamp_utc"),
                     "actual_1600_bar_timestamp_utc": bar_close.get("timestamp_utc"),
                     "prior_regular_close_timestamp_utc": prior_regular_close_ts.isoformat(),
@@ -1070,6 +1192,10 @@ def build_leveraged_etf_panel(root: Path, cfg: dict[str, Any]) -> tuple[pd.DataF
                     "feature_family": "LeveragedETF",
                     "decision_timestamp_utc": decision_ts.isoformat(),
                     "bar_timestamp_convention": timestamp_convention,
+                    "decision_price_method": "completed_bar_close",
+                    "decision_bar_timestamp_et": "15:30",
+                    "close_price_method": "completed_regular_close_bar_close",
+                    "close_bar_timestamp_et": "16:00",
                     "actual_1530_bar_timestamp_utc": bar_1530.get("timestamp_utc"),
                     "actual_1600_bar_timestamp_utc": bar_close.get("timestamp_utc"),
                     "prior_regular_close_timestamp_utc": prior_regular_close_ts.isoformat(),
@@ -1336,23 +1462,43 @@ def build_expiry_intraday_outcome(
     day = pd.Timestamp(event_date).date()
     event_rules = expiry_intraday_rules(root)
     convention = str(event_rules.get("bar_timestamp_convention", rules_cfg.get("bar_timestamp_convention", "bar_end")))
-    open_time = parse_et_time(str(event_rules.get("event_primary_open_bar_et", "09:30")), time(9, 30))
-    close_time = parse_et_time(str(event_rules.get("event_primary_close_bar_et", "16:00")), time(16, 0))
+    open_method = str(event_rules.get("regular_session_open_price_method", "first_regular_session_bar_open"))
+    verified = bool(event_rules.get("provider_bar_semantics_verified", False))
+    provider_source = str(event_rules.get("provider_bar_semantics_source", ""))
+    provider_verified_at = str(event_rules.get("provider_bar_semantics_verified_at_utc", ""))
+    open_time = parse_et_time(str(event_rules.get("regular_session_open_bar_timestamp_et", "09:35")), time(9, 35))
+    close_time = parse_et_time(str(event_rules.get("regular_session_close_bar_timestamp_et", event_rules.get("event_primary_close_bar_et", "16:00"))), time(16, 0))
     session = get_nyse_session(day, nyse_calendar)
-    decision_ts = pd.Timestamp.combine(day, open_time).tz_localize(ET).tz_convert(UTC)
+    decision_ts = pd.Timestamp.combine(day, time(9, 30)).tz_localize(ET).tz_convert(UTC)
+    outcome_label = "expiry_session_return_first_regular_bar_open_to_close" if open_method == "first_regular_session_bar_open" else "expiry_session_return_0930_open_to_close"
     audit = {
         "target_market": target,
         "event_date": day.isoformat(),
         "comparison_group": comparison_group,
         "decision_timestamp_utc": decision_ts.isoformat(),
+        "bar_timestamp_convention": convention,
+        "provider_bar_semantics_verified": verified,
+        "provider_bar_semantics_source": provider_source,
+        "provider_bar_semantics_verified_at_utc": provider_verified_at,
+        "session_open_price_method": open_method,
+        "session_open_price_source_field": "open" if open_method == "first_regular_session_bar_open" else str(event_rules.get("session_open_price_source_field", "")),
+        "session_open_price_timestamp_utc": "",
         "event_open_bar_timestamp_utc": "",
         "event_close_bar_timestamp_utc": "",
+        "outcome_window_label": outcome_label,
         "calendar_session_status": session.get("calendar_coverage_status", "missing"),
         "is_early_close": session.get("is_early_close", False),
         "outcome_availability_status": "unavailable",
         "outcome_availability_failure_reason": "",
         "outcome_data_quality": "unavailable",
     }
+    provenance = validate_nyse_calendar_provenance(root, nyse_calendar)
+    if provenance["status"] != "passed":
+        audit["outcome_availability_failure_reason"] = "nyse_calendar_provenance_validation_failed:" + provenance["reason"]
+        return None, audit
+    if not verified:
+        audit["outcome_availability_failure_reason"] = "provider_bar_semantics_unverified"
+        return None, audit
     if session["calendar_coverage_status"] != "covered":
         audit["outcome_availability_failure_reason"] = "nyse_calendar_coverage_missing"
         return None, audit
@@ -1364,6 +1510,9 @@ def build_expiry_intraday_outcome(
         return None, audit
     if convention != "bar_end":
         audit["outcome_availability_failure_reason"] = "expiry_bar_timestamp_convention_unknown"
+        return None, audit
+    if open_method not in {"first_regular_session_bar_open", "official_session_open_field"}:
+        audit["outcome_availability_failure_reason"] = "session_open_price_method_unknown"
         return None, audit
     path = intraday_bars_path(root, target)
     bars = load_intraday_bars(root, target)
@@ -1378,13 +1527,21 @@ def build_expiry_intraday_outcome(
     open_bar = exact_bar(bars, et_times, open_time)
     close_bar = exact_bar(bars, et_times, close_time)
     if open_bar is None:
-        audit["outcome_availability_failure_reason"] = "expiry_exact_open_bar_missing"
+        audit["outcome_availability_failure_reason"] = "expiry_exact_first_regular_bar_missing"
         return None, audit
     if close_bar is None:
         audit["outcome_availability_failure_reason"] = "expiry_exact_regular_close_bar_missing"
         return None, audit
     window = bars[(et_times.dt.time >= open_time) & (et_times.dt.time <= close_time)].copy()
-    event_open = safe_float(open_bar.get("open", open_bar.get("close", np.nan)))
+    if open_method == "official_session_open_field":
+        source_field = str(event_rules.get("session_open_price_source_field", "official_session_open"))
+        if source_field not in bars.columns:
+            audit["outcome_availability_failure_reason"] = "official_session_open_field_missing"
+            return None, audit
+        event_open = safe_float(open_bar.get(source_field, np.nan))
+        audit["session_open_price_source_field"] = source_field
+    else:
+        event_open = safe_float(open_bar.get("open", open_bar.get("close", np.nan)))
     event_close = safe_float(close_bar.get("close", np.nan))
     high = safe_float(window["high"].max(), np.nan) if "high" in window.columns else np.nan
     low = safe_float(window["low"].min(), np.nan) if "low" in window.columns else np.nan
@@ -1393,6 +1550,7 @@ def build_expiry_intraday_outcome(
     audit.update({
         "event_open_bar_timestamp_utc": open_bar.get("timestamp_utc"),
         "event_close_bar_timestamp_utc": close_bar.get("timestamp_utc"),
+        "session_open_price_timestamp_utc": open_bar.get("timestamp_utc"),
         "outcome_availability_status": "available",
         "outcome_availability_failure_reason": "",
         "outcome_data_quality": "intraday_primary",
@@ -1403,13 +1561,20 @@ def build_expiry_intraday_outcome(
         "outcome_end_timestamp_utc": close_bar.get("timestamp_utc"),
         "event_open_bar_timestamp_utc": open_bar.get("timestamp_utc"),
         "event_close_bar_timestamp_utc": close_bar.get("timestamp_utc"),
-        "expiry_session_return_0930_to_close": event_close / event_open - 1 if event_open and pd.notna(event_open) and pd.notna(event_close) else np.nan,
-        "expiry_session_absolute_return_0930_to_close": abs(event_close / event_open - 1) if event_open and pd.notna(event_open) and pd.notna(event_close) else np.nan,
+        outcome_label: event_close / event_open - 1 if event_open and pd.notna(event_open) and pd.notna(event_close) else np.nan,
+        outcome_label.replace("return_", "absolute_return_"): abs(event_close / event_open - 1) if event_open and pd.notna(event_open) and pd.notna(event_close) else np.nan,
         "expiry_session_high_low_range_pct": session_range / event_open if event_open and pd.notna(session_range) else np.nan,
         "expiry_session_close_location_value": close_location,
         "intraday_outcome_source_path": str(path.relative_to(root)).replace("\\", "/"),
         "intraday_outcome_source_hash": hash_file(path),
         "bar_timestamp_convention": convention,
+        "provider_bar_semantics_verified": verified,
+        "provider_bar_semantics_source": provider_source,
+        "provider_bar_semantics_verified_at_utc": provider_verified_at,
+        "session_open_price_method": open_method,
+        "session_open_price_source_field": audit["session_open_price_source_field"],
+        "session_open_price_timestamp_utc": open_bar.get("timestamp_utc"),
+        "outcome_window_label": outcome_label,
         "outcome_data_quality": "intraday_primary",
     }
     return outcome, audit
@@ -1436,21 +1601,46 @@ def build_dealer_gamma_expiry_event_panel(root: Path, daily_outcomes: pd.DataFra
         flags = expiry_flags_for_date(expiry, day)
         intraday_outcome, outcome_audit = build_expiry_intraday_outcome(root, target, day, group, nyse_calendar, cfg)
         outcome_audit_rows.append(outcome_audit)
+        post_session = next_regular_session(day, nyse_calendar)
+        post_start_ts = session_timestamp_utc(post_session, "regular_open_et") if post_session else None
+        post_end_ts = session_timestamp_utc(post_session, "regular_close_et") if post_session else None
+        post_available = post_session is not None and bool(post_session.get("is_regular_session")) and not bool(post_session.get("is_early_close"))
         post_row = {
             "analysis_id": f"expiry_post_secondary_{target}_{day.date()}",
+            "module": "ExpiryPostSecondary",
             "feature_family": "ExpiryPostSecondary",
             "feature_name": group,
+            "feature_value": flags["monthly_expiry_flag"] + flags["quarterly_expiry_flag"] + flags["triple_witching_flag"],
+            "feature_unit": "event_flag",
             "target_market": target,
             "decision_date": day.date().isoformat(),
             "decision_timestamp_utc": decision_ts.isoformat(),
+            "feature_as_of_timestamp_utc": decision_ts.isoformat(),
+            "effective_available_at_utc": decision_ts.isoformat(),
+            "feature_age_hours": 0.0,
+            "availability_basis": "expiry_calendar_effective_available_at_decision_open",
+            "availability_confidence": "medium",
+            "source_path_or_provider": str(EXPIRY_CALENDAR_PATH).replace("\\", "/"),
+            "source_hash_or_request_id": hash_file(root / EXPIRY_CALENDAR_PATH) if (root / EXPIRY_CALENDAR_PATH).exists() else "",
+            "data_type": "calendar_event",
+            "is_proxy": False,
+            "observed_flow": False,
+            "quality_grade": "high",
+            "availability_status": "available" if post_available else "unavailable",
+            "availability_failure_reason": "" if post_available else "post_expiry_regular_session_unavailable",
             "post_expiry_next_session_return": outcome.get("next_session_return", np.nan),
             "post_expiry_next_session_absolute_return": outcome.get("next_session_absolute_return", np.nan),
             "post_expiry_next_session_high_low_range_pct": outcome.get("next_session_high_low_range_pct", np.nan),
+            "outcome_start_timestamp_utc": post_start_ts.isoformat() if post_start_ts is not None else "",
+            "outcome_end_timestamp_utc": post_end_ts.isoformat() if post_end_ts is not None else "",
+            "post_expiry_session_date": post_session.get("session_date", "") if post_session else "",
+            "post_expiry_session_calendar_status": post_session.get("calendar_coverage_status", "missing") if post_session else "missing",
             "comparison_group": group,
             "primary_or_robustness": "secondary",
             **flags,
         }
-        post_rows.append(post_row)
+        if post_available:
+            post_rows.append(post_row)
         if intraday_outcome is None:
             continue
         row = outcome.to_dict()
@@ -2015,6 +2205,143 @@ def build_no_lookahead_audit(feature_join: pd.DataFrame) -> tuple[pd.DataFrame, 
     return audit, "passed" if bool(audit["no_lookahead_passed"].all()) else "failed"
 
 
+def audit_raw_feature_candidates(
+    raw_feature_rows: pd.DataFrame,
+    module: str,
+    target_market: str,
+    decision_timestamp_utc: Any,
+    max_feature_age_hours: float,
+) -> dict[str, Any]:
+    decision_ts = parse_ts(decision_timestamp_utc)
+    rows = raw_feature_rows.copy()
+    feature_family = str(rows.get("feature_family", pd.Series([module])).iloc[0]) if not rows.empty else module
+    result = {
+        "module": module,
+        "feature_family": feature_family,
+        "target_market": target_market,
+        "decision_timestamp_utc": decision_timestamp_utc,
+        "raw_candidate_row_count": len(rows),
+        "eligible_row_count": 0,
+        "selected_row_count": 0,
+        "excluded_future_timestamp_count": 0,
+        "excluded_missing_timestamp_count": 0,
+        "excluded_age_count": 0,
+        "excluded_quality_count": 0,
+        "excluded_target_mismatch_count": 0,
+        "data_quality_blocking_violation_count": 0,
+        "selected_row_strictly_valid": False,
+        "clean_replacement_available": False,
+        "module_gate_recommendation": "data_quality_blocked",
+    }
+    if rows.empty or decision_ts is None:
+        return result
+    target_series = rows.get("target_market", pd.Series([target_market] * len(rows), index=rows.index)).astype(str).str.upper()
+    target_ok = target_series.eq(str(target_market).upper())
+    result["excluded_target_mismatch_count"] = int((~target_ok).sum())
+    rows = rows[target_ok].copy()
+    if rows.empty:
+        return result
+    asof = pd.to_datetime(rows.get("feature_as_of_timestamp_utc", pd.Series(index=rows.index, dtype=object)), utc=True, errors="coerce")
+    eff = pd.to_datetime(rows.get("effective_available_at_utc", pd.Series(index=rows.index, dtype=object)), utc=True, errors="coerce")
+    missing = asof.isna() | eff.isna()
+    future = (asof > decision_ts) | (eff > decision_ts)
+    age = (decision_ts - eff).dt.total_seconds() / 3600
+    age_missing = age.isna()
+    age_bad = age > float(max_feature_age_hours)
+    quality = rows.get("quality_grade", rows.get("raw_chain_quality", pd.Series(["high"] * len(rows), index=rows.index))).astype(str).str.lower()
+    quality_bad = quality.isin(["bad", "low", "corrupt", "incomplete", "false"])
+    eligible = ~(missing | future | age_missing | age_bad | quality_bad)
+    result["excluded_missing_timestamp_count"] = int(missing.sum() + age_missing.sum())
+    result["excluded_future_timestamp_count"] = int(future.sum())
+    result["excluded_age_count"] = int(age_bad.sum())
+    result["excluded_quality_count"] = int(quality_bad.sum())
+    result["eligible_row_count"] = int(eligible.sum())
+    result["data_quality_blocking_violation_count"] = int((missing | future | age_bad | age_missing).sum())
+    if eligible.any():
+        result["selected_row_count"] = 1
+        result["selected_row_strictly_valid"] = True
+        result["clean_replacement_available"] = True
+        result["module_gate_recommendation"] = "evaluate"
+    else:
+        result["module_gate_recommendation"] = "data_quality_blocked"
+    return result
+
+
+def build_raw_feature_candidate_quality_audit(feature_join: pd.DataFrame, cfg: dict[str, Any]) -> pd.DataFrame:
+    if feature_join.empty:
+        return pd.DataFrame(columns=RAW_FEATURE_CANDIDATE_AUDIT_COLUMNS)
+    rows: list[dict[str, Any]] = []
+    max_age = safe_float(cfg.get("max_feature_age_hours", 96), 96)
+    for keys, group in feature_join.groupby(["module", "feature_family", "target_market", "decision_timestamp_utc"], dropna=False):
+        module, feature_family, target, decision_ts = keys
+        audit = audit_raw_feature_candidates(group, str(module), str(target), decision_ts, max_age)
+        audit["feature_family"] = str(feature_family)
+        rows.append(audit)
+    return pd.DataFrame(rows, columns=RAW_FEATURE_CANDIDATE_AUDIT_COLUMNS)
+
+
+def raw_quality_blocked_modules(raw_candidate_audit: pd.DataFrame) -> set[str]:
+    if raw_candidate_audit.empty:
+        return set()
+    blocked = raw_candidate_audit[raw_candidate_audit["module_gate_recommendation"].astype(str).eq("data_quality_blocked")]
+    return set(blocked.get("module", pd.Series(dtype=str)).astype(str).replace("", np.nan).dropna().tolist())
+
+
+def build_expiry_group_sample_sufficiency_audit(
+    panel: pd.DataFrame,
+    *,
+    feature_family: str,
+    outcomes: list[str],
+    min_oos_rows: int,
+    min_test_months: int,
+) -> pd.DataFrame:
+    if panel.empty:
+        return pd.DataFrame(columns=EXPIRY_GROUP_OOS_COLUMNS)
+    reference_group = "non_expiry_friday"
+    event_groups = ["triple_witching", "quarterly_expiry_non_triple", "monthly_expiry_non_quarterly"]
+    rows: list[dict[str, Any]] = []
+    work = panel.copy()
+    work["test_month"] = pd.to_datetime(work.get("decision_timestamp_utc"), utc=True, errors="coerce").dt.tz_convert(ET).dt.to_period("M").astype(str)
+    for target, target_panel in work.groupby("target_market"):
+        ref = target_panel[target_panel.get("comparison_group", pd.Series(dtype=str)).astype(str).eq(reference_group)]
+        for group_name in event_groups + [reference_group]:
+            event = target_panel[target_panel.get("comparison_group", pd.Series(dtype=str)).astype(str).eq(group_name)]
+            for outcome in outcomes:
+                if outcome not in target_panel.columns:
+                    continue
+                event_valid = event[event[outcome].notna()]
+                ref_valid = ref[ref[outcome].notna()]
+                event_months = int(event_valid["test_month"].nunique()) if not event_valid.empty else 0
+                ref_months = int(ref_valid["test_month"].nunique()) if not ref_valid.empty else 0
+                event_n = len(event_valid)
+                ref_n = len(ref_valid)
+                sufficient = event_n >= min_oos_rows and ref_n >= min_oos_rows and event_months >= min_test_months and ref_months >= min_test_months
+                gate = "passed" if sufficient else "insufficient_data"
+                rows.append({
+                    "target_market": target,
+                    "comparison_group": group_name,
+                    "reference_group": reference_group,
+                    "feature_family": feature_family,
+                    "feature_name": "expiry_event_flags",
+                    "outcome": outcome,
+                    "sample_count": event_n,
+                    "oos_sample_count": event_n,
+                    "test_month_count": event_months,
+                    "minimum_oos_required": min_oos_rows,
+                    "minimum_test_months_required": min_test_months,
+                    "event_group_row_count": event_n,
+                    "reference_group_row_count": ref_n,
+                    "event_group_oos_row_count": event_n,
+                    "reference_group_oos_row_count": ref_n,
+                    "event_group_test_month_count": event_months,
+                    "reference_group_test_month_count": ref_months,
+                    "group_sufficiency_status": gate,
+                    "research_execution_gate": gate,
+                    "evidence_verdict": gate,
+                })
+    return pd.DataFrame(rows, columns=EXPIRY_GROUP_OOS_COLUMNS)
+
+
 def research_gate_from_oos(results: pd.DataFrame, engine_requested: bool) -> str:
     if not engine_requested:
         return "not_run"
@@ -2050,16 +2377,17 @@ def apply_data_quality_block(results: pd.DataFrame, module_name: str, blocked: s
         out = pd.DataFrame([{"module": module_name}])
     out["research_execution_gate"] = "data_quality_blocked"
     out["evidence_verdict"] = "data_quality_blocked"
-    out["p_value_status"] = "not_run"
+    out["p_value_status"] = "not_run_data_quality_blocked"
     out["raw_p_value"] = np.nan
     out["adjusted_p_value"] = np.nan
     return out
 
 
-def build_module_data_quality_propagation_audit(no_lookahead: pd.DataFrame, oos_by_module: dict[str, pd.DataFrame]) -> pd.DataFrame:
+def build_module_data_quality_propagation_audit(no_lookahead: pd.DataFrame, oos_by_module: dict[str, pd.DataFrame], raw_candidate_audit: pd.DataFrame | None = None) -> pd.DataFrame:
     rows = []
     for module, result in oos_by_module.items():
         module_audit = no_lookahead[no_lookahead.get("module", pd.Series(dtype=str)).astype(str).eq(module)] if not no_lookahead.empty else pd.DataFrame()
+        raw_audit = raw_candidate_audit[raw_candidate_audit.get("module", pd.Series(dtype=str)).astype(str).eq(module)] if raw_candidate_audit is not None and not raw_candidate_audit.empty else pd.DataFrame()
         failed = module_audit[~module_audit.get("no_lookahead_passed", pd.Series(dtype=bool)).astype(bool)] if not module_audit.empty else pd.DataFrame()
         reasons = failed.get("violation_reason", pd.Series(dtype=str)).astype(str)
         missing = reasons.str.contains("missing_required_timestamp|feature_age_missing", regex=True).sum() if not reasons.empty else 0
@@ -2076,12 +2404,15 @@ def build_module_data_quality_propagation_audit(no_lookahead: pd.DataFrame, oos_
         rows.append({
             "module": module,
             "target_market": "",
-            "raw_candidate_row_count": len(module_audit),
-            "eligible_row_count": eligible,
-            "excluded_future_timestamp_count": int(future),
-            "excluded_missing_timestamp_count": int(missing),
-            "excluded_age_count": int(age),
-            "data_quality_blocking_violation_count": len(failed),
+            "raw_candidate_row_count": int(pd.to_numeric(raw_audit.get("raw_candidate_row_count", pd.Series(dtype=float)), errors="coerce").fillna(0).sum()) if not raw_audit.empty else len(module_audit),
+            "eligible_row_count": int(pd.to_numeric(raw_audit.get("eligible_row_count", pd.Series(dtype=float)), errors="coerce").fillna(0).sum()) if not raw_audit.empty else eligible,
+            "excluded_future_timestamp_count": int(future) + (int(pd.to_numeric(raw_audit.get("excluded_future_timestamp_count", pd.Series(dtype=float)), errors="coerce").fillna(0).sum()) if not raw_audit.empty else 0),
+            "excluded_missing_timestamp_count": int(missing) + (int(pd.to_numeric(raw_audit.get("excluded_missing_timestamp_count", pd.Series(dtype=float)), errors="coerce").fillna(0).sum()) if not raw_audit.empty else 0),
+            "excluded_age_count": int(age) + (int(pd.to_numeric(raw_audit.get("excluded_age_count", pd.Series(dtype=float)), errors="coerce").fillna(0).sum()) if not raw_audit.empty else 0),
+            "excluded_quality_count": int(pd.to_numeric(raw_audit.get("excluded_quality_count", pd.Series(dtype=float)), errors="coerce").fillna(0).sum()) if not raw_audit.empty else 0,
+            "excluded_target_mismatch_count": int(pd.to_numeric(raw_audit.get("excluded_target_mismatch_count", pd.Series(dtype=float)), errors="coerce").fillna(0).sum()) if not raw_audit.empty else 0,
+            "selected_row_count": int(pd.to_numeric(raw_audit.get("selected_row_count", pd.Series(dtype=float)), errors="coerce").fillna(0).sum()) if not raw_audit.empty else eligible,
+            "data_quality_blocking_violation_count": len(failed) + (int(pd.to_numeric(raw_audit.get("data_quality_blocking_violation_count", pd.Series(dtype=float)), errors="coerce").fillna(0).sum()) if not raw_audit.empty else 0),
             "research_execution_gate": gate,
             "evidence_verdict": verdict,
         })
@@ -2113,6 +2444,7 @@ def source_inventory(root: Path) -> pd.DataFrame:
         root / "market_bomb_history" / "dealer_gamma_proxy_history.csv",
         root / "market_bomb_history" / "leveraged_etf_aum_history.csv",
         root / NYSE_CALENDAR_PATH,
+        root / NYSE_CALENDAR_METADATA_PATH,
         root / EXPIRY_INTRADAY_RULES_PATH,
     ]
     rows = []
@@ -2126,7 +2458,7 @@ def source_inventory(root: Path) -> pd.DataFrame:
     return pd.DataFrame(rows)
 
 
-def build_nyse_session_calendar_audit(calendar: pd.DataFrame) -> pd.DataFrame:
+def build_nyse_session_calendar_audit(calendar: pd.DataFrame, root: Path | None = None) -> pd.DataFrame:
     if calendar.empty:
         return pd.DataFrame([{
             "session_date": "",
@@ -2140,6 +2472,7 @@ def build_nyse_session_calendar_audit(calendar: pd.DataFrame) -> pd.DataFrame:
             "availability_status": "unavailable",
             "availability_failure_reason": "nyse_calendar_file_missing",
         }], columns=NYSE_SESSION_AUDIT_COLUMNS)
+    provenance = validate_nyse_calendar_provenance(root, calendar) if root is not None else {"status": "passed", "reason": ""}
     rows = []
     for _, row in calendar.iterrows():
         is_regular = bool(row.get("is_regular_session", False))
@@ -2152,8 +2485,8 @@ def build_nyse_session_calendar_audit(calendar: pd.DataFrame) -> pd.DataFrame:
             "regular_close_et": row.get("regular_close_et", ""),
             "calendar_source": row.get("calendar_source", ""),
             "calendar_version": row.get("calendar_version", ""),
-            "availability_status": "available" if is_regular else "unavailable",
-            "availability_failure_reason": "" if is_regular else "not_regular_session",
+            "availability_status": "available" if is_regular and provenance["status"] == "passed" else "unavailable",
+            "availability_failure_reason": "" if is_regular and provenance["status"] == "passed" else ("nyse_calendar_provenance_validation_failed:" + provenance["reason"] if provenance["status"] != "passed" else "not_regular_session"),
         })
     return pd.DataFrame(rows, columns=NYSE_SESSION_AUDIT_COLUMNS)
 
@@ -2164,6 +2497,7 @@ def write_reports(
     lev_oos: pd.DataFrame,
     dealer_oos: pd.DataFrame,
     expiry_oos: pd.DataFrame,
+    expiry_group_oos: pd.DataFrame,
     gate: dict[str, Any],
     refresh_rows: list[dict[str, Any]] | None = None,
 ) -> None:
@@ -2182,13 +2516,15 @@ def write_reports(
     expiry_report = [
         header,
         "event decision time: `D 09:30 ET`\n\n",
-        "strict intraday outcome: `D 09:30 ET -> regular close`, early closes excluded from primary.\n\n",
+        "strict intraday outcome: `first regular-session bar open -> regular close` when provider bar semantics are verified; early closes excluded from primary.\n\n",
         "## Calendar-only primary event study\n\n",
         markdown_table(expiry_oos[expiry_oos.get("test_family", pd.Series(dtype=str)).astype(str).eq("dealer_gamma_expiry_calendar_event")] if not expiry_oos.empty else expiry_oos),
         "\n\n## Gamma-conditioned primary event study\n\n",
         markdown_table(expiry_oos[expiry_oos.get("test_family", pd.Series(dtype=str)).astype(str).eq("dealer_gamma_expiry_conditioned")] if not expiry_oos.empty else expiry_oos),
         "\n\n## Post-expiry secondary analysis\n\n",
         markdown_table(expiry_oos[expiry_oos.get("test_family", pd.Series(dtype=str)).astype(str).eq("dealer_gamma_expiry_post_event_secondary")] if not expiry_oos.empty else expiry_oos),
+        "\n\n## Group sample sufficiency\n\n",
+        markdown_table(expiry_group_oos),
         "\n\nactionization_gate=false\n",
     ]
     (reports / "dealer_gamma_expiry_event_study.md").write_text("".join(expiry_report), encoding="utf-8")
@@ -2323,7 +2659,7 @@ def run(
         module="ExpiryCalendar",
         test_family="dealer_gamma_expiry_calendar_event",
         feature_sets={"expiry_event_flags": mappings.get("expiry_event", [])},
-        outcomes=["expiry_session_absolute_return_0930_to_close", "expiry_session_high_low_range_pct", "expiry_session_close_location_value"],
+        outcomes=["expiry_session_absolute_return_first_regular_bar_open_to_close", "expiry_session_high_low_range_pct", "expiry_session_close_location_value"],
         baseline_cols=base_cfg.get("daily", []),
         cfg=cfg,
         min_oos_rows=int(min_cfg.get("dealer_expiry_min_event_rows_per_comparison_group", 20)),
@@ -2334,7 +2670,7 @@ def run(
         module="DealerGammaExpiryConditioned",
         test_family="dealer_gamma_expiry_conditioned",
         feature_sets={"expiry_conditioned": mappings.get("expiry_conditioned", [])},
-        outcomes=["expiry_session_absolute_return_0930_to_close", "expiry_session_high_low_range_pct", "expiry_session_close_location_value"],
+        outcomes=["expiry_session_absolute_return_first_regular_bar_open_to_close", "expiry_session_high_low_range_pct", "expiry_session_close_location_value"],
         baseline_cols=base_cfg.get("daily", []),
         cfg=cfg,
         min_oos_rows=int(min_cfg.get("dealer_expiry_min_event_rows_per_comparison_group", 20)),
@@ -2384,12 +2720,14 @@ def run(
         dealer_panel.assign(module="DealerGamma") if not dealer_panel.empty else pd.DataFrame(),
         expiry_calendar_panel.assign(module="ExpiryCalendar") if not expiry_calendar_panel.empty else pd.DataFrame(),
         expiry_conditioned_panel.assign(module="DealerGammaExpiryConditioned") if not expiry_conditioned_panel.empty else pd.DataFrame(),
+        expiry_post_panel.assign(module="ExpiryPostSecondary") if not expiry_post_panel.empty else pd.DataFrame(),
     ], ignore_index=True)
     feature_join = ensure_columns(feature_join, PANEL_COMMON_COLUMNS)
     if not feature_join.empty:
         feature_join["max_feature_age_hours"] = cfg.get("max_feature_age_hours", 96)
     no_lookahead, no_lookahead_status = build_no_lookahead_audit(feature_join)
-    blocked_modules = quality_blocked_modules(no_lookahead)
+    raw_candidate_audit = build_raw_feature_candidate_quality_audit(feature_join, cfg)
+    blocked_modules = quality_blocked_modules(no_lookahead) | raw_quality_blocked_modules(raw_candidate_audit)
     cta_oos = apply_data_quality_block(cta_oos, "CTA_Vol", blocked_modules)
     lev_oos = apply_data_quality_block(lev_oos, "LeveragedETF", blocked_modules)
     dealer_state_oos = apply_data_quality_block(dealer_state_oos, "DealerGamma", blocked_modules)
@@ -2407,7 +2745,22 @@ def run(
         "ExpiryCalendar": expiry_calendar_oos,
         "DealerGammaExpiryConditioned": expiry_conditioned_oos,
         "ExpiryPostSecondary": expiry_post_oos,
-    })
+    }, raw_candidate_audit)
+    expiry_group_calendar = build_expiry_group_sample_sufficiency_audit(
+        expiry_calendar_panel,
+        feature_family="ExpiryCalendar",
+        outcomes=["expiry_session_absolute_return_first_regular_bar_open_to_close", "expiry_session_high_low_range_pct", "expiry_session_close_location_value"],
+        min_oos_rows=int(min_cfg.get("dealer_expiry_min_oos_rows_per_group", min_cfg.get("dealer_expiry_min_event_rows_per_comparison_group", 20))),
+        min_test_months=int(min_cfg.get("dealer_expiry_min_test_months_per_group", 3)),
+    )
+    expiry_group_conditioned = build_expiry_group_sample_sufficiency_audit(
+        expiry_conditioned_panel,
+        feature_family="DealerGammaExpiryConditioned",
+        outcomes=["expiry_session_absolute_return_first_regular_bar_open_to_close", "expiry_session_high_low_range_pct", "expiry_session_close_location_value"],
+        min_oos_rows=int(min_cfg.get("dealer_expiry_min_oos_rows_per_group", min_cfg.get("dealer_expiry_min_event_rows_per_comparison_group", 20))),
+        min_test_months=int(min_cfg.get("dealer_expiry_min_test_months_per_group", 3)),
+    )
+    expiry_group_oos = pd.concat([expiry_group_calendar, expiry_group_conditioned], ignore_index=True)
     refresh_rows = refresh_status_rows(refresh_daily_prices, refresh_intraday_prices, run_gamma_surrogate_exploration)
     if refresh_rows:
         data_quality = pd.concat([data_quality, pd.DataFrame(refresh_rows).rename(columns={"status": "verdict"})], ignore_index=True)
@@ -2465,6 +2818,8 @@ def run(
     (out / "feature_outcome_join_audit.md").write_text("# Feature Outcome Join Audit\n\n" + markdown_table(feature_join) + "\n", encoding="utf-8")
     no_lookahead.to_csv(out / "no_lookahead_audit.csv", index=False)
     (out / "no_lookahead_audit.md").write_text("# No Lookahead Audit\n\n" + markdown_table(no_lookahead) + "\n", encoding="utf-8")
+    write_table(raw_candidate_audit, out / "raw_feature_candidate_quality_audit.csv")
+    (out / "raw_feature_candidate_quality_audit.md").write_text("# Raw Feature Candidate Quality Audit\n\n" + markdown_table(raw_candidate_audit) + "\n", encoding="utf-8")
     write_table(daily_outcomes, out / "daily_market_outcomes.csv", out / "daily_market_outcomes.parquet")
     write_table(cta_panel, out / "cta_vol_primary_panel.csv", out / "cta_vol_primary_panel.parquet")
     write_table(cta_oos, out / "cta_vol_primary_oos_results.csv")
@@ -2499,7 +2854,9 @@ def run(
     write_table(expiry_outcome_audit, out / "expiry_intraday_outcome_audit.csv")
     write_table(expiry_calendar_panel, out / "expiry_intraday_outcome_panel.csv")
     write_table(module_quality_audit, out / "module_data_quality_propagation_audit.csv")
-    write_table(build_nyse_session_calendar_audit(load_nyse_calendar(root)), out / "nyse_session_calendar_audit.csv")
+    write_table(expiry_group_oos, out / "expiry_group_sample_sufficiency_audit.csv")
+    write_table(expiry_group_oos, out / "dealer_gamma_expiry_group_oos_results.csv")
+    write_table(build_nyse_session_calendar_audit(load_nyse_calendar(root), root), out / "nyse_session_calendar_audit.csv")
     write_table(pd.concat([cta_folds, lev_folds, dealer_state_folds, dealer_distance_folds, expiry_calendar_folds, expiry_conditioned_folds, expiry_post_folds], ignore_index=True), out / "feature_fold_audit.csv")
     write_table(descriptive_summary, out / "descriptive_association_summary.csv")
     write_table(cta_panel, out / "cta_vol_market_impact_panel.csv", out / "cta_vol_market_impact_panel.parquet")
@@ -2513,7 +2870,7 @@ def run(
     with (out / "analysis_manifest.json").open("w", encoding="utf-8") as f:
         json.dump(manifest, f, indent=2, sort_keys=True)
     (root / "market_impact_backtest_gate_audit.md").write_text(gate_audit_text(gate), encoding="utf-8")
-    write_reports(root, cta_oos, lev_oos, dealer_oos, expiry_oos, gate, refresh_rows)
+    write_reports(root, cta_oos, lev_oos, dealer_oos, expiry_oos, expiry_group_oos, gate, refresh_rows)
     return {
         "source_inventory": out / "source_inventory.csv",
         "feature_availability_audit": out / "feature_availability_audit.csv",
@@ -2526,7 +2883,10 @@ def run(
         "dealer_gamma_expiry_event_oos_results": out / "dealer_gamma_expiry_event_oos_results.csv",
         "nyse_session_calendar_audit": out / "nyse_session_calendar_audit.csv",
         "expiry_intraday_outcome_audit": out / "expiry_intraday_outcome_audit.csv",
+        "raw_feature_candidate_quality_audit": out / "raw_feature_candidate_quality_audit.csv",
         "module_data_quality_propagation_audit": out / "module_data_quality_propagation_audit.csv",
+        "expiry_group_sample_sufficiency_audit": out / "expiry_group_sample_sufficiency_audit.csv",
+        "dealer_gamma_expiry_group_oos_results": out / "dealer_gamma_expiry_group_oos_results.csv",
         "gate": root / "market_impact_backtest_gate_audit.md",
     }
 

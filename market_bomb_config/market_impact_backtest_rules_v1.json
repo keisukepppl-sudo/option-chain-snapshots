@@ -26,7 +26,9 @@
     "leveraged_etf_complete_universe_coverage_min": 0.8,
     "dealer_gamma_min_oos_rows": 100,
     "dealer_gamma_min_test_months": 6,
-    "dealer_expiry_min_event_rows_per_comparison_group": 20
+    "dealer_expiry_min_event_rows_per_comparison_group": 20,
+    "dealer_expiry_min_oos_rows_per_group": 20,
+    "dealer_expiry_min_test_months_per_group": 3
   },
   "primary_decision_bar_et": "15:30",
   "primary_close_bar_et": "16:00",

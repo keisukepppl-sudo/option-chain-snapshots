@@ -1,8 +1,12 @@
 {
   "version": "market_impact_expiry_intraday_rules_v1",
   "bar_timestamp_convention": "bar_end",
-  "event_primary_open_bar_et": "09:30",
-  "event_primary_close_bar_et": "16:00",
-  "event_primary_bar_interval_minutes": 5,
+  "regular_session_open_price_method": "first_regular_session_bar_open",
+  "regular_session_open_bar_timestamp_et": "09:35",
+  "regular_session_close_bar_timestamp_et": "16:00",
+  "bar_interval_minutes": 5,
+  "provider_bar_semantics_verified": false,
+  "provider_bar_semantics_source": "",
+  "provider_bar_semantics_verified_at_utc": "",
   "daily_ohlc_proxy_outcome_is_primary": false
 }
