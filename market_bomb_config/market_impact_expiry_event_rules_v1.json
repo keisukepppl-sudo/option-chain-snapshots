@@ -1,0 +1,15 @@
+{
+  "version": "market_impact_expiry_event_rules_v1",
+  "decision_time_et": "09:30",
+  "primary_outcome_window": "event_day_regular_session",
+  "secondary_outcome_window": "next_regular_session",
+  "event_groups": [
+    "triple_witching",
+    "quarterly_expiry_non_triple",
+    "monthly_expiry_non_quarterly",
+    "non_expiry_friday"
+  ],
+  "calendar_only_study": true,
+  "dealer_gamma_conditioned_study": true,
+  "daily_ohlc_proxy_outcome_is_primary": false
+}

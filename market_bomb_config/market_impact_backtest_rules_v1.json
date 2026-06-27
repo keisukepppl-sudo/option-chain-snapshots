@@ -28,6 +28,8 @@
     "dealer_gamma_min_test_months": 6,
     "dealer_expiry_min_event_rows_per_comparison_group": 20
   },
+  "primary_decision_bar_et": "15:30",
+  "primary_close_bar_et": "16:00",
   "bar_timestamp_convention": "bar_end",
   "actionization_allowed": false
 }

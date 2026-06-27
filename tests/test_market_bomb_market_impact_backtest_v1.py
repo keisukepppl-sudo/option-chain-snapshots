@@ -253,3 +253,177 @@ def test_no_lookahead_audit_fails_effective_after_decision():
     audit, status = m.build_no_lookahead_audit(join)
     assert status == "failed"
     assert audit.loc[0, "no_lookahead_passed"] is False or audit.loc[0, "no_lookahead_passed"] == False
+
+
+def test_no_lookahead_audit_fails_missing_required_timestamps_and_age():
+    join = pd.DataFrame([{"module": "X", "feature_family": "X", "target_market": "QQQ", "decision_timestamp_utc": "2026-01-05T20:30:00Z"}])
+    audit, status = m.build_no_lookahead_audit(join)
+    assert status == "failed"
+    assert "missing_required_timestamp:feature_asof_timestamp_missing" in audit.loc[0, "violation_reason"]
+    assert "effective_available_timestamp_missing" in audit.loc[0, "violation_reason"]
+    assert "feature_age_missing" in audit.loc[0, "violation_reason"]
+
+
+def test_no_lookahead_audit_fails_feature_age_over_max():
+    join = pd.DataFrame(
+        [
+            {
+                "module": "X",
+                "feature_family": "X",
+                "target_market": "QQQ",
+                "decision_timestamp_utc": "2026-01-05T20:30:00Z",
+                "feature_as_of_timestamp_utc": "2026-01-05T19:30:00Z",
+                "effective_available_at_utc": "2026-01-05T19:30:00Z",
+                "feature_age_hours": 100,
+                "max_feature_age_hours": 96,
+            }
+        ]
+    )
+    audit, status = m.build_no_lookahead_audit(join)
+    assert status == "failed"
+    assert "feature_age_exceeds_maximum" in audit.loc[0, "violation_reason"]
+
+
+def test_train_only_encoder_does_not_add_test_only_category():
+    train = pd.DataFrame({"state": ["a", "b", "a"]})
+    test = pd.DataFrame({"state": ["c"]})
+    encoder = m.fit_feature_encoder(train, ["state"])
+    train_x, train_unseen = m.transform_feature_encoder(train, encoder)
+    test_x, test_unseen = m.transform_feature_encoder(test, encoder)
+    assert list(train_x.columns) == ["state=a", "state=b"]
+    assert list(test_x.columns) == ["state=a", "state=b"]
+    assert test_x.iloc[0].sum() == 0
+    assert train_unseen == 0
+    assert test_unseen == 1
+
+
+def test_dealer_state_keeps_no_local_flip_distance_uses_only_local_flip():
+    panel = pd.DataFrame(
+        [
+            {"target_market": "QQQ", "gamma_flip_state": "no_local_flip", "gamma_flip_distance_pct": np.nan, "net_gex_proxy": 1, "pinning_proxy": 0},
+            {"target_market": "QQQ", "gamma_flip_state": "local_flip_found", "gamma_flip_distance_pct": 0.03, "net_gex_proxy": 2, "pinning_proxy": 1},
+        ]
+    )
+    state, distance, audit = m.split_dealer_gamma_state_distance(panel)
+    assert len(state) == 2
+    assert "gamma_flip_distance_pct" not in state.columns
+    assert len(distance) == 1
+    assert distance.iloc[0]["gamma_flip_state"] == "local_flip_found"
+    assert audit.loc[0, "no_local_flip_count"] == 1
+
+
+def test_exact_1530_and_1600_bars_required_for_leveraged_panel(tmp_path: Path):
+    hist = tmp_path / "market_bomb_history"
+    hist.mkdir(parents=True)
+    pd.DataFrame(
+        [
+            {"ticker": t, "effective_available_at_utc": "2025-11-28T21:00:00Z", "as_of_timestamp_utc": "2025-11-28T21:00:00Z", "net_assets_usd": 100.0, "aum_value_type": "net_assets_usd"}
+            for t in ["TQQQ", "SQQQ", "QLD", "QID"]
+        ]
+    ).to_csv(hist / "leveraged_etf_aum_history.csv", index=False)
+    bars_dir = hist / "intraday_bars"
+    bars_dir.mkdir()
+    pd.DataFrame(
+        [
+            {"timestamp_utc": "2026-01-05T14:30:00Z", "close": 100, "volume": 100, "prior_regular_session_close": 100},
+            {"timestamp_utc": "2026-01-05T20:25:00Z", "close": 101, "volume": 100},
+            {"timestamp_utc": "2026-01-05T21:00:00Z", "close": 102, "high": 102, "low": 101, "volume": 100},
+        ]
+    ).to_csv(bars_dir / "QQQ_5m.csv", index=False)
+    panel, audit = m.build_leveraged_etf_panel(tmp_path, m.rules(tmp_path))
+    assert panel.empty
+    assert "required_1530_bar_missing" in set(audit["availability_failure_reason"])
+
+
+def test_leveraged_primary_does_not_use_full_day_volume_denominator(tmp_path: Path):
+    hist = tmp_path / "market_bomb_history"
+    hist.mkdir(parents=True)
+    pd.DataFrame(
+        [
+            {"ticker": t, "effective_available_at_utc": "2025-11-28T21:00:00Z", "as_of_timestamp_utc": "2025-11-28T21:00:00Z", "net_assets_usd": 100.0, "aum_value_type": "net_assets_usd"}
+            for t in ["TQQQ", "SQQQ", "QLD", "QID"]
+        ]
+    ).to_csv(hist / "leveraged_etf_aum_history.csv", index=False)
+    bars_dir = hist / "intraday_bars"
+    bars_dir.mkdir()
+    rows = []
+    for i, day in enumerate(pd.bdate_range("2025-12-01", periods=22)):
+        day_date = pd.Timestamp(day).date()
+        rows.extend(
+            [
+                {"timestamp_utc": pd.Timestamp.combine(day_date, pd.Timestamp("09:30").time()).tz_localize("America/New_York").tz_convert("UTC").isoformat(), "close": 100, "volume": 100, "prior_regular_session_close": 100},
+                {"timestamp_utc": pd.Timestamp.combine(day_date, pd.Timestamp("15:30").time()).tz_localize("America/New_York").tz_convert("UTC").isoformat(), "close": 101, "high": 101, "low": 101, "volume": 100},
+                {"timestamp_utc": pd.Timestamp.combine(day_date, pd.Timestamp("16:00").time()).tz_localize("America/New_York").tz_convert("UTC").isoformat(), "close": 102, "high": 102, "low": 101, "volume": 1000},
+            ]
+        )
+    pd.DataFrame(rows).to_csv(bars_dir / "QQQ_5m.csv", index=False)
+    panel, _ = m.build_leveraged_etf_panel(tmp_path, m.rules(tmp_path))
+    assert "intraday_volume_share_to_1530" not in panel.columns
+    assert "intraday_volume_ratio_vs_prior_20d_same_time" in panel.columns
+
+
+def test_previous_regular_session_skips_2026_juneteenth():
+    prev = m.previous_regular_session_close_utc(pd.Timestamp("2026-06-22"), m.rules(Path(".")))
+    assert prev.tz_convert("America/New_York").date().isoformat() == "2026-06-18"
+
+
+def test_expiry_calendar_and_gamma_conditioned_are_separate(tmp_path: Path):
+    cfg = tmp_path / "market_bomb_config"
+    cfg.mkdir()
+    pd.DataFrame([{"date": "2026-01-16", "market": "US", "expiry_type": "monthly", "holiday_adjusted_flag": False}]).to_csv(cfg / "options_expiry_calendar_v1.csv", index=False)
+    outcomes = pd.DataFrame(
+        [
+            {
+                "target_market": "QQQ",
+                "decision_date": "2026-01-16",
+                "decision_timestamp_utc": "2026-01-15T21:00:00Z",
+                "next_session_absolute_return": 0.01,
+                "next_session_high_low_range_pct": 0.02,
+            }
+        ]
+    )
+    pd.DataFrame(
+        [
+            {
+                "ticker": "QQQ",
+                "feature_as_of_timestamp_utc": "2026-01-16T13:00:00Z",
+                "effective_available_at_utc": "2026-01-16T13:05:00Z",
+                "raw_chain_present": True,
+                "raw_chain_quality": "high",
+                "data_type": "reconstructed_from_raw_chain",
+                "dealer_position_observed": False,
+                "gamma_flip_state": "no_local_flip",
+                "net_gex_proxy": 1.0,
+                "pinning_proxy": 0.2,
+            }
+        ]
+    ).to_csv(tmp_path / "dealer_gamma_proxy_history.csv", index=False)
+    calendar, conditioned, audit = m.build_dealer_gamma_expiry_event_panel(tmp_path, outcomes, m.rules(tmp_path))
+    assert not calendar.empty
+    assert not conditioned.empty
+    assert set(calendar["feature_family"]) == {"ExpiryCalendar"}
+    assert set(conditioned["feature_family"]) == {"DealerGammaExpiryConditioned"}
+    assert "selected_snapshot_asof_utc" in conditioned.columns
+
+
+def test_expiry_rejects_gamma_snapshot_after_0930(tmp_path: Path):
+    cfg = tmp_path / "market_bomb_config"
+    cfg.mkdir()
+    pd.DataFrame([{"date": "2026-01-16", "market": "US", "expiry_type": "monthly"}]).to_csv(cfg / "options_expiry_calendar_v1.csv", index=False)
+    outcomes = pd.DataFrame([{"target_market": "QQQ", "decision_date": "2026-01-16", "decision_timestamp_utc": "2026-01-15T21:00:00Z"}])
+    pd.DataFrame(
+        [
+            {
+                "ticker": "QQQ",
+                "feature_as_of_timestamp_utc": "2026-01-16T15:00:00Z",
+                "effective_available_at_utc": "2026-01-16T15:00:00Z",
+                "raw_chain_present": True,
+                "raw_chain_quality": "high",
+                "data_type": "reconstructed_from_raw_chain",
+                "dealer_position_observed": False,
+            }
+        ]
+    ).to_csv(tmp_path / "dealer_gamma_proxy_history.csv", index=False)
+    _, conditioned, audit = m.build_dealer_gamma_expiry_event_panel(tmp_path, outcomes, m.rules(tmp_path))
+    assert conditioned.empty
+    assert "no_strict_prior_gamma_snapshot" in set(audit.get("availability_failure_reason", pd.Series(dtype=str)).astype(str))

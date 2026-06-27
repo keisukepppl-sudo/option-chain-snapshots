@@ -15,16 +15,29 @@
   "leveraged_etf": [
     "aggregate_pressure_usd"
   ],
-  "dealer_gamma": [
+  "dealer_gamma_state": [
+    "local_flip_found_flag",
+    "no_local_flip_flag",
+    "net_gex_proxy",
+    "pinning_proxy"
+  ],
+  "dealer_gamma_distance": [
     "gamma_flip_distance_pct",
     "net_gex_proxy",
-    "pinning_proxy",
-    "local_flip_found_flag",
-    "no_local_flip_flag"
+    "pinning_proxy"
   ],
   "expiry_event": [
     "monthly_expiry_flag",
     "quarterly_expiry_flag",
     "triple_witching_flag"
+  ],
+  "expiry_conditioned": [
+    "monthly_expiry_flag",
+    "quarterly_expiry_flag",
+    "triple_witching_flag",
+    "net_gex_proxy",
+    "pinning_proxy",
+    "local_flip_found_flag",
+    "no_local_flip_flag"
   ]
 }

@@ -14,7 +14,7 @@
     "return_prior_regular_close_to_1530",
     "absolute_return_prior_regular_close_to_1530",
     "intraday_realized_vol_to_1530",
-    "intraday_volume_share_to_1530",
+    "intraday_volume_ratio_vs_prior_20d_same_time",
     "prior_session_return",
     "prior_20d_realized_vol",
     "weekday",
