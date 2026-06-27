@@ -145,6 +145,19 @@ def write_expiry_intraday_bars(root: Path, ticker="QQQ", day="2026-01-16"):
     ).to_csv(bars_dir / f"{ticker}_5m.csv", index=False)
 
 
+def write_cta_vol_history(root: Path):
+    hist = root / "market_bomb_history"
+    hist.mkdir(parents=True, exist_ok=True)
+    pd.DataFrame([
+        {"asset": "QQQ", "feature_as_of_timestamp_utc": "2026-01-02T21:00:00Z", "effective_available_at_utc": "2026-01-02T21:00:00Z", "cta_exposure_change_1d": 0.1, "cta_trend_state": "long", "quality_flag": "high"},
+        {"asset": "QQQ", "feature_as_of_timestamp_utc": "2026-01-05T21:00:00Z", "effective_available_at_utc": "2026-01-05T21:00:00Z", "cta_exposure_change_1d": -0.2, "cta_trend_state": "short", "quality_flag": "high"},
+    ]).to_csv(hist / "cta_proxy_history.csv", index=False)
+    pd.DataFrame([
+        {"asset": "QQQ", "target_vol": 0.10, "feature_as_of_timestamp_utc": "2026-01-05T21:00:00Z", "effective_available_at_utc": "2026-01-05T21:00:00Z", "vol_control_exposure_change_1d": 0.5, "vol_control_state": "wrong_vol", "quality_flag": "high"},
+        {"asset": "QQQ", "target_vol": 0.12, "feature_as_of_timestamp_utc": "2026-01-05T21:00:00Z", "effective_available_at_utc": "2026-01-05T21:00:00Z", "vol_control_exposure_change_1d": -0.3, "vol_control_state": "target_vol_12", "quality_flag": "high"},
+    ]).to_csv(hist / "vol_control_proxy_history.csv", index=False)
+
+
 def test_cta_vol_feature_after_decision_is_not_joined():
     features = pd.DataFrame(
         [
@@ -159,6 +172,50 @@ def test_cta_vol_feature_after_decision_is_not_joined():
     assert row is None
     assert status == "unavailable"
     assert reason == "no_temporally_available_feature"
+
+
+def test_cta_vol_panel_retains_distinct_family_selection_metadata(tmp_path: Path):
+    write_cta_vol_history(tmp_path)
+    outcomes = pd.DataFrame([{"target_market": "QQQ", "decision_date": "2026-01-05", "decision_timestamp_utc": "2026-01-05T21:00:00Z"}])
+    panel, _, _ = m.build_cta_vol_feature_outcome_panel(tmp_path, outcomes, m.rules(tmp_path))
+    assert not panel.empty
+    row = panel.iloc[0]
+    assert row["cta_selected_source_row_identifier"] != ""
+    assert row["vol_selected_source_row_identifier"] != ""
+    assert row["cta_selected_source_content_hash"] != row["vol_selected_source_content_hash"]
+    assert row["vol_target_vol_requested"] == 0.12
+    assert row["vol_control_state"] == "target_vol_12"
+
+
+def test_cta_vol_selector_parity_detects_real_mismatch(tmp_path: Path):
+    write_cta_vol_history(tmp_path)
+    outcomes = pd.DataFrame([{"target_market": "QQQ", "decision_date": "2026-01-05", "decision_timestamp_utc": "2026-01-05T21:00:00Z"}])
+    panel, _, _ = m.build_cta_vol_feature_outcome_panel(tmp_path, outcomes, m.rules(tmp_path))
+    panel.loc[panel.index[0], "cta_selected_source_content_hash"] = "tampered"
+    parity = m.build_cta_vol_selector_parity_audit(tmp_path, panel, m.rules(tmp_path))
+    cta_only = parity[(parity["model_scope"].eq("CTA_only")) & (parity["required_source_family"].eq("CTA"))].iloc[0]
+    vol_only = parity[(parity["model_scope"].eq("Vol_only")) & (parity["required_source_family"].eq("VolControl"))].iloc[0]
+    assert cta_only["selection_parity_status"] == "mismatch"
+    assert vol_only["selection_parity_status"] == "matched"
+
+
+def test_missing_cta_history_is_unavailable_coverage_not_selected_invalid(tmp_path: Path):
+    selected = m.select_latest_clean_feature(
+        family="CTA",
+        target="QQQ",
+        decision_timestamp_utc="2026-01-05T21:00:00Z",
+        target_vol=None,
+        source_rows=pd.DataFrame(),
+    )
+    assert selected["selection_status"] == "unavailable_coverage"
+    assert selected["availability_state"] == "coverage_not_started"
+
+
+def test_market_level_spec_keeps_leveraged_out_of_eod_and_cta_out_of_intraday():
+    spec = m.market_level_model_spec()
+    assert all("aggregate_pressure_usd" not in model["features"] for model in spec["eod_models"].values())
+    assert all("cta_exposure_change_proxy" not in model["features"] for model in spec["intraday_models"].values())
+    assert spec["actionization_gate"] is False
 
 
 def test_daily_outcome_starts_after_decision_timestamp():
@@ -204,6 +261,7 @@ def test_aum_missing_is_unavailable_not_zero():
 
 def test_leveraged_pressure_uses_1530_return_not_close_to_close(tmp_path: Path):
     write_nyse_calendar(tmp_path)
+    write_expiry_intraday_rules(tmp_path, verified=True)
     aum = tmp_path / "market_bomb_history"
     aum.mkdir(parents=True)
     pd.DataFrame(
@@ -431,6 +489,7 @@ def test_dealer_state_keeps_no_local_flip_distance_uses_only_local_flip():
 
 def test_exact_1530_and_1600_bars_required_for_leveraged_panel(tmp_path: Path):
     write_nyse_calendar(tmp_path)
+    write_expiry_intraday_rules(tmp_path, verified=True)
     hist = tmp_path / "market_bomb_history"
     hist.mkdir(parents=True)
     pd.DataFrame(
@@ -458,6 +517,7 @@ def test_leveraged_primary_does_not_use_full_day_volume_denominator(tmp_path: Pa
         {"session_date": d.date().isoformat(), "is_regular_session": True, "regular_open_et": "09:30", "regular_close_et": "16:00", "is_early_close": False}
         for d in pd.bdate_range("2025-11-28", periods=24)
     ])
+    write_expiry_intraday_rules(tmp_path, verified=True)
     hist = tmp_path / "market_bomb_history"
     hist.mkdir(parents=True)
     pd.DataFrame(
@@ -648,6 +708,7 @@ def test_leveraged_etf_completed_bar_labels_are_saved(tmp_path: Path):
         {"session_date": "2026-01-15", "is_regular_session": True, "regular_open_et": "09:30", "regular_close_et": "16:00", "is_early_close": False},
         {"session_date": "2026-01-16", "is_regular_session": True, "regular_open_et": "09:30", "regular_close_et": "16:00", "is_early_close": False},
     ])
+    write_expiry_intraday_rules(tmp_path, verified=True)
     hist = tmp_path / "market_bomb_history"
     hist.mkdir(parents=True)
     pd.DataFrame(
@@ -891,6 +952,27 @@ def test_expiry_classification_provenance_detects_missing_friday(tmp_path: Path)
     assert result["reason"] == "expiry_classification_coverage_incomplete"
 
 
+def test_expiry_historical_availability_uses_event_day_0930_not_close(tmp_path: Path):
+    write_nyse_calendar(tmp_path)
+    write_expiry_intraday_rules(tmp_path, verified=True)
+    write_expiry_friday_classification(tmp_path)
+    cfg = tmp_path / "market_bomb_config"
+    path = cfg / "expiry_friday_classification_v1.csv"
+    df = pd.read_csv(path)
+    df["classification_effective_available_at_utc"] = "2026-01-16T17:00:00Z"
+    df.to_csv(path, index=False)
+    audit = m.build_expiry_classification_historical_availability_audit(
+        tmp_path,
+        m.load_expiry_friday_classification(tmp_path),
+        m.load_nyse_calendar(tmp_path),
+        pd.DataFrame([{"target_market": "QQQ", "decision_date": "2026-01-16", "decision_timestamp_utc": "2026-01-16T21:00:00Z"}]),
+    )
+    row = audit[audit["session_date"].astype(str).eq("2026-01-16")].iloc[0]
+    assert row["decision_time_policy"] == "expiry_event_decision_0930_et_v1"
+    assert row["historically_available_at_decision"] is False or row["historically_available_at_decision"] == False
+    assert row["eligibility_failure_reason"] == "classification_effective_availability_after_decision"
+
+
 def test_leveraged_etf_input_candidate_audit_has_aum_and_exact_bars(tmp_path: Path):
     write_nyse_calendar(tmp_path, [
         {"session_date": "2026-01-15", "is_regular_session": True, "regular_open_et": "09:30", "regular_close_et": "16:00", "is_early_close": False},
@@ -971,6 +1053,26 @@ def test_leveraged_provider_semantics_unverified_blocks_primary_panel(tmp_path: 
     assert "provider_bar_semantics_unverified" in set(audit["availability_failure_reason"].astype(str))
 
 
+def test_leveraged_provider_semantics_missing_blocks_primary_panel(tmp_path: Path):
+    write_nyse_calendar(tmp_path)
+    hist = tmp_path / "market_bomb_history"
+    hist.mkdir(parents=True, exist_ok=True)
+    pd.DataFrame([
+        {"ticker": t, "effective_available_at_utc": "2026-01-02T21:00:00Z", "as_of_timestamp_utc": "2026-01-02T21:00:00Z", "net_assets_usd": 100.0, "aum_value_type": "net_assets_usd"}
+        for t in ["TQQQ", "SQQQ", "QLD", "QID"]
+    ]).to_csv(hist / "leveraged_etf_aum_history.csv", index=False)
+    bars_dir = hist / "intraday_bars"
+    bars_dir.mkdir()
+    pd.DataFrame([
+        {"timestamp_utc": "2026-01-05T14:30:00Z", "close": 100, "volume": 100, "prior_regular_session_close": 100},
+        {"timestamp_utc": "2026-01-05T20:30:00Z", "close": 101, "volume": 100},
+        {"timestamp_utc": "2026-01-05T21:00:00Z", "close": 102, "volume": 100},
+    ]).to_csv(bars_dir / "QQQ_5m.csv", index=False)
+    panel, audit = m.build_leveraged_etf_panel(tmp_path, m.rules(tmp_path))
+    assert panel.empty
+    assert "provider_bar_semantics_unverified" in set(audit["availability_failure_reason"].astype(str))
+
+
 def test_leveraged_volume_reference_minimum_blocks_primary_panel(tmp_path: Path):
     write_nyse_calendar(tmp_path)
     write_expiry_intraday_rules(tmp_path, verified=True)
@@ -995,6 +1097,32 @@ def test_leveraged_volume_reference_minimum_blocks_primary_panel(tmp_path: Path)
     panel, audit = m.build_leveraged_etf_panel(tmp_path, m.rules(tmp_path))
     assert panel.empty
     assert "volume_reference_insufficient" in set(audit["availability_failure_reason"].astype(str))
+
+
+def test_strict_rth_volume_reference_excludes_pre_post_and_early_close(tmp_path: Path):
+    write_nyse_calendar(tmp_path, [
+        {"session_date": "2026-01-02", "is_regular_session": True, "regular_open_et": "09:30", "regular_close_et": "13:00", "is_early_close": True},
+        {"session_date": "2026-01-05", "is_regular_session": True, "regular_open_et": "09:30", "regular_close_et": "16:00", "is_early_close": False},
+        {"session_date": "2026-01-06", "is_regular_session": True, "regular_open_et": "09:30", "regular_close_et": "16:00", "is_early_close": False},
+    ])
+    cal = m.load_nyse_calendar(tmp_path)
+    rows = []
+    for ts, vol in [
+        ("2026-01-05T13:00:00Z", 999),
+        ("2026-01-05T14:30:00Z", 100),
+        ("2026-01-05T20:30:00Z", 100),
+        ("2026-01-05T22:00:00Z", 999),
+        ("2026-01-06T13:00:00Z", 999),
+        ("2026-01-06T14:30:00Z", 200),
+        ("2026-01-06T20:30:00Z", 200),
+        ("2026-01-06T22:00:00Z", 999),
+    ]:
+        rows.append({"timestamp_utc": ts, "volume": vol})
+    ref = m.strict_rth_volume_reference(pd.DataFrame(rows), "2026-01-06", pd.Timestamp("15:30").time(), cal, window=1, min_valid_sessions=1)
+    assert ref["rth_volume_reference_status"] == "eligible"
+    assert ref["rth_volume_reference_excluded_premarket_rows"] == 1
+    assert ref["rth_volume_reference_excluded_postmarket_rows"] == 1
+    assert "2026-01-05" in ref["rth_volume_reference_session_dates"]
 
 
 def test_oos_no_predictions_has_null_pvalue_not_run():
