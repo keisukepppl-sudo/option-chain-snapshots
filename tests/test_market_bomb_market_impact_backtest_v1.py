@@ -44,6 +44,13 @@ def write_nyse_calendar(root: Path, rows=None):
     ]
     data = rows or default_rows
     df = pd.DataFrame(data)
+    df["session_date"] = pd.to_datetime(df["session_date"]).dt.date.astype(str)
+    full = pd.DataFrame({"session_date": pd.date_range(df["session_date"].min(), df["session_date"].max(), freq="D").date.astype(str)})
+    df = full.merge(df, on="session_date", how="left")
+    df["is_regular_session"] = df["is_regular_session"].fillna(False)
+    df["is_early_close"] = df["is_early_close"].fillna(False)
+    df["regular_open_et"] = df["regular_open_et"].fillna("")
+    df["regular_close_et"] = df["regular_close_et"].fillna("")
     df["calendar_source"] = "unit_test_calendar"
     df["calendar_version"] = "nyse_regular_sessions_v1"
     df["source_retrieved_at_utc"] = "2026-06-27T00:00:00Z"
@@ -81,6 +88,17 @@ def write_expiry_intraday_rules(root: Path, verified=True, method="first_regular
         '"provider_bar_semantics_source":"unit_test",'
         '"provider_bar_semantics_verified_at_utc":"2026-06-27T00:00:00Z",'
         '"daily_ohlc_proxy_outcome_is_primary":false'
+        "}",
+        encoding="utf-8",
+    )
+    (cfg / "expiry_schedule_availability_rules_v1.json").write_text(
+        "{"
+        '"version":"expiry_schedule_availability_rules_v1",'
+        '"rule_id":"us_equity_options_standard_monthly_expiry_v1",'
+        '"source_identifier":"unit_test_expiry_schedule",'
+        '"rule_known_effective_at_utc":"2025-01-01T00:00:00Z",'
+        '"holiday_adjustment_source":"unit_test_calendar",'
+        '"rule_revision_hash":"unit_test_rule_hash"'
         "}",
         encoding="utf-8",
     )
@@ -485,7 +503,7 @@ def test_expiry_calendar_and_gamma_conditioned_are_separate(tmp_path: Path):
             }
         ]
     ).to_csv(tmp_path / "dealer_gamma_proxy_history.csv", index=False)
-    calendar, conditioned, post, audit, outcome_audit = m.build_dealer_gamma_expiry_event_panel(tmp_path, outcomes, m.rules(tmp_path))
+    calendar, conditioned, post, audit, outcome_audit, calendar_availability = m.build_dealer_gamma_expiry_event_panel(tmp_path, outcomes, m.rules(tmp_path))
     assert not calendar.empty
     assert not conditioned.empty
     assert set(calendar["feature_family"]) == {"ExpiryCalendar"}
@@ -493,6 +511,7 @@ def test_expiry_calendar_and_gamma_conditioned_are_separate(tmp_path: Path):
     assert "selected_snapshot_asof_utc" in conditioned.columns
     assert "expiry_session_return_first_regular_bar_open_to_close" in calendar.columns
     assert not post.empty
+    assert not calendar_availability.empty
 
 
 def test_expiry_rejects_gamma_snapshot_after_0930(tmp_path: Path):
@@ -516,7 +535,7 @@ def test_expiry_rejects_gamma_snapshot_after_0930(tmp_path: Path):
             }
         ]
     ).to_csv(tmp_path / "dealer_gamma_proxy_history.csv", index=False)
-    _, conditioned, _, audit, _ = m.build_dealer_gamma_expiry_event_panel(tmp_path, outcomes, m.rules(tmp_path))
+    _, conditioned, _, audit, _, _ = m.build_dealer_gamma_expiry_event_panel(tmp_path, outcomes, m.rules(tmp_path))
     assert conditioned.empty
     assert "no_strict_prior_gamma_snapshot" in set(audit.get("availability_failure_reason", pd.Series(dtype=str)).astype(str))
 
@@ -664,6 +683,123 @@ def test_calendar_metadata_hash_mismatch_blocks_primary(tmp_path: Path):
     outcome, audit = m.build_expiry_intraday_outcome(tmp_path, "QQQ", "2026-01-16", "monthly_expiry_non_quarterly", m.load_nyse_calendar(tmp_path), m.rules(tmp_path))
     assert outcome is None
     assert audit["outcome_availability_failure_reason"].startswith("nyse_calendar_provenance_validation_failed")
+
+
+def test_expiry_group_contrast_uses_actual_walk_forward_predictions():
+    rows = []
+    for month, base_day in [(1, 10), (2, 10), (3, 10), (4, 10)]:
+        for group, y in [("triple_witching", 0.03), ("non_expiry_friday", 0.01)]:
+            rows.append({
+                "target_market": "QQQ",
+                "decision_timestamp_utc": f"2026-{month:02d}-{base_day:02d}T14:30:00Z",
+                "comparison_group": group,
+                "expiry_session_high_low_range_pct": y,
+                "prior_return_1d": 0.0,
+                "event_group_indicator": 1.0 if group == "triple_witching" else 0.0,
+            })
+    panel = pd.DataFrame(rows)
+    cfg = m.rules(Path("."))
+    cfg["walk_forward"]["minimum_train_observations"] = 2
+    result, folds, preds = m.run_expiry_group_contrast_oos(
+        panel,
+        module="ExpiryCalendar",
+        feature_family="ExpiryCalendar",
+        feature_name="calendar_group_contrast",
+        feature_cols=["event_group_indicator"],
+        outcomes=["expiry_session_high_low_range_pct"],
+        baseline_cols=["prior_return_1d"],
+        cfg=cfg,
+        min_oos_rows_per_group=2,
+        min_test_months_per_group=2,
+    )
+    assert not preds.empty
+    assert result.loc[0, "sample_count_oos"] == len(preds)
+    assert result.loc[0, "event_group_oos_row_count"] == 3
+    assert result.loc[0, "reference_group_oos_row_count"] == 3
+    triple_folds = folds[folds["event_group"].eq("triple_witching")]
+    assert set(triple_folds["fold_status"]) == {"insufficient_train", "tested"}
+
+
+def test_expiry_group_contrast_fold_requires_both_groups_in_test():
+    panel = pd.DataFrame([
+        {"target_market": "QQQ", "decision_timestamp_utc": "2026-01-10T14:30:00Z", "comparison_group": "triple_witching", "y": 0.1, "event_group_indicator": 1.0},
+        {"target_market": "QQQ", "decision_timestamp_utc": "2026-01-17T14:30:00Z", "comparison_group": "non_expiry_friday", "y": 0.0, "event_group_indicator": 0.0},
+        {"target_market": "QQQ", "decision_timestamp_utc": "2026-02-10T14:30:00Z", "comparison_group": "triple_witching", "y": 0.1, "event_group_indicator": 1.0},
+    ])
+    cfg = m.rules(Path("."))
+    cfg["walk_forward"]["minimum_train_observations"] = 2
+    _, folds, preds = m.run_expiry_group_contrast_oos(
+        panel,
+        module="ExpiryCalendar",
+        feature_family="ExpiryCalendar",
+        feature_name="calendar_group_contrast",
+        feature_cols=["event_group_indicator"],
+        outcomes=["y"],
+        baseline_cols=[],
+        cfg=cfg,
+        min_oos_rows_per_group=1,
+        min_test_months_per_group=1,
+    )
+    assert preds.empty
+    assert "missing_reference_group_in_test" in set(folds["fold_status"])
+
+
+def test_source_candidate_audit_preserves_future_row_when_clean_selected():
+    raw = pd.DataFrame([
+        {"asset": "QQQ", "feature_as_of_timestamp_utc": "2026-01-01T10:00:00Z", "effective_available_at_utc": "2026-01-01T10:00:00Z", "quality_flag": "high"},
+        {"asset": "QQQ", "feature_as_of_timestamp_utc": "2026-01-02T22:00:00Z", "effective_available_at_utc": "2026-01-02T22:00:00Z", "quality_flag": "high"},
+    ])
+    audit = m.audit_source_feature_candidates(raw, "CTA", "CTA", "QQQ", "2026-01-02T20:00:00Z", 96, {"target_col": "asset", "feature_as_of_col": "feature_as_of_timestamp_utc", "effective_available_col": "effective_available_at_utc", "quality_col": "quality_flag", "target_alias": "QQQ"}, {"allowed_quality": ["high"]})
+    summary = m.summarize_source_feature_candidate_audit(audit)
+    assert int(audit["selected_for_panel"].sum()) == 1
+    assert summary.loc[0, "module_gate_recommendation"] == "evaluate"
+    assert summary.loc[0, "excluded_future_timestamp_count"] == 1
+
+
+def test_calendar_availability_does_not_fallback_to_decision_time(tmp_path: Path):
+    cfg = tmp_path / "market_bomb_config"
+    cfg.mkdir()
+    pd.DataFrame([{"date": "2026-01-16", "market": "US", "expiry_type": "monthly", "calendar_source_effective_at_utc": "2026-01-16T16:00:00Z", "availability_basis": "validated_calendar_export"}]).to_csv(cfg / "options_expiry_calendar_v1.csv", index=False)
+    write_expiry_intraday_rules(tmp_path, verified=True)
+    expiry = m.load_expiry_calendar(tmp_path)
+    decision_ts = pd.Timestamp("2026-01-16T14:30:00Z")
+    audit = m.resolve_calendar_availability(tmp_path, expiry, "2026-01-16", decision_ts, "monthly_expiry_non_quarterly")
+    assert audit["availability_status"] == "unavailable"
+    assert audit["availability_failure_reason"] == "calendar_effective_availability_after_decision"
+    assert audit["effective_available_at_utc"] != decision_ts.isoformat()
+
+
+def test_nyse_calendar_internal_gap_fails(tmp_path: Path):
+    write_nyse_calendar(tmp_path, [
+        {"session_date": "2026-01-01", "is_regular_session": False, "regular_open_et": "", "regular_close_et": "", "is_early_close": False},
+        {"session_date": "2026-01-03", "is_regular_session": False, "regular_open_et": "", "regular_close_et": "", "is_early_close": False},
+    ])
+    calendar_path = tmp_path / "market_bomb_config" / "nyse_regular_sessions_v1.csv"
+    df = pd.read_csv(calendar_path)
+    df = df[df["session_date"].astype(str).ne("2026-01-02")]
+    df.to_csv(calendar_path, index=False)
+    metadata = tmp_path / "market_bomb_config" / "nyse_regular_sessions_metadata_v1.json"
+    import json
+    meta = json.loads(metadata.read_text(encoding="utf-8"))
+    meta["source_file_sha256"] = m.hash_file(calendar_path)
+    metadata.write_text(json.dumps(meta), encoding="utf-8")
+    result = m.validate_nyse_calendar_provenance(tmp_path, m.load_nyse_calendar(tmp_path))
+    assert result["reason"] == "nyse_calendar_internal_date_gap"
+
+
+def test_nyse_calendar_placeholder_source_fails(tmp_path: Path):
+    write_nyse_calendar(tmp_path)
+    metadata = tmp_path / "market_bomb_config" / "nyse_regular_sessions_metadata_v1.json"
+    text = metadata.read_text(encoding="utf-8").replace('"source_name":"unit_test_calendar"', '"source_name":"official_or_primary_calendar_source"')
+    metadata.write_text(text, encoding="utf-8")
+    result = m.validate_nyse_calendar_provenance(tmp_path, m.load_nyse_calendar(tmp_path))
+    assert result["reason"] == "nyse_calendar_placeholder_source_identifier"
+
+
+def test_nyse_early_close_at_1600_fails(tmp_path: Path):
+    write_nyse_calendar(tmp_path, [{"session_date": "2026-01-02", "is_regular_session": True, "regular_open_et": "09:30", "regular_close_et": "16:00", "is_early_close": True}])
+    result = m.validate_nyse_calendar_provenance(tmp_path, m.load_nyse_calendar(tmp_path))
+    assert result["reason"] == "nyse_calendar_early_close_close_not_early"
 
 
 def test_oos_no_predictions_has_null_pvalue_not_run():

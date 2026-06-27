@@ -1,0 +1,8 @@
+{
+  "version": "expiry_schedule_availability_rules_v1",
+  "rule_id": "us_equity_options_standard_monthly_expiry_v1",
+  "source_identifier": "occ_standard_options_expiration_schedule_and_nyse_trading_calendar",
+  "rule_known_effective_at_utc": "2025-01-01T00:00:00Z",
+  "holiday_adjustment_source": "nyse_regular_sessions_v1",
+  "rule_revision_hash": "occ_nyse_standard_monthly_expiry_rule_v1"
+}

@@ -1,0 +1,10 @@
+{
+  "calendar_version": "options_expiry_calendar_v1",
+  "source_name": "OCC standard options expiration schedule with NYSE holiday adjustment",
+  "source_identifier": "occ_standard_options_expiration_schedule_2026_static_verified_export",
+  "source_retrieved_at_utc": "2026-06-27T00:00:00Z",
+  "generation_method": "repo_pinned_validated_calendar_export",
+  "coverage_start": "2026-03-20",
+  "coverage_end": "2026-12-18",
+  "availability_contract_version": "expiry_schedule_availability_rules_v1"
+}

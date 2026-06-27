@@ -27,6 +27,8 @@ RULES_PATH = Path("market_bomb_config/market_impact_backtest_rules_v1.json")
 LEVERAGED_UNIVERSE_PATH = Path("market_bomb_config/leveraged_etf_universe_v1.json")
 DEALER_RULES_PATH = Path("market_bomb_config/dealer_gamma_observed_rules_v1.json")
 EXPIRY_CALENDAR_PATH = Path("market_bomb_config/options_expiry_calendar_v1.csv")
+EXPIRY_CALENDAR_METADATA_PATH = Path("market_bomb_config/options_expiry_calendar_metadata_v1.json")
+EXPIRY_SCHEDULE_AVAILABILITY_RULES_PATH = Path("market_bomb_config/expiry_schedule_availability_rules_v1.json")
 DATA_SOURCES_PATH = Path("market_bomb_config/market_impact_data_sources_v1.json")
 FEATURE_MAPPINGS_PATH = Path("market_bomb_config/market_impact_feature_mappings_v1.json")
 BASELINE_PATH = Path("market_bomb_config/market_impact_baseline_v1.json")
@@ -210,6 +212,89 @@ EXPIRY_GROUP_OOS_COLUMNS = [
     "group_sufficiency_status",
     "research_execution_gate",
     "evidence_verdict",
+]
+
+SOURCE_FEATURE_CANDIDATE_AUDIT_COLUMNS = [
+    "module",
+    "feature_family",
+    "target_market",
+    "decision_timestamp_utc",
+    "source_path_or_provider",
+    "source_row_identifier",
+    "source_row_hash_or_index",
+    "candidate_rank_before_selection",
+    "feature_as_of_timestamp_utc",
+    "effective_available_at_utc",
+    "feature_age_hours",
+    "quality_value",
+    "quality_policy",
+    "target_match_status",
+    "timestamp_status",
+    "age_status",
+    "quality_status",
+    "candidate_eligibility_status",
+    "candidate_exclusion_reason",
+    "selected_for_panel",
+    "selected_for_model",
+    "selection_reason",
+    "clean_replacement_available",
+]
+
+SOURCE_FEATURE_CANDIDATE_SUMMARY_COLUMNS = [
+    "module",
+    "feature_family",
+    "target_market",
+    "decision_timestamp_utc",
+    "raw_candidate_row_count",
+    "eligible_row_count",
+    "selected_row_count",
+    "excluded_future_timestamp_count",
+    "excluded_missing_timestamp_count",
+    "excluded_age_count",
+    "excluded_quality_count",
+    "excluded_target_mismatch_count",
+    "selected_row_strictly_valid",
+    "clean_replacement_available",
+    "unavailable_reason",
+    "module_gate_recommendation",
+]
+
+EXPIRY_GROUP_CONTRAST_RESULT_COLUMNS = [
+    "module",
+    "feature_family",
+    "contrast_id",
+    "target_market",
+    "event_group",
+    "reference_group",
+    "outcome",
+    "feature_name",
+    "sample_count_train",
+    "sample_count_oos",
+    "event_group_oos_row_count",
+    "reference_group_oos_row_count",
+    "event_group_test_month_count",
+    "reference_group_test_month_count",
+    "oos_mse",
+    "oos_mae",
+    "oos_r2_vs_baseline",
+    "delta_oos_mse_vs_baseline",
+    "bootstrap_delta_mse_ci_low",
+    "bootstrap_delta_mse_ci_high",
+    "research_execution_gate",
+    "evidence_verdict",
+]
+
+CALENDAR_AVAILABILITY_AUDIT_COLUMNS = [
+    "event_date",
+    "comparison_group",
+    "decision_timestamp_utc",
+    "feature_as_of_timestamp_utc",
+    "effective_available_at_utc",
+    "availability_basis",
+    "calendar_availability_timestamp_source",
+    "calendar_availability_contract_version",
+    "availability_status",
+    "availability_failure_reason",
 ]
 
 
@@ -534,6 +619,92 @@ def load_expiry_calendar(root: Path) -> pd.DataFrame:
     return expiry
 
 
+def load_expiry_schedule_rules(root: Path) -> dict[str, Any]:
+    return load_json(root, EXPIRY_SCHEDULE_AVAILABILITY_RULES_PATH, {})
+
+
+def load_expiry_calendar_metadata(root: Path) -> dict[str, Any]:
+    return load_json(root, EXPIRY_CALENDAR_METADATA_PATH, {})
+
+
+def resolve_calendar_availability(
+    root: Path,
+    expiry: pd.DataFrame,
+    date_value: Any,
+    decision_ts: pd.Timestamp,
+    comparison_group: str,
+) -> dict[str, Any]:
+    day = pd.Timestamp(date_value).date().isoformat()
+    rows = expiry[expiry["date"].astype(str).eq(day)] if not expiry.empty and "date" in expiry.columns else pd.DataFrame()
+    rule = load_expiry_schedule_rules(root)
+    metadata = load_expiry_calendar_metadata(root)
+    base = {
+        "event_date": day,
+        "comparison_group": comparison_group,
+        "decision_timestamp_utc": decision_ts.isoformat(),
+        "feature_as_of_timestamp_utc": "",
+        "effective_available_at_utc": "",
+        "availability_basis": "",
+        "calendar_availability_timestamp_source": "",
+        "calendar_availability_contract_version": str(rule.get("version", "")),
+        "availability_status": "unavailable",
+        "availability_failure_reason": "",
+    }
+    provenance_values = [
+        str(rule.get("source_identifier", "")),
+        str(rule.get("rule_id", "")),
+        str(metadata.get("source_identifier", metadata.get("source_name", ""))),
+    ]
+    placeholders = {"", "official_or_primary_exchange_schedule_reference", "documented source identifier", "static_seed", "official_or_primary_calendar_source"}
+    if any(v in placeholders for v in provenance_values[:2]):
+        base["availability_failure_reason"] = "calendar_schedule_provenance_invalid"
+        return base
+    if not str(rule.get("version", "")).strip() or not str(rule.get("rule_known_effective_at_utc", "")).strip():
+        base["availability_failure_reason"] = "calendar_rule_version_missing"
+        return base
+    timestamp_source = ""
+    resolved_ts = None
+    basis = ""
+    if not rows.empty:
+        row = rows.iloc[-1]
+        for col, label in [
+            ("calendar_source_effective_at_utc", "calendar_source_effective_at_utc"),
+            ("schedule_published_at_utc", "schedule_published_at_utc"),
+        ]:
+            if col in row.index:
+                resolved_ts = parse_ts(row.get(col))
+                if resolved_ts is not None:
+                    timestamp_source = label
+                    break
+        basis = str(row.get("availability_basis", "")).strip()
+    if resolved_ts is None:
+        resolved_ts = parse_ts(rule.get("rule_known_effective_at_utc"))
+        timestamp_source = "deterministic_rule_known_effective_at_utc" if resolved_ts is not None else ""
+        basis = "deterministic_exchange_schedule"
+    if resolved_ts is None:
+        base["availability_failure_reason"] = "calendar_effective_availability_unknown"
+        return base
+    if resolved_ts > decision_ts:
+        base["availability_failure_reason"] = "calendar_effective_availability_after_decision"
+        base["feature_as_of_timestamp_utc"] = resolved_ts.isoformat()
+        base["effective_available_at_utc"] = resolved_ts.isoformat()
+        base["availability_basis"] = basis
+        base["calendar_availability_timestamp_source"] = timestamp_source
+        return base
+    if basis not in {"exchange_published_schedule", "deterministic_exchange_schedule", "validated_calendar_export"}:
+        base["availability_failure_reason"] = "calendar_schedule_provenance_invalid"
+        return base
+    base.update({
+        "feature_as_of_timestamp_utc": resolved_ts.isoformat(),
+        "effective_available_at_utc": resolved_ts.isoformat(),
+        "availability_basis": basis,
+        "calendar_availability_timestamp_source": timestamp_source,
+        "availability_status": "available",
+        "availability_failure_reason": "",
+    })
+    return base
+
+
 def expiry_flags_for_date(expiry: pd.DataFrame, date_value: Any) -> dict[str, int]:
     day = pd.Timestamp(date_value).date().isoformat()
     if expiry.empty or "date" not in expiry.columns:
@@ -803,6 +974,9 @@ def validate_nyse_calendar_provenance(root: Path, calendar: pd.DataFrame) -> dic
     missing = [key for key in required if not str(metadata.get(key, "")).strip()]
     if missing:
         return {"status": "failed", "reason": "nyse_calendar_metadata_missing:" + ",".join(missing)}
+    placeholders = {"official_or_primary_calendar_source", "repo_static_nyse_regular_session_calendar", "documented source identifier", "official_or_primary_exchange_schedule_reference"}
+    if str(metadata.get("source_name", "")).strip() in placeholders or str(metadata.get("source_url_or_identifier", "")).strip() in placeholders:
+        return {"status": "failed", "reason": "nyse_calendar_placeholder_source_identifier"}
     expected_hash = str(metadata.get("source_file_sha256", "")).lower()
     actual_hash = hash_file(path).lower()
     if expected_hash != actual_hash:
@@ -818,13 +992,32 @@ def validate_nyse_calendar_provenance(root: Path, calendar: pd.DataFrame) -> dic
     observed_end = str(calendar["session_date"].max())
     if start != observed_start or end != observed_end:
         return {"status": "failed", "reason": "nyse_calendar_metadata_coverage_mismatch"}
+    full_dates = pd.date_range(start, end, freq="D").date.astype(str)
+    observed_dates = set(calendar["session_date"].astype(str))
+    if any(d not in observed_dates for d in full_dates):
+        return {"status": "failed", "reason": "nyse_calendar_internal_date_gap"}
     regular = calendar[calendar.get("is_regular_session", pd.Series(dtype=bool)).astype(bool)]
+    non_regular = calendar[~calendar.get("is_regular_session", pd.Series(dtype=bool)).astype(bool)]
     if regular.empty:
         return {"status": "failed", "reason": "nyse_calendar_regular_session_missing"}
     if regular.get("regular_open_et", pd.Series(dtype=str)).astype(str).str.strip().eq("").any():
         return {"status": "failed", "reason": "nyse_calendar_regular_open_missing"}
     if regular.get("regular_close_et", pd.Series(dtype=str)).astype(str).str.strip().eq("").any():
         return {"status": "failed", "reason": "nyse_calendar_regular_close_missing"}
+    if not non_regular.empty and (
+        non_regular.get("regular_open_et", pd.Series(dtype=str)).fillna("").astype(str).str.strip().ne("").any()
+        or non_regular.get("regular_close_et", pd.Series(dtype=str)).fillna("").astype(str).str.strip().ne("").any()
+    ):
+        return {"status": "failed", "reason": "nyse_calendar_non_regular_open_close_present"}
+    early = calendar[calendar.get("is_early_close", pd.Series(dtype=bool)).astype(bool)]
+    if not early.empty:
+        if (~early.get("is_regular_session", pd.Series(dtype=bool)).astype(bool)).any():
+            return {"status": "failed", "reason": "nyse_calendar_early_close_not_regular"}
+        if early.get("regular_close_et", pd.Series(dtype=str)).astype(str).eq("16:00").any():
+            return {"status": "failed", "reason": "nyse_calendar_early_close_close_not_early"}
+    normal = regular[~regular.get("is_early_close", pd.Series(dtype=bool)).astype(bool)]
+    if normal.get("regular_open_et", pd.Series(dtype=str)).astype(str).ne("09:30").any() or normal.get("regular_close_et", pd.Series(dtype=str)).astype(str).ne("16:00").any():
+        return {"status": "failed", "reason": "nyse_calendar_regular_hours_unexpected"}
     return {"status": "passed", "reason": ""}
 
 
@@ -1580,17 +1773,18 @@ def build_expiry_intraday_outcome(
     return outcome, audit
 
 
-def build_dealer_gamma_expiry_event_panel(root: Path, daily_outcomes: pd.DataFrame, cfg: dict[str, Any]) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame, pd.DataFrame, pd.DataFrame]:
+def build_dealer_gamma_expiry_event_panel(root: Path, daily_outcomes: pd.DataFrame, cfg: dict[str, Any]) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame, pd.DataFrame, pd.DataFrame, pd.DataFrame]:
     expiry = load_expiry_calendar(root)
     nyse_calendar = load_nyse_calendar(root)
     if daily_outcomes.empty:
-        return pd.DataFrame(), pd.DataFrame(), pd.DataFrame(), pd.DataFrame([{"module": "DealerGammaExpiry", "audit_status": "insufficient_data", "reason": "daily_outcomes_missing"}]), pd.DataFrame()
+        return pd.DataFrame(), pd.DataFrame(), pd.DataFrame(), pd.DataFrame([{"module": "DealerGammaExpiry", "audit_status": "insufficient_data", "reason": "daily_outcomes_missing"}]), pd.DataFrame(), pd.DataFrame(columns=CALENDAR_AVAILABILITY_AUDIT_COLUMNS)
     raw = load_dealer_gamma_history(root)
     calendar_rows: list[dict[str, Any]] = []
     conditioned_rows: list[dict[str, Any]] = []
     post_rows: list[dict[str, Any]] = []
     audit_rows: list[dict[str, Any]] = []
     outcome_audit_rows: list[dict[str, Any]] = []
+    calendar_availability_rows: list[dict[str, Any]] = []
     for _, outcome in daily_outcomes.iterrows():
         target = str(outcome["target_market"]).upper()
         day = pd.Timestamp(outcome.get("decision_date") or pd.to_datetime(outcome["decision_timestamp_utc"]).date())
@@ -1599,12 +1793,15 @@ def build_dealer_gamma_expiry_event_panel(root: Path, daily_outcomes: pd.DataFra
             continue
         decision_ts = pd.Timestamp.combine(day.date(), time(9, 30)).tz_localize(ET).tz_convert(UTC)
         flags = expiry_flags_for_date(expiry, day)
+        calendar_availability = resolve_calendar_availability(root, expiry, day, decision_ts, group)
+        calendar_availability_rows.append(calendar_availability)
         intraday_outcome, outcome_audit = build_expiry_intraday_outcome(root, target, day, group, nyse_calendar, cfg)
         outcome_audit_rows.append(outcome_audit)
+        calendar_available = calendar_availability["availability_status"] == "available"
         post_session = next_regular_session(day, nyse_calendar)
         post_start_ts = session_timestamp_utc(post_session, "regular_open_et") if post_session else None
         post_end_ts = session_timestamp_utc(post_session, "regular_close_et") if post_session else None
-        post_available = post_session is not None and bool(post_session.get("is_regular_session")) and not bool(post_session.get("is_early_close"))
+        post_available = calendar_available and post_session is not None and bool(post_session.get("is_regular_session")) and not bool(post_session.get("is_early_close"))
         post_row = {
             "analysis_id": f"expiry_post_secondary_{target}_{day.date()}",
             "module": "ExpiryPostSecondary",
@@ -1615,10 +1812,10 @@ def build_dealer_gamma_expiry_event_panel(root: Path, daily_outcomes: pd.DataFra
             "target_market": target,
             "decision_date": day.date().isoformat(),
             "decision_timestamp_utc": decision_ts.isoformat(),
-            "feature_as_of_timestamp_utc": decision_ts.isoformat(),
-            "effective_available_at_utc": decision_ts.isoformat(),
-            "feature_age_hours": 0.0,
-            "availability_basis": "expiry_calendar_effective_available_at_decision_open",
+            "feature_as_of_timestamp_utc": calendar_availability["feature_as_of_timestamp_utc"],
+            "effective_available_at_utc": calendar_availability["effective_available_at_utc"],
+            "feature_age_hours": round((decision_ts - parse_ts(calendar_availability["effective_available_at_utc"])).total_seconds() / 3600, 4) if parse_ts(calendar_availability["effective_available_at_utc"]) is not None else np.nan,
+            "availability_basis": calendar_availability["availability_basis"],
             "availability_confidence": "medium",
             "source_path_or_provider": str(EXPIRY_CALENDAR_PATH).replace("\\", "/"),
             "source_hash_or_request_id": hash_file(root / EXPIRY_CALENDAR_PATH) if (root / EXPIRY_CALENDAR_PATH).exists() else "",
@@ -1627,7 +1824,7 @@ def build_dealer_gamma_expiry_event_panel(root: Path, daily_outcomes: pd.DataFra
             "observed_flow": False,
             "quality_grade": "high",
             "availability_status": "available" if post_available else "unavailable",
-            "availability_failure_reason": "" if post_available else "post_expiry_regular_session_unavailable",
+            "availability_failure_reason": "" if post_available else (calendar_availability["availability_failure_reason"] or "post_expiry_regular_session_unavailable"),
             "post_expiry_next_session_return": outcome.get("next_session_return", np.nan),
             "post_expiry_next_session_absolute_return": outcome.get("next_session_absolute_return", np.nan),
             "post_expiry_next_session_high_low_range_pct": outcome.get("next_session_high_low_range_pct", np.nan),
@@ -1641,7 +1838,7 @@ def build_dealer_gamma_expiry_event_panel(root: Path, daily_outcomes: pd.DataFra
         }
         if post_available:
             post_rows.append(post_row)
-        if intraday_outcome is None:
+        if intraday_outcome is None or not calendar_available:
             continue
         row = outcome.to_dict()
         row = {k: v for k, v in row.items() if not str(k).startswith("next_session_")}
@@ -1651,11 +1848,11 @@ def build_dealer_gamma_expiry_event_panel(root: Path, daily_outcomes: pd.DataFra
             "feature_name": group,
             "feature_value": flags["monthly_expiry_flag"] + flags["quarterly_expiry_flag"] + flags["triple_witching_flag"],
             "feature_unit": "event_flag",
-            "feature_as_of_timestamp_utc": decision_ts.isoformat(),
-            "effective_available_at_utc": decision_ts.isoformat(),
+            "feature_as_of_timestamp_utc": calendar_availability["feature_as_of_timestamp_utc"],
+            "effective_available_at_utc": calendar_availability["effective_available_at_utc"],
             "decision_timestamp_utc": decision_ts.isoformat(),
-            "feature_age_hours": 0.0,
-            "availability_basis": "expiry_calendar_prior_available_at_open",
+            "feature_age_hours": round((decision_ts - parse_ts(calendar_availability["effective_available_at_utc"])).total_seconds() / 3600, 4) if parse_ts(calendar_availability["effective_available_at_utc"]) is not None else np.nan,
+            "availability_basis": calendar_availability["availability_basis"],
             "availability_confidence": "high",
             "source_path_or_provider": str(EXPIRY_CALENDAR_PATH).replace("\\", "/"),
             "data_type": "calendar_event",
@@ -1704,7 +1901,7 @@ def build_dealer_gamma_expiry_event_panel(root: Path, daily_outcomes: pd.DataFra
         audit_rows.append({"module": "DealerGammaExpiry", "audit_status": "insufficient_data", "reason": "expiry_calendar_missing"})
     else:
         audit_rows.append({"module": "DealerGammaExpiry", "audit_status": "available" if calendar_rows else "insufficient_data", "reason": "" if calendar_rows else "no_expiry_or_friday_rows", "event_rows": len(calendar_rows), "conditioned_event_rows": len(conditioned_rows)})
-    return pd.DataFrame(calendar_rows), pd.DataFrame(conditioned_rows), pd.DataFrame(post_rows), pd.DataFrame(audit_rows), pd.DataFrame(outcome_audit_rows)
+    return pd.DataFrame(calendar_rows), pd.DataFrame(conditioned_rows), pd.DataFrame(post_rows), pd.DataFrame(audit_rows), pd.DataFrame(outcome_audit_rows), pd.DataFrame(calendar_availability_rows, columns=CALENDAR_AVAILABILITY_AUDIT_COLUMNS)
 
 
 def benjamini_hochberg(p_values: list[float]) -> list[float]:
@@ -2141,6 +2338,197 @@ def run_oos_comparison(
     return result, fold_audit
 
 
+def build_expiry_group_contrast_panel(panel: pd.DataFrame, event_group: str, reference_group: str, feature_family: str) -> pd.DataFrame:
+    if panel.empty or "comparison_group" not in panel.columns:
+        return pd.DataFrame()
+    work = panel[panel["comparison_group"].astype(str).isin([event_group, reference_group])].copy()
+    if work.empty:
+        return work
+    prefix = "dealer_gamma_expiry_conditioned" if feature_family == "DealerGammaExpiryConditioned" else "expiry_calendar"
+    work["event_group"] = event_group
+    work["reference_group"] = reference_group
+    work["event_group_indicator"] = work["comparison_group"].astype(str).eq(event_group).astype(float)
+    work["contrast_id"] = f"{prefix}__{event_group}_vs_{reference_group}"
+    return work
+
+
+def run_expiry_group_contrast_oos(
+    panel: pd.DataFrame,
+    *,
+    module: str,
+    feature_family: str,
+    feature_name: str,
+    feature_cols: list[str],
+    outcomes: list[str],
+    baseline_cols: list[str],
+    cfg: dict[str, Any],
+    min_oos_rows_per_group: int,
+    min_test_months_per_group: int,
+) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
+    event_groups = ["triple_witching", "quarterly_expiry_non_triple", "monthly_expiry_non_quarterly"]
+    reference_group = "non_expiry_friday"
+    result_rows: list[dict[str, Any]] = []
+    fold_rows: list[dict[str, Any]] = []
+    pred_rows: list[dict[str, Any]] = []
+    stat = cfg.get("statistical", {})
+    block_len = int(stat.get("bootstrap_block_length", 5))
+    iterations = int(stat.get("bootstrap_iterations", 1000))
+    seed = int(stat.get("random_seed", 42))
+    alpha = safe_float(stat.get("ridge_alpha", 1.0), 1.0)
+    min_train = int(cfg.get("walk_forward", {}).get("minimum_train_observations", 252))
+    if panel.empty:
+        return pd.DataFrame(columns=EXPIRY_GROUP_CONTRAST_RESULT_COLUMNS), pd.DataFrame(), pd.DataFrame()
+    for event_group in event_groups:
+        contrast = build_expiry_group_contrast_panel(panel, event_group, reference_group, feature_family)
+        if contrast.empty:
+            continue
+        for target, target_panel in contrast.groupby("target_market"):
+            for outcome in outcomes:
+                required = list(dict.fromkeys(["decision_timestamp_utc", "comparison_group", "event_group_indicator", outcome] + baseline_cols + feature_cols))
+                if not set(required).issubset(target_panel.columns):
+                    result_rows.append({
+                        "module": module,
+                        "feature_family": feature_family,
+                        "contrast_id": f"{feature_family.lower()}__{event_group}_vs_{reference_group}",
+                        "target_market": target,
+                        "event_group": event_group,
+                        "reference_group": reference_group,
+                        "outcome": outcome,
+                        "feature_name": feature_name,
+                        "research_execution_gate": "insufficient_data",
+                        "evidence_verdict": "insufficient_data",
+                    })
+                    continue
+                work = target_panel[required + ["contrast_id", "event_group", "reference_group"]].copy()
+                work["decision_ts"] = pd.to_datetime(work["decision_timestamp_utc"], utc=True, errors="coerce")
+                work["test_month"] = work["decision_ts"].dt.tz_convert(ET).dt.to_period("M").astype(str)
+                keep = work["decision_ts"].notna() & pd.to_numeric(work[outcome], errors="coerce").notna()
+                for col in list(dict.fromkeys(baseline_cols + feature_cols)):
+                    numeric = pd.to_numeric(work[col], errors="coerce")
+                    if numeric.notna().mean() >= 0.8:
+                        keep &= numeric.notna()
+                work = work.loc[keep].sort_values("decision_ts").reset_index(drop=True)
+                preds: list[dict[str, Any]] = []
+                months = sorted(work["test_month"].dropna().unique().tolist())
+                for month in months:
+                    train = work[work["test_month"] < month].copy()
+                    test = work[work["test_month"].eq(month)].copy()
+                    status = "tested"
+                    train_groups = set(train["comparison_group"].astype(str))
+                    test_groups = set(test["comparison_group"].astype(str))
+                    if len(train) < min_train:
+                        status = "insufficient_train"
+                    elif event_group not in train_groups:
+                        status = "missing_event_group_in_train"
+                    elif reference_group not in train_groups:
+                        status = "missing_reference_group_in_train"
+                    elif event_group not in test_groups:
+                        status = "missing_event_group_in_test"
+                    elif reference_group not in test_groups:
+                        status = "missing_reference_group_in_test"
+                    fold_rows.append({
+                        "module": module,
+                        "feature_family": feature_family,
+                        "contrast_id": work["contrast_id"].iloc[0] if not work.empty else "",
+                        "target_market": target,
+                        "event_group": event_group,
+                        "reference_group": reference_group,
+                        "outcome": outcome,
+                        "feature_name": feature_name,
+                        "test_month": month,
+                        "sample_count_train": len(train),
+                        "sample_count_oos": len(test) if status == "tested" else 0,
+                        "fold_status": status,
+                    })
+                    if status != "tested":
+                        continue
+                    base_encoder = fit_feature_encoder(train, baseline_cols)
+                    aug_encoder = fit_feature_encoder(train, list(dict.fromkeys(baseline_cols + feature_cols)))
+                    x_base_train, _ = transform_feature_encoder(train, base_encoder)
+                    x_base_test, _ = transform_feature_encoder(test, base_encoder)
+                    x_aug_train, _ = transform_feature_encoder(train, aug_encoder)
+                    x_aug_test, _ = transform_feature_encoder(test, aug_encoder)
+                    y_train = pd.to_numeric(train[outcome], errors="coerce")
+                    y_test = pd.to_numeric(test[outcome], errors="coerce")
+                    base_pred, _, _ = ridge_predict(x_base_train, y_train, x_base_test, alpha)
+                    aug_pred, _, _ = ridge_predict(x_aug_train, y_train, x_aug_test, alpha)
+                    for (_, trow), bp, ap, yv in zip(test.iterrows(), base_pred, aug_pred, y_test):
+                        pred = {
+                            "module": module,
+                            "feature_family": feature_family,
+                            "contrast_id": trow["contrast_id"],
+                            "target_market": target,
+                            "event_group": event_group,
+                            "reference_group": reference_group,
+                            "comparison_group": trow["comparison_group"],
+                            "outcome": outcome,
+                            "feature_name": feature_name,
+                            "decision_timestamp_utc": trow["decision_timestamp_utc"],
+                            "test_month": month,
+                            "y_true": yv,
+                            "baseline_pred": bp,
+                            "augmented_pred": ap,
+                        }
+                        preds.append(pred)
+                        pred_rows.append(pred)
+                pred_df = pd.DataFrame(preds)
+                if pred_df.empty:
+                    mse = mae = r2_base = delta_mse = ci_low = ci_high = np.nan
+                    event_n = ref_n = event_months = ref_months = 0
+                    train_n = 0
+                else:
+                    y = pd.to_numeric(pred_df["y_true"], errors="coerce").to_numpy(dtype=float)
+                    aug = pd.to_numeric(pred_df["augmented_pred"], errors="coerce").to_numpy(dtype=float)
+                    base = pd.to_numeric(pred_df["baseline_pred"], errors="coerce").to_numpy(dtype=float)
+                    aug_err = (y - aug) ** 2
+                    base_err = (y - base) ** 2
+                    mse = float(np.mean(aug_err))
+                    mae = float(np.mean(np.abs(y - aug)))
+                    base_mse = float(np.mean(base_err))
+                    r2_base = 1.0 - mse / base_mse if base_mse > 0 else np.nan
+                    delta_mse = mse - base_mse
+                    ci_low, ci_high, _ = moving_block_bootstrap_delta_ci(aug_err, base_err, block_len, iterations, seed)
+                    event_pred = pred_df[pred_df["comparison_group"].astype(str).eq(event_group)]
+                    ref_pred = pred_df[pred_df["comparison_group"].astype(str).eq(reference_group)]
+                    event_n = len(event_pred)
+                    ref_n = len(ref_pred)
+                    event_months = int(event_pred["test_month"].nunique()) if not event_pred.empty else 0
+                    ref_months = int(ref_pred["test_month"].nunique()) if not ref_pred.empty else 0
+                    tested_folds = pd.DataFrame(fold_rows)
+                    train_n = int(pd.to_numeric(tested_folds.loc[tested_folds["fold_status"].eq("tested"), "sample_count_train"], errors="coerce").median()) if not tested_folds.empty else 0
+                gate = "passed" if event_n >= min_oos_rows_per_group and ref_n >= min_oos_rows_per_group and event_months >= min_test_months_per_group and ref_months >= min_test_months_per_group and pd.notna(ci_low) and pd.notna(ci_high) else "insufficient_data"
+                result = {
+                    "module": module,
+                    "feature_family": feature_family,
+                    "contrast_id": f"{feature_family.lower()}__{event_group}_vs_{reference_group}",
+                    "target_market": target,
+                    "event_group": event_group,
+                    "reference_group": reference_group,
+                    "outcome": outcome,
+                    "feature_name": feature_name,
+                    "sample_count_train": train_n,
+                    "sample_count_oos": event_n + ref_n,
+                    "event_group_oos_row_count": event_n,
+                    "reference_group_oos_row_count": ref_n,
+                    "event_group_test_month_count": event_months,
+                    "reference_group_test_month_count": ref_months,
+                    "oos_mse": mse,
+                    "oos_mae": mae,
+                    "oos_r2_vs_baseline": r2_base,
+                    "delta_oos_mse_vs_baseline": delta_mse,
+                    "bootstrap_delta_mse_ci_low": ci_low,
+                    "bootstrap_delta_mse_ci_high": ci_high,
+                    "research_execution_gate": gate,
+                    "evidence_verdict": evidence_verdict_from_oos({"delta_oos_mse_vs_baseline": delta_mse, "bootstrap_delta_mse_ci_high": ci_high, "oos_r2_vs_baseline": r2_base}, gate),
+                }
+                result_rows.append(result)
+    return (
+        pd.DataFrame(result_rows, columns=EXPIRY_GROUP_CONTRAST_RESULT_COLUMNS),
+        pd.DataFrame(fold_rows),
+        pd.DataFrame(pred_rows),
+    )
+
+
 def build_walk_forward_manifest(sample_count: int, cfg: dict[str, Any]) -> dict[str, Any]:
     wf = cfg.get("walk_forward", {})
     minimum = int(wf.get("minimum_train_observations", 252))
@@ -2203,6 +2591,225 @@ def build_no_lookahead_audit(feature_join: pd.DataFrame) -> tuple[pd.DataFrame, 
         })
     audit = pd.DataFrame(rows, columns=cols)
     return audit, "passed" if bool(audit["no_lookahead_passed"].all()) else "failed"
+
+
+def audit_source_feature_candidates(
+    raw_source_frame: pd.DataFrame,
+    module: str,
+    feature_family: str,
+    target_market: str,
+    decision_timestamp_utc: Any,
+    max_feature_age_hours: float,
+    schema_mapping: dict[str, str],
+    strict_quality_policy: dict[str, Any] | None = None,
+) -> pd.DataFrame:
+    decision_ts = parse_ts(decision_timestamp_utc)
+    policy = strict_quality_policy or {}
+    source_path = str(schema_mapping.get("source_path_or_provider", ""))
+    if raw_source_frame.empty:
+        return pd.DataFrame(columns=SOURCE_FEATURE_CANDIDATE_AUDIT_COLUMNS)
+    rows: list[dict[str, Any]] = []
+    target_col = schema_mapping.get("target_col", "")
+    asof_col = schema_mapping.get("feature_as_of_col", "")
+    eff_col = schema_mapping.get("effective_available_col", "")
+    quality_col = schema_mapping.get("quality_col", "")
+    target_alias = str(schema_mapping.get("target_alias", target_market)).upper()
+    required_missing = [name for name, col in [("target", target_col), ("feature_asof", asof_col), ("effective_available", eff_col)] if not col or col not in raw_source_frame.columns]
+    allowed_quality = {str(v).lower() for v in policy.get("allowed_quality", ["medium", "high", "true", "1", "yes", "unknown", ""])}
+    if required_missing:
+        for idx, _ in raw_source_frame.iterrows():
+            rows.append({
+                "module": module,
+                "feature_family": feature_family,
+                "target_market": target_market,
+                "decision_timestamp_utc": decision_timestamp_utc,
+                "source_path_or_provider": source_path,
+                "source_row_identifier": str(idx),
+                "source_row_hash_or_index": str(idx),
+                "candidate_rank_before_selection": "",
+                "feature_as_of_timestamp_utc": "",
+                "effective_available_at_utc": "",
+                "feature_age_hours": np.nan,
+                "quality_value": "",
+                "quality_policy": ",".join(sorted(allowed_quality)),
+                "target_match_status": "unknown",
+                "timestamp_status": "required_schema_missing",
+                "age_status": "unknown",
+                "quality_status": "unknown",
+                "candidate_eligibility_status": "excluded",
+                "candidate_exclusion_reason": "required_schema_missing:" + ",".join(required_missing),
+                "selected_for_panel": False,
+                "selected_for_model": False,
+                "selection_reason": "required_schema_missing",
+                "clean_replacement_available": False,
+            })
+        return pd.DataFrame(rows, columns=SOURCE_FEATURE_CANDIDATE_AUDIT_COLUMNS)
+    work = raw_source_frame.copy()
+    for idx, row in work.iterrows():
+        raw_target = str(row.get(target_col, "")).upper()
+        target_match = raw_target == target_alias
+        asof_ts = parse_ts(row.get(asof_col))
+        eff_ts = parse_ts(row.get(eff_col))
+        quality_value = str(row.get(quality_col, "unknown")).lower() if quality_col and quality_col in row.index else "unknown"
+        reasons = []
+        timestamp_status = "valid"
+        if not target_match:
+            reasons.append("target_mismatch")
+        if asof_ts is None:
+            reasons.append("feature_asof_timestamp_missing")
+            timestamp_status = "missing"
+        if eff_ts is None:
+            reasons.append("effective_available_timestamp_missing")
+            timestamp_status = "missing"
+        if decision_ts is not None and asof_ts is not None and asof_ts > decision_ts:
+            reasons.append("feature_asof_after_decision")
+            timestamp_status = "future"
+        if decision_ts is not None and eff_ts is not None and eff_ts > decision_ts:
+            reasons.append("effective_after_decision")
+            timestamp_status = "future"
+        age_hours = (decision_ts - eff_ts).total_seconds() / 3600 if decision_ts is not None and eff_ts is not None else np.nan
+        age_status = "valid"
+        if pd.isna(age_hours):
+            reasons.append("feature_age_missing")
+            age_status = "missing"
+        elif age_hours > max_feature_age_hours:
+            reasons.append("feature_age_exceeds_maximum")
+            age_status = "too_old"
+        quality_status = "valid"
+        if quality_value not in allowed_quality:
+            reasons.append("quality_below_required")
+            quality_status = "invalid"
+        eligible = len(reasons) == 0
+        rows.append({
+            "module": module,
+            "feature_family": feature_family,
+            "target_market": target_market,
+            "decision_timestamp_utc": decision_timestamp_utc,
+            "source_path_or_provider": source_path,
+            "source_row_identifier": str(row.get(schema_mapping.get("row_id_col", ""), idx)) if schema_mapping.get("row_id_col", "") in row.index else str(idx),
+            "source_row_hash_or_index": str(idx),
+            "candidate_rank_before_selection": "",
+            "feature_as_of_timestamp_utc": asof_ts.isoformat() if asof_ts is not None else "",
+            "effective_available_at_utc": eff_ts.isoformat() if eff_ts is not None else "",
+            "feature_age_hours": round(age_hours, 4) if pd.notna(age_hours) else np.nan,
+            "quality_value": quality_value,
+            "quality_policy": ",".join(sorted(allowed_quality)),
+            "target_match_status": "matched" if target_match else "target_mismatch",
+            "timestamp_status": timestamp_status,
+            "age_status": age_status,
+            "quality_status": quality_status,
+            "candidate_eligibility_status": "eligible" if eligible else "excluded",
+            "candidate_exclusion_reason": ";".join(reasons),
+            "selected_for_panel": False,
+            "selected_for_model": False,
+            "selection_reason": "",
+            "clean_replacement_available": False,
+        })
+    audit = pd.DataFrame(rows, columns=SOURCE_FEATURE_CANDIDATE_AUDIT_COLUMNS)
+    eligible = audit[audit["candidate_eligibility_status"].eq("eligible")].copy()
+    if not eligible.empty:
+        eligible["effective_sort"] = pd.to_datetime(eligible["effective_available_at_utc"], utc=True, errors="coerce")
+        selected_idx = eligible.sort_values("effective_sort").index[-1]
+        audit.loc[selected_idx, "selected_for_panel"] = True
+        audit.loc[selected_idx, "selected_for_model"] = True
+        audit.loc[selected_idx, "selection_reason"] = "latest_clean_eligible_candidate"
+        audit.loc[:, "clean_replacement_available"] = True
+        audit.loc[:, "candidate_rank_before_selection"] = [str(i) for i in range(1, len(audit) + 1)]
+    return audit
+
+
+def summarize_source_feature_candidate_audit(candidate_audit: pd.DataFrame) -> pd.DataFrame:
+    if candidate_audit.empty:
+        return pd.DataFrame(columns=SOURCE_FEATURE_CANDIDATE_SUMMARY_COLUMNS)
+    rows: list[dict[str, Any]] = []
+    for keys, group in candidate_audit.groupby(["module", "feature_family", "target_market", "decision_timestamp_utc"], dropna=False):
+        module, family, target, decision_ts = keys
+        reasons = group["candidate_exclusion_reason"].astype(str)
+        selected = group[group["selected_for_panel"].astype(bool)]
+        clean_available = bool(group["candidate_eligibility_status"].eq("eligible").any())
+        unavailable_reason = ""
+        if selected.empty and not clean_available and not group.empty:
+            unavailable_reason = ";".join(sorted(set(";".join(reasons.tolist()).split(";")) - {""}))
+        gate = "evaluate" if clean_available else ("data_quality_blocked" if unavailable_reason else "insufficient_data")
+        rows.append({
+            "module": module,
+            "feature_family": family,
+            "target_market": target,
+            "decision_timestamp_utc": decision_ts,
+            "raw_candidate_row_count": len(group),
+            "eligible_row_count": int(group["candidate_eligibility_status"].eq("eligible").sum()),
+            "selected_row_count": int(group["selected_for_panel"].astype(bool).sum()),
+            "excluded_future_timestamp_count": int(reasons.str.contains("after_decision", regex=False).sum()),
+            "excluded_missing_timestamp_count": int(reasons.str.contains("timestamp_missing|feature_age_missing", regex=True).sum()),
+            "excluded_age_count": int(reasons.str.contains("feature_age_exceeds_maximum", regex=False).sum()),
+            "excluded_quality_count": int(reasons.str.contains("quality_below_required", regex=False).sum()),
+            "excluded_target_mismatch_count": int(reasons.str.contains("target_mismatch", regex=False).sum()),
+            "selected_row_strictly_valid": not selected.empty,
+            "clean_replacement_available": clean_available,
+            "unavailable_reason": unavailable_reason,
+            "module_gate_recommendation": gate,
+        })
+    return pd.DataFrame(rows, columns=SOURCE_FEATURE_CANDIDATE_SUMMARY_COLUMNS)
+
+
+def build_source_feature_candidate_audits(root: Path, daily_outcomes: pd.DataFrame, cfg: dict[str, Any]) -> tuple[pd.DataFrame, pd.DataFrame]:
+    max_age = safe_float(cfg.get("max_feature_age_hours", 96), 96)
+    cta, vol = load_feature_history(root)
+    dealer = load_dealer_gamma_history(root)
+    expiry = load_expiry_calendar(root)
+    pieces: list[pd.DataFrame] = []
+    decisions = daily_outcomes[["target_market", "decision_timestamp_utc", "decision_date"]].copy() if not daily_outcomes.empty else pd.DataFrame(columns=["target_market", "decision_timestamp_utc", "decision_date"])
+    for _, row in decisions.iterrows():
+        target = str(row["target_market"]).upper()
+        decision_ts = row["decision_timestamp_utc"]
+        asset = target_to_feature_asset(target)
+        pieces.append(audit_source_feature_candidates(
+            cta, "CTA", "CTA", target, decision_ts, max_age,
+            {"target_col": "asset", "feature_as_of_col": "feature_as_of_timestamp_utc", "effective_available_col": "effective_available_at_utc", "quality_col": "quality_flag", "target_alias": asset, "source_path_or_provider": "market_bomb_history/cta_proxy_history.csv"},
+            {"allowed_quality": ["medium", "high", "ok", "unknown", ""]},
+        ))
+        vol_asset = asset if asset in {"QQQ", "SPY", "SOXX"} else "QQQ"
+        pieces.append(audit_source_feature_candidates(
+            vol, "VolControl", "VolControl", target, decision_ts, max_age,
+            {"target_col": "asset", "feature_as_of_col": "feature_as_of_timestamp_utc", "effective_available_col": "effective_available_at_utc", "quality_col": "quality_flag", "target_alias": vol_asset, "source_path_or_provider": "market_bomb_history/vol_control_proxy_history.csv"},
+            {"allowed_quality": ["medium", "high", "ok", "unknown", ""]},
+        ))
+        pieces.append(audit_source_feature_candidates(
+            dealer, "DealerGamma", "DealerGamma", target, decision_ts, max_age,
+            {"target_col": "ticker", "feature_as_of_col": "feature_as_of_timestamp_utc", "effective_available_col": "effective_available_at_utc", "quality_col": "raw_chain_quality", "target_alias": target, "source_path_or_provider": "dealer_gamma_proxy_history.csv"},
+            {"allowed_quality": ["medium", "high"]},
+        ))
+    for _, row in decisions.iterrows():
+        day = pd.Timestamp(row.get("decision_date") or pd.to_datetime(row["decision_timestamp_utc"]).date())
+        if day.weekday() != 4:
+            continue
+        target = str(row["target_market"]).upper()
+        decision_ts = pd.Timestamp.combine(day.date(), time(9, 30)).tz_localize(ET).tz_convert(UTC).isoformat()
+        pieces.append(audit_source_feature_candidates(
+            dealer, "DealerGammaExpiryConditioned", "DealerGammaExpiryConditioned", target, decision_ts, max_age,
+            {"target_col": "ticker", "feature_as_of_col": "feature_as_of_timestamp_utc", "effective_available_col": "effective_available_at_utc", "quality_col": "raw_chain_quality", "target_alias": target, "source_path_or_provider": "dealer_gamma_proxy_history.csv"},
+            {"allowed_quality": ["medium", "high"]},
+        ))
+    if not expiry.empty:
+        exp = expiry.copy()
+        exp["target_market"] = "US"
+        exp["feature_as_of_timestamp_utc"] = exp.get("calendar_source_effective_at_utc", exp.get("schedule_published_at_utc", ""))
+        exp["effective_available_at_utc"] = exp["feature_as_of_timestamp_utc"]
+        exp["quality_grade"] = "high"
+        for _, row in decisions.iterrows():
+            day = pd.Timestamp(row.get("decision_date") or pd.to_datetime(row["decision_timestamp_utc"]).date())
+            if day.weekday() != 4:
+                continue
+            decision_ts = pd.Timestamp.combine(day.date(), time(9, 30)).tz_localize(ET).tz_convert(UTC).isoformat()
+            pieces.append(audit_source_feature_candidates(
+                exp, "ExpiryCalendar", "ExpiryCalendar", str(row["target_market"]).upper(), decision_ts, 24 * 365 * 20,
+                {"target_col": "target_market", "feature_as_of_col": "feature_as_of_timestamp_utc", "effective_available_col": "effective_available_at_utc", "quality_col": "quality_grade", "target_alias": "US", "source_path_or_provider": str(EXPIRY_CALENDAR_PATH).replace("\\", "/")},
+                {"allowed_quality": ["high"]},
+            ))
+    non_empty = [p for p in pieces if p is not None and not p.empty]
+    candidate = pd.concat(non_empty, ignore_index=True) if non_empty else pd.DataFrame(columns=SOURCE_FEATURE_CANDIDATE_AUDIT_COLUMNS)
+    summary = summarize_source_feature_candidate_audit(candidate)
+    return candidate, summary
 
 
 def audit_raw_feature_candidates(
@@ -2383,6 +2990,29 @@ def apply_data_quality_block(results: pd.DataFrame, module_name: str, blocked: s
     return out
 
 
+def apply_cta_vol_source_quality_blocks(results: pd.DataFrame, source_summary: pd.DataFrame) -> pd.DataFrame:
+    if results.empty or source_summary.empty:
+        return results
+    blocked_sources = set(source_summary.loc[source_summary["module_gate_recommendation"].astype(str).eq("data_quality_blocked"), "module"].astype(str))
+    out = results.copy()
+    masks = []
+    if "CTA" in blocked_sources:
+        masks.append(out["feature_name"].astype(str).isin(["CTA_only", "CTA_plus_Vol"]))
+    if "VolControl" in blocked_sources:
+        masks.append(out["feature_name"].astype(str).isin(["Vol_only", "CTA_plus_Vol"]))
+    if not masks:
+        return out
+    mask = masks[0]
+    for extra in masks[1:]:
+        mask = mask | extra
+    out.loc[mask, "research_execution_gate"] = "data_quality_blocked"
+    out.loc[mask, "evidence_verdict"] = "data_quality_blocked"
+    out.loc[mask, "p_value_status"] = "not_run_data_quality_blocked"
+    out.loc[mask, "raw_p_value"] = np.nan
+    out.loc[mask, "adjusted_p_value"] = np.nan
+    return out
+
+
 def build_module_data_quality_propagation_audit(no_lookahead: pd.DataFrame, oos_by_module: dict[str, pd.DataFrame], raw_candidate_audit: pd.DataFrame | None = None) -> pd.DataFrame:
     rows = []
     for module, result in oos_by_module.items():
@@ -2443,6 +3073,9 @@ def source_inventory(root: Path) -> pd.DataFrame:
         root / "dealer_gamma_proxy_history.csv",
         root / "market_bomb_history" / "dealer_gamma_proxy_history.csv",
         root / "market_bomb_history" / "leveraged_etf_aum_history.csv",
+        root / EXPIRY_CALENDAR_PATH,
+        root / EXPIRY_CALENDAR_METADATA_PATH,
+        root / EXPIRY_SCHEDULE_AVAILABILITY_RULES_PATH,
         root / NYSE_CALENDAR_PATH,
         root / NYSE_CALENDAR_METADATA_PATH,
         root / EXPIRY_INTRADAY_RULES_PATH,
@@ -2491,6 +3124,50 @@ def build_nyse_session_calendar_audit(calendar: pd.DataFrame, root: Path | None 
     return pd.DataFrame(rows, columns=NYSE_SESSION_AUDIT_COLUMNS)
 
 
+def build_nyse_calendar_continuity_audit(root: Path, calendar: pd.DataFrame) -> pd.DataFrame:
+    validation = validate_nyse_calendar_provenance(root, calendar)
+    rows = []
+    if calendar.empty:
+        return pd.DataFrame([{"validation_status": "failed", "validation_failure_reason": "nyse_calendar_file_missing"}])
+    start = str(calendar["session_date"].min())
+    end = str(calendar["session_date"].max())
+    full_dates = pd.date_range(start, end, freq="D").date.astype(str)
+    observed = set(calendar["session_date"].astype(str))
+    missing = [d for d in full_dates if d not in observed]
+    rows.append({
+        "coverage_start": start,
+        "coverage_end": end,
+        "expected_calendar_date_count": len(full_dates),
+        "observed_calendar_date_count": len(observed),
+        "missing_calendar_date_count": len(missing),
+        "missing_calendar_dates": ";".join(missing[:50]),
+        "validation_status": validation["status"],
+        "validation_failure_reason": validation["reason"],
+    })
+    return pd.DataFrame(rows)
+
+
+def build_provider_bar_semantics_validation_audit(root: Path, targets: list[str]) -> pd.DataFrame:
+    event_rules = expiry_intraday_rules(root)
+    verified = bool(event_rules.get("provider_bar_semantics_verified", False))
+    rows = []
+    for target in targets:
+        rows.append({
+            "provider": event_rules.get("provider", "local_intraday_bars"),
+            "target_market": target,
+            "bar_timestamp_convention": event_rules.get("bar_timestamp_convention", "bar_end"),
+            "tested_session_date": "",
+            "expected_first_regular_bar_timestamp_et": event_rules.get("regular_session_open_bar_timestamp_et", "09:35"),
+            "observed_first_regular_bar_timestamp_et": "",
+            "official_open_reference": "",
+            "official_close_reference": "",
+            "validation_status": "passed" if verified else "not_verified",
+            "validation_evidence_source": event_rules.get("provider_bar_semantics_source", ""),
+            "validated_at_utc": event_rules.get("provider_bar_semantics_verified_at_utc", ""),
+        })
+    return pd.DataFrame(rows)
+
+
 def write_reports(
     root: Path,
     cta_oos: pd.DataFrame,
@@ -2498,6 +3175,10 @@ def write_reports(
     dealer_oos: pd.DataFrame,
     expiry_oos: pd.DataFrame,
     expiry_group_oos: pd.DataFrame,
+    source_candidate_summary: pd.DataFrame | None,
+    calendar_availability_audit: pd.DataFrame | None,
+    provider_bar_semantics_audit: pd.DataFrame | None,
+    expiry_group_contrast_folds: pd.DataFrame | None,
     gate: dict[str, Any],
     refresh_rows: list[dict[str, Any]] | None = None,
 ) -> None:
@@ -2517,14 +3198,24 @@ def write_reports(
         header,
         "event decision time: `D 09:30 ET`\n\n",
         "strict intraday outcome: `first regular-session bar open -> regular close` when provider bar semantics are verified; early closes excluded from primary.\n\n",
+        "## Session-bar semantics / provider validation status\n\n",
+        markdown_table(provider_bar_semantics_audit if provider_bar_semantics_audit is not None else pd.DataFrame()),
+        "\n\n## Calendar availability contract status\n\n",
+        markdown_table(calendar_availability_audit if calendar_availability_audit is not None else pd.DataFrame()),
         "## Calendar-only primary event study\n\n",
         markdown_table(expiry_oos[expiry_oos.get("test_family", pd.Series(dtype=str)).astype(str).eq("dealer_gamma_expiry_calendar_event")] if not expiry_oos.empty else expiry_oos),
         "\n\n## Gamma-conditioned primary event study\n\n",
         markdown_table(expiry_oos[expiry_oos.get("test_family", pd.Series(dtype=str)).astype(str).eq("dealer_gamma_expiry_conditioned")] if not expiry_oos.empty else expiry_oos),
+        "\n\n## Calendar-only / gamma-conditioned group-contrast OOS\n\n",
+        markdown_table(expiry_group_oos),
+        "\n\n## Group fold exclusions\n\n",
+        markdown_table(expiry_group_contrast_folds if expiry_group_contrast_folds is not None else pd.DataFrame()),
         "\n\n## Post-expiry secondary analysis\n\n",
         markdown_table(expiry_oos[expiry_oos.get("test_family", pd.Series(dtype=str)).astype(str).eq("dealer_gamma_expiry_post_event_secondary")] if not expiry_oos.empty else expiry_oos),
         "\n\n## Group sample sufficiency\n\n",
         markdown_table(expiry_group_oos),
+        "\n\n## Source candidate audit\n\n",
+        markdown_table(source_candidate_summary if source_candidate_summary is not None else pd.DataFrame()),
         "\n\nactionization_gate=false\n",
     ]
     (reports / "dealer_gamma_expiry_event_study.md").write_text("".join(expiry_report), encoding="utf-8")
@@ -2601,7 +3292,7 @@ def run(
         dealer_panel, dealer_audit = build_dealer_gamma_panel(root, daily_outcomes, cfg)
         dealer_panel = attach_daily_baseline(dealer_panel, daily_baseline)
     dealer_state_panel, dealer_distance_panel, dealer_sample_audit = split_dealer_gamma_state_distance(dealer_panel)
-    expiry_calendar_panel, expiry_conditioned_panel, expiry_post_panel, expiry_audit, expiry_outcome_audit = build_dealer_gamma_expiry_event_panel(root, daily_outcomes, cfg)
+    expiry_calendar_panel, expiry_conditioned_panel, expiry_post_panel, expiry_audit, expiry_outcome_audit, calendar_availability_audit = build_dealer_gamma_expiry_event_panel(root, daily_outcomes, cfg)
     expiry_calendar_panel = attach_daily_baseline(expiry_calendar_panel, open_baseline)
     expiry_conditioned_panel = attach_daily_baseline(expiry_conditioned_panel, open_baseline)
 
@@ -2688,6 +3379,35 @@ def run(
         min_test_months=1,
         primary_or_robustness="secondary",
     )
+    group_min_oos = int(min_cfg.get("dealer_expiry_min_oos_rows_per_group", min_cfg.get("dealer_expiry_min_event_rows_per_comparison_group", 20)))
+    group_min_months = int(min_cfg.get("dealer_expiry_min_test_months_per_group", 3))
+    expiry_group_calendar_oos, expiry_group_calendar_folds, expiry_group_calendar_preds = run_expiry_group_contrast_oos(
+        expiry_calendar_panel,
+        module="ExpiryCalendar",
+        feature_family="ExpiryCalendar",
+        feature_name="calendar_group_contrast",
+        feature_cols=["event_group_indicator"],
+        outcomes=["expiry_session_absolute_return_first_regular_bar_open_to_close", "expiry_session_high_low_range_pct", "expiry_session_close_location_value"],
+        baseline_cols=base_cfg.get("daily", []),
+        cfg=cfg,
+        min_oos_rows_per_group=group_min_oos,
+        min_test_months_per_group=group_min_months,
+    )
+    expiry_group_conditioned_oos, expiry_group_conditioned_folds, expiry_group_conditioned_preds = run_expiry_group_contrast_oos(
+        expiry_conditioned_panel,
+        module="DealerGammaExpiryConditioned",
+        feature_family="DealerGammaExpiryConditioned",
+        feature_name="gamma_conditioned_group_contrast",
+        feature_cols=["event_group_indicator", "net_gex_proxy", "pinning_proxy", "local_flip_found_flag", "no_local_flip_flag"],
+        outcomes=["expiry_session_absolute_return_first_regular_bar_open_to_close", "expiry_session_high_low_range_pct", "expiry_session_close_location_value"],
+        baseline_cols=base_cfg.get("daily", []),
+        cfg=cfg,
+        min_oos_rows_per_group=group_min_oos,
+        min_test_months_per_group=group_min_months,
+    )
+    expiry_group_contrast_oos = pd.concat([expiry_group_calendar_oos, expiry_group_conditioned_oos], ignore_index=True)
+    expiry_group_contrast_folds = pd.concat([expiry_group_calendar_folds, expiry_group_conditioned_folds], ignore_index=True)
+    expiry_group_contrast_predictions = pd.concat([expiry_group_calendar_preds, expiry_group_conditioned_preds], ignore_index=True)
     dealer_oos = pd.concat([dealer_state_oos, dealer_distance_oos], ignore_index=True)
     expiry_oos = pd.concat([expiry_calendar_oos, expiry_conditioned_oos, expiry_post_oos], ignore_index=True)
     summary = pd.concat([cta_oos, lev_oos, dealer_state_oos, dealer_distance_oos, expiry_calendar_oos, expiry_conditioned_oos, expiry_post_oos], ignore_index=True)
@@ -2726,8 +3446,10 @@ def run(
     if not feature_join.empty:
         feature_join["max_feature_age_hours"] = cfg.get("max_feature_age_hours", 96)
     no_lookahead, no_lookahead_status = build_no_lookahead_audit(feature_join)
-    raw_candidate_audit = build_raw_feature_candidate_quality_audit(feature_join, cfg)
-    blocked_modules = quality_blocked_modules(no_lookahead) | raw_quality_blocked_modules(raw_candidate_audit)
+    post_selection_panel_audit = build_raw_feature_candidate_quality_audit(feature_join, cfg)
+    source_candidate_audit, source_candidate_summary = build_source_feature_candidate_audits(root, daily_outcomes, cfg)
+    blocked_modules = quality_blocked_modules(no_lookahead) | set(source_candidate_summary.loc[source_candidate_summary.get("module_gate_recommendation", pd.Series(dtype=str)).astype(str).eq("data_quality_blocked"), "module"].astype(str).tolist())
+    cta_oos = apply_cta_vol_source_quality_blocks(cta_oos, source_candidate_summary)
     cta_oos = apply_data_quality_block(cta_oos, "CTA_Vol", blocked_modules)
     lev_oos = apply_data_quality_block(lev_oos, "LeveragedETF", blocked_modules)
     dealer_state_oos = apply_data_quality_block(dealer_state_oos, "DealerGamma", blocked_modules)
@@ -2740,27 +3462,24 @@ def run(
     summary = pd.concat([cta_oos, lev_oos, dealer_state_oos, dealer_distance_oos, expiry_calendar_oos, expiry_conditioned_oos, expiry_post_oos], ignore_index=True)
     module_quality_audit = build_module_data_quality_propagation_audit(no_lookahead, {
         "CTA_Vol": cta_oos,
+        "CTA": cta_oos,
+        "VolControl": lev_oos.iloc[0:0].copy(),
         "LeveragedETF": lev_oos,
         "DealerGamma": dealer_oos,
         "ExpiryCalendar": expiry_calendar_oos,
         "DealerGammaExpiryConditioned": expiry_conditioned_oos,
         "ExpiryPostSecondary": expiry_post_oos,
-    }, raw_candidate_audit)
-    expiry_group_calendar = build_expiry_group_sample_sufficiency_audit(
-        expiry_calendar_panel,
-        feature_family="ExpiryCalendar",
-        outcomes=["expiry_session_absolute_return_first_regular_bar_open_to_close", "expiry_session_high_low_range_pct", "expiry_session_close_location_value"],
-        min_oos_rows=int(min_cfg.get("dealer_expiry_min_oos_rows_per_group", min_cfg.get("dealer_expiry_min_event_rows_per_comparison_group", 20))),
-        min_test_months=int(min_cfg.get("dealer_expiry_min_test_months_per_group", 3)),
-    )
-    expiry_group_conditioned = build_expiry_group_sample_sufficiency_audit(
-        expiry_conditioned_panel,
-        feature_family="DealerGammaExpiryConditioned",
-        outcomes=["expiry_session_absolute_return_first_regular_bar_open_to_close", "expiry_session_high_low_range_pct", "expiry_session_close_location_value"],
-        min_oos_rows=int(min_cfg.get("dealer_expiry_min_oos_rows_per_group", min_cfg.get("dealer_expiry_min_event_rows_per_comparison_group", 20))),
-        min_test_months=int(min_cfg.get("dealer_expiry_min_test_months_per_group", 3)),
-    )
-    expiry_group_oos = pd.concat([expiry_group_calendar, expiry_group_conditioned], ignore_index=True)
+    }, source_candidate_summary.rename(columns={
+        "excluded_future_timestamp_count": "excluded_future_timestamp_count",
+        "excluded_missing_timestamp_count": "excluded_missing_timestamp_count",
+        "excluded_age_count": "excluded_age_count",
+        "excluded_quality_count": "excluded_quality_count",
+        "excluded_target_mismatch_count": "excluded_target_mismatch_count",
+        "selected_row_count": "selected_row_count",
+        "raw_candidate_row_count": "raw_candidate_row_count",
+        "eligible_row_count": "eligible_row_count",
+    }))
+    expiry_group_oos = expiry_group_contrast_oos.copy()
     refresh_rows = refresh_status_rows(refresh_daily_prices, refresh_intraday_prices, run_gamma_surrogate_exploration)
     if refresh_rows:
         data_quality = pd.concat([data_quality, pd.DataFrame(refresh_rows).rename(columns={"status": "verdict"})], ignore_index=True)
@@ -2818,8 +3537,12 @@ def run(
     (out / "feature_outcome_join_audit.md").write_text("# Feature Outcome Join Audit\n\n" + markdown_table(feature_join) + "\n", encoding="utf-8")
     no_lookahead.to_csv(out / "no_lookahead_audit.csv", index=False)
     (out / "no_lookahead_audit.md").write_text("# No Lookahead Audit\n\n" + markdown_table(no_lookahead) + "\n", encoding="utf-8")
-    write_table(raw_candidate_audit, out / "raw_feature_candidate_quality_audit.csv")
-    (out / "raw_feature_candidate_quality_audit.md").write_text("# Raw Feature Candidate Quality Audit\n\n" + markdown_table(raw_candidate_audit) + "\n", encoding="utf-8")
+    write_table(source_candidate_audit, out / "source_feature_candidate_audit.csv")
+    write_table(source_candidate_summary, out / "source_feature_candidate_quality_summary.csv")
+    (out / "source_feature_candidate_quality_summary.md").write_text("# Source Feature Candidate Quality Summary\n\n" + markdown_table(source_candidate_summary) + "\n", encoding="utf-8")
+    write_table(post_selection_panel_audit, out / "post_selection_panel_quality_audit.csv")
+    write_table(post_selection_panel_audit, out / "raw_feature_candidate_quality_audit.csv")
+    (out / "raw_feature_candidate_quality_audit.md").write_text("# Post-Selection Panel Quality Audit\n\n" + markdown_table(post_selection_panel_audit) + "\n", encoding="utf-8")
     write_table(daily_outcomes, out / "daily_market_outcomes.csv", out / "daily_market_outcomes.parquet")
     write_table(cta_panel, out / "cta_vol_primary_panel.csv", out / "cta_vol_primary_panel.parquet")
     write_table(cta_oos, out / "cta_vol_primary_oos_results.csv")
@@ -2853,10 +3576,17 @@ def run(
     write_table(expiry_audit, out / "dealer_gamma_expiry_snapshot_join_audit.csv")
     write_table(expiry_outcome_audit, out / "expiry_intraday_outcome_audit.csv")
     write_table(expiry_calendar_panel, out / "expiry_intraday_outcome_panel.csv")
+    write_table(calendar_availability_audit, out / "calendar_availability_contract_audit.csv")
     write_table(module_quality_audit, out / "module_data_quality_propagation_audit.csv")
+    write_table(expiry_group_contrast_folds, out / "expiry_group_contrast_fold_audit.csv")
+    write_table(expiry_group_contrast_predictions, out / "expiry_group_contrast_oos_predictions.csv")
+    write_table(expiry_group_contrast_oos, out / "expiry_group_contrast_oos_results.csv")
     write_table(expiry_group_oos, out / "expiry_group_sample_sufficiency_audit.csv")
     write_table(expiry_group_oos, out / "dealer_gamma_expiry_group_oos_results.csv")
+    provider_bar_semantics_audit = build_provider_bar_semantics_validation_audit(root, cfg.get("targets", []))
     write_table(build_nyse_session_calendar_audit(load_nyse_calendar(root), root), out / "nyse_session_calendar_audit.csv")
+    write_table(build_nyse_calendar_continuity_audit(root, load_nyse_calendar(root)), out / "nyse_calendar_continuity_audit.csv")
+    write_table(provider_bar_semantics_audit, out / "provider_bar_semantics_validation_audit.csv")
     write_table(pd.concat([cta_folds, lev_folds, dealer_state_folds, dealer_distance_folds, expiry_calendar_folds, expiry_conditioned_folds, expiry_post_folds], ignore_index=True), out / "feature_fold_audit.csv")
     write_table(descriptive_summary, out / "descriptive_association_summary.csv")
     write_table(cta_panel, out / "cta_vol_market_impact_panel.csv", out / "cta_vol_market_impact_panel.parquet")
@@ -2870,7 +3600,7 @@ def run(
     with (out / "analysis_manifest.json").open("w", encoding="utf-8") as f:
         json.dump(manifest, f, indent=2, sort_keys=True)
     (root / "market_impact_backtest_gate_audit.md").write_text(gate_audit_text(gate), encoding="utf-8")
-    write_reports(root, cta_oos, lev_oos, dealer_oos, expiry_oos, expiry_group_oos, gate, refresh_rows)
+    write_reports(root, cta_oos, lev_oos, dealer_oos, expiry_oos, expiry_group_oos, source_candidate_summary, calendar_availability_audit, provider_bar_semantics_audit, expiry_group_contrast_folds, gate, refresh_rows)
     return {
         "source_inventory": out / "source_inventory.csv",
         "feature_availability_audit": out / "feature_availability_audit.csv",
@@ -2883,10 +3613,16 @@ def run(
         "dealer_gamma_expiry_event_oos_results": out / "dealer_gamma_expiry_event_oos_results.csv",
         "nyse_session_calendar_audit": out / "nyse_session_calendar_audit.csv",
         "expiry_intraday_outcome_audit": out / "expiry_intraday_outcome_audit.csv",
+        "source_feature_candidate_audit": out / "source_feature_candidate_audit.csv",
+        "source_feature_candidate_quality_summary": out / "source_feature_candidate_quality_summary.csv",
         "raw_feature_candidate_quality_audit": out / "raw_feature_candidate_quality_audit.csv",
         "module_data_quality_propagation_audit": out / "module_data_quality_propagation_audit.csv",
+        "expiry_group_contrast_oos_results": out / "expiry_group_contrast_oos_results.csv",
         "expiry_group_sample_sufficiency_audit": out / "expiry_group_sample_sufficiency_audit.csv",
         "dealer_gamma_expiry_group_oos_results": out / "dealer_gamma_expiry_group_oos_results.csv",
+        "calendar_availability_contract_audit": out / "calendar_availability_contract_audit.csv",
+        "nyse_calendar_continuity_audit": out / "nyse_calendar_continuity_audit.csv",
+        "provider_bar_semantics_validation_audit": out / "provider_bar_semantics_validation_audit.csv",
         "gate": root / "market_impact_backtest_gate_audit.md",
     }
 
