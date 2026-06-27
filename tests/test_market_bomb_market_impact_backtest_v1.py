@@ -1247,3 +1247,180 @@ def test_v118_paired_oos_uses_identical_parent_and_augmented_rows():
     assert preds["parent_pred"].notna().all()
     assert preds["augmented_pred"].notna().all()
     assert set(coefs["fold_status"]) == {"tested"}
+
+
+def _v119_base_market_panel(clock="EOD", target="QQQ"):
+    return pd.DataFrame([{
+        "target_market": target,
+        "decision_timestamp_utc": "2026-01-05T21:00:00Z" if clock == "EOD" else "2026-01-05T20:30:00Z",
+        "decision_date": "2026-01-05",
+        "model_clock": clock,
+        "cta_selection_status": "selected",
+        "cta_availability_state": "valid",
+        "cta_primary_eligible": True,
+        "cta_selected_source_row_identifier": "cta1",
+        "cta_selected_source_content_hash": "ctah",
+        "cta_selected_source_effective_available_at_utc": "2026-01-05T20:00:00Z",
+        "vol_selection_status": "selected",
+        "vol_availability_state": "valid",
+        "vol_primary_eligible": True,
+        "vol_selected_source_row_identifier": "vol1",
+        "vol_selected_source_content_hash": "volh",
+        "vol_selected_source_effective_available_at_utc": "2026-01-05T20:00:00Z",
+        "aggregate_pressure_usd": 0.0,
+        "leveraged_etf_primary_input_gate": "eligible_primary",
+        "next_session_return": 0.0,
+    }])
+
+
+def test_v119_cta_parity_mismatch_affects_only_dependent_scopes_and_target():
+    panel = pd.concat([_v119_base_market_panel("EOD", "QQQ"), _v119_base_market_panel("EOD", "SPY")], ignore_index=True)
+    parity = pd.DataFrame([
+        {"target_market": "QQQ", "decision_timestamp_utc": "2026-01-05T21:00:00Z", "required_source_family": "CTA", "selection_parity_status": "mismatch"},
+    ])
+    provenance = m.build_market_level_component_provenance_status(
+        market_level_panel=panel,
+        cta_vol_selector_parity=parity,
+        leveraged_selector_parity=pd.DataFrame(),
+        leveraged_primary_integrity=pd.DataFrame(),
+        dealer_eod_panel=pd.DataFrame(),
+        dealer_intraday_selection=pd.DataFrame(),
+    )
+    integrity = m.build_market_level_model_scope_integrity(panel, provenance)
+    qqq = integrity[integrity["target_market"].eq("QQQ")]
+    spy = integrity[integrity["target_market"].eq("SPY")]
+    assert set(qqq[qqq["model_scope"].isin(["B1", "B3", "B4", "B5"])]["scope_integrity_status"]) == {"selected_invalid"}
+    assert set(qqq[qqq["model_scope"].isin(["B0", "B2"])]["scope_integrity_status"]) == {"valid"}
+    assert set(spy[spy["model_scope"].eq("B1")]["scope_integrity_status"]) == {"valid"}
+
+
+def test_v119_vol_parity_mismatch_affects_b2_b3_b4_b5_not_b1():
+    panel = _v119_base_market_panel("EOD", "QQQ")
+    parity = pd.DataFrame([
+        {"target_market": "QQQ", "decision_timestamp_utc": "2026-01-05T21:00:00Z", "required_source_family": "VolControl", "selection_parity_status": "mismatch"},
+    ])
+    provenance = m.build_market_level_component_provenance_status(
+        market_level_panel=panel,
+        cta_vol_selector_parity=parity,
+        leveraged_selector_parity=pd.DataFrame(),
+        leveraged_primary_integrity=pd.DataFrame(),
+        dealer_eod_panel=pd.DataFrame(),
+        dealer_intraday_selection=pd.DataFrame(),
+    )
+    integrity = m.build_market_level_model_scope_integrity(panel, provenance)
+    assert set(integrity[integrity["model_scope"].isin(["B2", "B3", "B4", "B5"])]["scope_integrity_status"]) == {"selected_invalid"}
+    assert set(integrity[integrity["model_scope"].isin(["B0", "B1"])]["scope_integrity_status"]) == {"valid"}
+
+
+def test_v119_leveraged_parity_mismatch_affects_c1_c2_c3_only():
+    panel = _v119_base_market_panel("INTRADAY", "QQQ")
+    parity = pd.DataFrame([
+        {"target_market": "QQQ", "decision_timestamp_utc": "2026-01-05T20:30:00Z", "selection_parity_status": "mismatch", "required_source_family": "aum:TQQQ"},
+    ])
+    primary = pd.DataFrame([
+        {"target_market": "QQQ", "decision_timestamp_utc": "2026-01-05T20:30:00Z", "leveraged_etf_primary_input_gate": "eligible_primary"},
+    ])
+    provenance = m.build_market_level_component_provenance_status(
+        market_level_panel=panel,
+        cta_vol_selector_parity=pd.DataFrame(),
+        leveraged_selector_parity=parity,
+        leveraged_primary_integrity=primary,
+        dealer_eod_panel=pd.DataFrame(),
+        dealer_intraday_selection=pd.DataFrame(),
+    )
+    integrity = m.build_market_level_model_scope_integrity(panel, provenance)
+    assert set(integrity[integrity["model_scope"].eq("C0")]["scope_integrity_status"]) == {"valid"}
+    assert set(integrity[integrity["model_scope"].isin(["C1", "C2", "C3"])]["scope_integrity_status"]) == {"selected_invalid"}
+
+
+def test_v119_leveraged_coverage_gap_is_unavailable_not_selected_invalid():
+    panel = _v119_base_market_panel("INTRADAY", "QQQ")
+    panel["leveraged_etf_primary_input_gate"] = "insufficient_data"
+    provenance = m.build_market_level_component_provenance_status(
+        market_level_panel=panel,
+        cta_vol_selector_parity=pd.DataFrame(),
+        leveraged_selector_parity=pd.DataFrame(),
+        leveraged_primary_integrity=pd.DataFrame(),
+        dealer_eod_panel=pd.DataFrame(),
+        dealer_intraday_selection=pd.DataFrame(),
+    )
+    integrity = m.build_market_level_model_scope_integrity(panel, provenance)
+    assert set(integrity[integrity["model_scope"].isin(["C1", "C2", "C3"])]["scope_integrity_status"]) == {"unavailable_coverage"}
+
+
+def test_v119_cta_vol_row_is_retained_when_both_unavailable(tmp_path: Path):
+    outcomes = pd.DataFrame([{"target_market": "QQQ", "decision_date": "2026-01-05", "decision_timestamp_utc": "2026-01-05T21:00:00Z"}])
+    panel, _, _ = m.build_cta_vol_feature_outcome_panel(tmp_path, outcomes, m.rules(tmp_path))
+    assert len(panel) == 1
+    assert panel.iloc[0]["cta_selection_status"] == "unavailable_coverage"
+    assert panel.iloc[0]["vol_selection_status"] == "unavailable_coverage"
+
+
+def test_v119_cta_selected_invalid_and_vol_unavailable_are_preserved(tmp_path: Path):
+    hist = tmp_path / "market_bomb_history"
+    hist.mkdir(parents=True)
+    pd.DataFrame([{"asset": "QQQ", "feature_as_of_timestamp_utc": "2026-01-05T20:00:00Z", "effective_available_at_utc": "2026-01-05T20:00:00Z", "cta_exposure_change_1d": 1.0}]).to_csv(hist / "cta_proxy_history.csv", index=False)
+    outcomes = pd.DataFrame([{"target_market": "QQQ", "decision_date": "2026-01-05", "decision_timestamp_utc": "2026-01-05T21:00:00Z"}])
+    panel, _, _ = m.build_cta_vol_feature_outcome_panel(tmp_path, outcomes, m.rules(tmp_path))
+    assert panel.iloc[0]["cta_selection_status"] == "selected_invalid"
+    assert panel.iloc[0]["vol_selection_status"] == "unavailable_coverage"
+
+
+def test_v119_intraday_gamma_rejects_observed_dealer_position(tmp_path: Path):
+    pd.DataFrame([{
+        "ticker": "QQQ",
+        "feature_as_of_timestamp_utc": "2026-01-05T20:00:00Z",
+        "effective_available_at_utc": "2026-01-05T20:00:00Z",
+        "raw_chain_present": True,
+        "raw_chain_quality": "high",
+        "data_type": "reconstructed_from_raw_chain",
+        "dealer_position_observed": True,
+        "net_gex_proxy": -1.0,
+    }]).to_csv(tmp_path / "dealer_gamma_proxy_history.csv", index=False)
+    lev = pd.DataFrame([{"target_market": "QQQ", "decision_timestamp_utc": "2026-01-05T20:30:00Z"}])
+    audit = m.build_dealer_gamma_intraday_selection_audit(tmp_path, lev, m.rules(tmp_path))
+    assert audit.iloc[0]["selection_status"] == "selected_invalid"
+    assert audit.iloc[0]["invalid_reason"] == "dealer_position_observed_true"
+
+
+def test_v119_unverified_sign_policy_blocks_b4_b5_not_b1_b2():
+    panel = _v119_base_market_panel("EOD", "QQQ")
+    dealer = pd.DataFrame([{
+        "target_market": "QQQ",
+        "decision_timestamp_utc": "2026-01-05T21:00:00Z",
+        "dealer_gamma_selection_status": "selected",
+        "net_gex_proxy": -1.0,
+        "negative_gamma_proxy_indicator": np.nan,
+        "selected_source_row_identifier": "g1",
+    }])
+    provenance = m.build_market_level_component_provenance_status(
+        market_level_panel=panel,
+        cta_vol_selector_parity=pd.DataFrame(),
+        leveraged_selector_parity=pd.DataFrame(),
+        leveraged_primary_integrity=pd.DataFrame(),
+        dealer_eod_panel=dealer,
+        dealer_intraday_selection=pd.DataFrame(),
+    )
+    integrity = m.build_market_level_model_scope_integrity(panel, provenance)
+    assert set(integrity[integrity["model_scope"].isin(["B4", "B5"])]["scope_integrity_status"]) == {"unavailable_coverage"}
+    assert set(integrity[integrity["model_scope"].isin(["B0", "B1", "B2", "B3"])]["scope_integrity_status"]) == {"valid"}
+
+
+def test_v119_oos_counts_one_invalid_decision_once_for_multiple_invalid_components():
+    panel = _v119_base_market_panel("EOD", "QQQ")
+    panel["prior_return_1d"] = 0.0
+    panel["prior_return_5d"] = 0.0
+    panel["prior_realized_vol_20d"] = 0.1
+    panel["distance_from_20d_moving_average"] = 0.0
+    panel["weekday"] = 0
+    panel["month_end_flag"] = 0
+    panel["monthly_expiry_flag"] = 0
+    panel["quarterly_expiry_flag"] = 0
+    panel["triple_witching_flag"] = 0
+    integrity = pd.DataFrame([
+        {"target_market": "QQQ", "decision_timestamp_utc": "2026-01-05T21:00:00Z", "model_clock": "EOD", "model_scope": "B3", "required_component": "CTA", "scope_integrity_status": "selected_invalid"},
+        {"target_market": "QQQ", "decision_timestamp_utc": "2026-01-05T21:00:00Z", "model_clock": "EOD", "model_scope": "B3", "required_component": "VolControl", "scope_integrity_status": "selected_invalid"},
+    ])
+    _, _, _, metrics, _, _, _ = m.run_market_level_oos_backtest(panel, integrity, {"walk_forward": {"minimum_train_observations": 252}}, {"daily": [], "intraday": []})
+    row = metrics[(metrics["target_market"] == "QQQ") & (metrics["model_scope"] == "B3") & (metrics["outcome"] == "next_session_return")].iloc[0]
+    assert row["selected_invalid_exclusion_count"] == 1
