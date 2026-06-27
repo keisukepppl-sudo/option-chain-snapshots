@@ -1,0 +1,13 @@
+{
+  "version": "leveraged_etf_universe_v1",
+  "nasdaq_100": [
+    {"ticker": "TQQQ", "target": "QQQ", "leverage": 3.0},
+    {"ticker": "SQQQ", "target": "QQQ", "leverage": -3.0},
+    {"ticker": "QLD", "target": "QQQ", "leverage": 2.0},
+    {"ticker": "QID", "target": "QQQ", "leverage": -2.0}
+  ],
+  "semiconductor": [
+    {"ticker": "SOXL", "target": "SOXX", "leverage": 3.0},
+    {"ticker": "SOXS", "target": "SOXX", "leverage": -3.0}
+  ]
+}

@@ -1,0 +1,6 @@
+date,market,expiry_type,monthly_expiry_flag,quarterly_expiry_flag,triple_witching_flag,holiday_adjusted_flag,calendar_source,calendar_version
+2026-03-20,US,quarterly,true,true,true,false,static_seed,options_expiry_calendar_v1
+2026-04-17,US,monthly,true,false,false,false,static_seed,options_expiry_calendar_v1
+2026-06-18,US,quarterly,true,true,true,true,static_seed,options_expiry_calendar_v1
+2026-09-18,US,quarterly,true,true,true,false,static_seed,options_expiry_calendar_v1
+2026-12-18,US,quarterly,true,true,true,false,static_seed,options_expiry_calendar_v1

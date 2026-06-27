@@ -1,0 +1,18 @@
+{
+  "version": "market_impact_backtest_rules_v1",
+  "targets": ["QQQ", "SPY", "SOXX", "SMH"],
+  "daily_horizons": [1, 5, 10],
+  "intraday_primary_asof_et": "15:30",
+  "intraday_robustness_asof_et": "15:00",
+  "max_feature_age_hours": 96,
+  "walk_forward": {
+    "method": "expanding_window",
+    "minimum_train_observations": 252,
+    "test_block": "monthly"
+  },
+  "statistical": {
+    "bootstrap_method": "moving_block",
+    "multiple_testing_method": "benjamini_hochberg"
+  },
+  "actionization_allowed": false
+}

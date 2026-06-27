@@ -1,0 +1,130 @@
+name: Market Impact Backtest
+
+on:
+  workflow_dispatch:
+    inputs:
+      refresh_daily_prices:
+        description: "Refresh daily price history"
+        required: true
+        default: false
+        type: boolean
+      refresh_intraday_prices:
+        description: "Refresh intraday price history"
+        required: true
+        default: false
+        type: boolean
+      run_cta_vol_analysis:
+        description: "Run CTA / Vol Control market impact analysis"
+        required: true
+        default: true
+        type: boolean
+      run_leveraged_etf_analysis:
+        description: "Run leveraged ETF pressure analysis"
+        required: true
+        default: true
+        type: boolean
+      run_dealer_observed_analysis:
+        description: "Run observed dealer gamma proxy analysis"
+        required: true
+        default: true
+        type: boolean
+      run_gamma_surrogate_exploration:
+        description: "Run gamma surrogate exploration"
+        required: true
+        default: false
+        type: boolean
+      persist_reports:
+        description: "Commit market impact outputs and reports"
+        required: true
+        default: false
+        type: boolean
+
+jobs:
+  backtest:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout analysis commit
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Run market impact backtest
+        run: |
+          ARGS=""
+          if [ "${{ inputs.refresh_daily_prices }}" = "true" ]; then
+            ARGS="$ARGS --refresh-daily-prices"
+          fi
+          if [ "${{ inputs.refresh_intraday_prices }}" = "true" ]; then
+            ARGS="$ARGS --refresh-intraday-prices"
+          fi
+          if [ "${{ inputs.run_cta_vol_analysis }}" != "true" ]; then
+            ARGS="$ARGS --skip-cta-vol-analysis"
+          fi
+          if [ "${{ inputs.run_leveraged_etf_analysis }}" != "true" ]; then
+            ARGS="$ARGS --skip-leveraged-etf-analysis"
+          fi
+          if [ "${{ inputs.run_dealer_observed_analysis }}" != "true" ]; then
+            ARGS="$ARGS --skip-dealer-observed-analysis"
+          fi
+          if [ "${{ inputs.run_gamma_surrogate_exploration }}" = "true" ]; then
+            ARGS="$ARGS --run-gamma-surrogate-exploration"
+          fi
+          python market_bomb_market_impact_backtest_v1.py $ARGS
+
+      - name: Upload market impact artifacts
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: market-impact-backtest-${{ github.run_id }}
+          path: |
+            market_bomb_market_impact/**/*.csv
+            market_bomb_market_impact/**/*.parquet
+            market_bomb_market_impact/**/*.md
+            market_bomb_market_impact/**/*.json
+            market_impact_backtest_gate_audit.md
+          if-no-files-found: warn
+
+  persist:
+    needs: backtest
+    if: ${{ inputs.persist_reports == true && needs.backtest.result == 'success' }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout analysis commit
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+
+      - name: Download market impact artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: market-impact-backtest-${{ github.run_id }}
+          path: .
+
+      - name: Verify main did not advance after analysis
+        run: |
+          CURRENT_MAIN_SHA="$(git ls-remote origin refs/heads/main | awk '{print $1}')"
+          if [ "${CURRENT_MAIN_SHA}" != "${{ github.sha }}" ]; then
+            echo "Main advanced since analysis; skipping persist commit."
+            exit 0
+          fi
+
+      - name: Commit market impact outputs
+        run: |
+          git checkout -B main "${{ github.sha }}"
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add market_bomb_market_impact market_impact_backtest_gate_audit.md || true
+          git diff --cached --quiet || git commit -m "Update market impact backtest outputs"
+          git push

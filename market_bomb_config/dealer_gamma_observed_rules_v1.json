@@ -1,0 +1,12 @@
+{
+  "version": "dealer_gamma_observed_rules_v1",
+  "primary_sample_requires": {
+    "raw_option_chain_snapshot": true,
+    "economic_quality_minimum": "medium",
+    "effective_available_before_decision": true
+  },
+  "allowed_flip_states": ["local_flip_found", "no_local_flip", "unavailable"],
+  "sign_convention": "positive_net_gex_proxy_means_long_gamma_proxy_not_dealer_inventory",
+  "dealer_position_observed": false,
+  "gamma_surrogate_default_enabled": false
+}
