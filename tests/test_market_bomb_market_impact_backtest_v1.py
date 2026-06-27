@@ -916,6 +916,87 @@ def test_leveraged_etf_input_candidate_audit_has_aum_and_exact_bars(tmp_path: Pa
     assert not universe.empty
 
 
+def test_aum_primary_eligibility_is_bool_contract_not_source_label(tmp_path: Path):
+    hist = tmp_path / "market_bomb_history"
+    hist.mkdir(parents=True)
+    aum = pd.DataFrame([{
+        "ticker": "TQQQ",
+        "effective_available_at_utc": "2026-01-15T21:00:00Z",
+        "as_of_timestamp_utc": "2026-01-15T21:00:00Z",
+        "net_assets_usd": 100.0,
+        "aum_value_type": "net_assets_usd",
+    }])
+    record = m.prior_available_aum_record(aum, "TQQQ", pd.Timestamp("2026-01-16T20:30:00Z"), pd.Timestamp("2026-01-15T21:00:00Z"))
+    assert record["aum_source"] == "previous_available_net_assets_usd"
+    assert record["primary_eligible"] is True
+    assert record["selection_status"] == "selected_clean"
+
+
+def test_date_only_and_surrogate_aum_are_not_primary():
+    decision = pd.Timestamp("2026-01-16T20:30:00Z")
+    prior_close = pd.Timestamp("2026-01-15T21:00:00Z")
+    date_only = pd.DataFrame([{"ticker": "TQQQ", "date": "2026-01-15", "net_assets_usd": 100.0}])
+    surrogate = pd.DataFrame([{
+        "ticker": "TQQQ",
+        "effective_available_at_utc": "2026-01-15T21:00:00Z",
+        "as_of_timestamp_utc": "2026-01-15T21:00:00Z",
+        "shares_outstanding": 10.0,
+        "prior_close": 20.0,
+        "aum_value_type": "shares_outstanding_x_price",
+    }])
+    assert m.prior_available_aum_record(date_only, "TQQQ", decision, prior_close)["primary_eligible"] is False
+    surrogate_record = m.prior_available_aum_record(surrogate, "TQQQ", decision, prior_close)
+    assert surrogate_record["primary_eligible"] is False
+    assert surrogate_record["analysis_mode"] == "imputed_surrogate_exploratory"
+
+
+def test_leveraged_provider_semantics_unverified_blocks_primary_panel(tmp_path: Path):
+    write_nyse_calendar(tmp_path)
+    write_expiry_intraday_rules(tmp_path, verified=False)
+    hist = tmp_path / "market_bomb_history"
+    hist.mkdir(parents=True, exist_ok=True)
+    pd.DataFrame([
+        {"ticker": t, "effective_available_at_utc": "2026-01-02T21:00:00Z", "as_of_timestamp_utc": "2026-01-02T21:00:00Z", "net_assets_usd": 100.0, "aum_value_type": "net_assets_usd"}
+        for t in ["TQQQ", "SQQQ", "QLD", "QID"]
+    ]).to_csv(hist / "leveraged_etf_aum_history.csv", index=False)
+    bars_dir = hist / "intraday_bars"
+    bars_dir.mkdir()
+    pd.DataFrame([
+        {"timestamp_utc": "2026-01-05T14:30:00Z", "close": 100, "volume": 100, "prior_regular_session_close": 100},
+        {"timestamp_utc": "2026-01-05T20:30:00Z", "close": 101, "volume": 100},
+        {"timestamp_utc": "2026-01-05T21:00:00Z", "close": 102, "volume": 100},
+    ]).to_csv(bars_dir / "QQQ_5m.csv", index=False)
+    panel, audit = m.build_leveraged_etf_panel(tmp_path, m.rules(tmp_path))
+    assert panel.empty
+    assert "provider_bar_semantics_unverified" in set(audit["availability_failure_reason"].astype(str))
+
+
+def test_leveraged_volume_reference_minimum_blocks_primary_panel(tmp_path: Path):
+    write_nyse_calendar(tmp_path)
+    write_expiry_intraday_rules(tmp_path, verified=True)
+    cfg = tmp_path / "market_bomb_config"
+    (cfg / "market_impact_backtest_rules_v1.json").write_text(
+        '{"targets":["QQQ"],"primary_decision_bar_et":"15:30","primary_close_bar_et":"16:00","bar_timestamp_convention":"bar_end","minimum_samples":{"leveraged_etf_volume_reference_min_sessions":20}}',
+        encoding="utf-8",
+    )
+    hist = tmp_path / "market_bomb_history"
+    hist.mkdir(parents=True, exist_ok=True)
+    pd.DataFrame([
+        {"ticker": t, "effective_available_at_utc": "2026-01-02T21:00:00Z", "as_of_timestamp_utc": "2026-01-02T21:00:00Z", "net_assets_usd": 100.0, "aum_value_type": "net_assets_usd"}
+        for t in ["TQQQ", "SQQQ", "QLD", "QID"]
+    ]).to_csv(hist / "leveraged_etf_aum_history.csv", index=False)
+    bars_dir = hist / "intraday_bars"
+    bars_dir.mkdir()
+    pd.DataFrame([
+        {"timestamp_utc": "2026-01-05T14:30:00Z", "close": 100, "volume": 100, "prior_regular_session_close": 100},
+        {"timestamp_utc": "2026-01-05T20:30:00Z", "close": 101, "volume": 100},
+        {"timestamp_utc": "2026-01-05T21:00:00Z", "close": 102, "volume": 100},
+    ]).to_csv(bars_dir / "QQQ_5m.csv", index=False)
+    panel, audit = m.build_leveraged_etf_panel(tmp_path, m.rules(tmp_path))
+    assert panel.empty
+    assert "volume_reference_insufficient" in set(audit["availability_failure_reason"].astype(str))
+
+
 def test_oos_no_predictions_has_null_pvalue_not_run():
     panel = pd.DataFrame({"target_market": ["QQQ"], "decision_timestamp_utc": ["2026-01-05T21:00:00Z"], "x": [1.0], "y": [0.1]})
     cfg = m.rules(Path("."))

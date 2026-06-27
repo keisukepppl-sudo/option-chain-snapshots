@@ -24,6 +24,7 @@
     "leveraged_etf_min_oos_rows": 126,
     "leveraged_etf_min_test_months": 6,
     "leveraged_etf_complete_universe_coverage_min": 0.8,
+    "leveraged_etf_volume_reference_min_sessions": 20,
     "dealer_gamma_min_oos_rows": 100,
     "dealer_gamma_min_test_months": 6,
     "dealer_expiry_min_event_rows_per_comparison_group": 20,
