@@ -1,0 +1,24 @@
+{
+  "version": "morita_reconstruction_rules_v3",
+  "date_only_policy": {
+    "default": "exclude_from_event_time_analysis",
+    "allow_daily_research_proxy": false,
+    "daily_proxy_entry_method": "next_trading_close_proxy"
+  },
+  "daily_proxy_research": {
+    "enabled": false,
+    "entry_method": "next_trading_close_proxy",
+    "exclude_from_event_time_cta_vol_analysis": true
+  },
+  "pre_open_signal_policy": {
+    "allow_next_regular_open_proxy": true
+  },
+  "underlying_outcome_policy": {
+    "use_daily_close_for_intraday_entries": false,
+    "require_open_for_regular_open_proxy": true
+  },
+  "observed_option_pnl_policy": {
+    "auto_lot_matching_enabled": false,
+    "allow_broker_statement_realized_pnl": true
+  }
+}

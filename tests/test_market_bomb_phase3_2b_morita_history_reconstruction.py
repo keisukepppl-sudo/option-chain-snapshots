@@ -136,8 +136,9 @@ def test_naive_jst_source_is_not_interpreted_as_et(tmp_path: Path):
     pd.DataFrame([{"ticker": "NVDA", "alert_rank": "S", "timestamp_utc": "2026-01-05 10:00:00"}]).to_csv(src / "scan.csv", index=False)
     inv, _ = r.build_source_inventory(tmp_path)
     signals, _, _, _ = r.parse_sources(tmp_path, inv)
-    assert signals.loc[0, "event_timezone_original"] == "Asia/Tokyo"
-    assert signals.loc[0, "event_timestamp_utc"].startswith("2026-01-05T01:00:00")
+    assert signals.empty
+    assert inv.loc[0, "source_timezone_policy"] == "Asia/Tokyo"
+    assert inv.loc[0, "source_type"] == "daily_scan_log_csv"
 
 
 def test_timezone_unknown_blocks_strict_join_for_broker_order(tmp_path: Path):
@@ -221,3 +222,136 @@ def test_canonical_selection_uses_numeric_source_priority(tmp_path: Path):
     _, linkage, canonical = r.duplicate_audit(signals)
     assert canonical.iloc[0]["source_evidence_level"] == "raw_scanner_output"
     assert linkage.iloc[0]["canonical_source_priority"] < linkage.iloc[0]["duplicate_source_priority"]
+
+
+def test_excluded_candidates_file_is_not_signal_source(tmp_path: Path):
+    src = tmp_path / "scanner"
+    src.mkdir()
+    pd.DataFrame([{"ticker": "NVDA", "alert_rank": "S", "timestamp_utc": "2026-01-05T15:00:00Z", "notification_sent": True}]).to_csv(src / "excluded_candidates.csv", index=False)
+    inv, _ = r.build_source_inventory(tmp_path)
+    signals, _, _, _ = r.parse_sources(tmp_path, inv)
+    assert inv.loc[0, "source_type"] == "excluded_candidate_csv"
+    assert signals.empty
+
+
+def test_notified_csv_without_notification_evidence_is_not_phase3_eligible(tmp_path: Path):
+    src = tmp_path / "notified_candidates"
+    src.mkdir()
+    pd.DataFrame([{"ticker": "NVDA", "alert_rank": "S", "timestamp_utc": "2026-01-05T15:00:00Z"}]).to_csv(src / "notified_candidates_20260105.csv", index=False)
+    inv, _ = r.build_source_inventory(tmp_path)
+    signals, _, _, _ = r.parse_sources(tmp_path, inv)
+    assert inv.loc[0, "source_type"] == "scanner_output_csv"
+    assert len(signals) == 1
+    assert signals.loc[0, "notification_evidence_status"] == "no_notification_evidence"
+    assert not bool(signals.loc[0, "source_phase3_2c_eligible"])
+    assert not bool(signals.loc[0, "cta_vol_join_eligible"])
+
+
+def test_explicit_final_scanner_signal_is_preserved_but_marked_unverified(tmp_path: Path):
+    src = tmp_path / "scanner_alerts"
+    src.mkdir()
+    pd.DataFrame([{"ticker": "NVDA", "alert_rank": "S", "timestamp_utc": "2026-01-05T15:00:00Z", "final_signal": True}]).to_csv(src / "signal_events.csv", index=False)
+    inv, _ = r.build_source_inventory(tmp_path)
+    signals, _, _, _ = r.parse_sources(tmp_path, inv)
+    assert inv.loc[0, "source_type"] == "notified_signal_csv"
+    assert len(signals) == 1
+    assert signals.loc[0, "notification_evidence_status"] == "explicit_signal_not_notification_verified"
+
+
+def test_artifact_blank_run_ids_does_not_search(tmp_path: Path):
+    manifest, status = r.ingest_github_action_artifacts(tmp_path, include=True, artifact_run_ids="", artifact_allowlist="scanner-alerts")
+    assert status == "unavailable_blank_run_ids_no_search"
+    assert manifest.loc[0, "artifact_download_status"] == "skipped"
+
+
+def test_intraday_fill_with_daily_prices_does_not_create_underlying_outcome(tmp_path: Path):
+    prices = {
+        "NVDA": pd.DataFrame(
+            [
+                {"date": "2026-01-05", "adjusted_close": 100.0},
+                {"date": "2026-01-06", "adjusted_close": 110.0},
+            ]
+        )
+    }
+    row = {
+        "analysis_unit": "trade",
+        "ticker": "NVDA",
+        "entry_price_method": "actual_fill",
+        "entry_timestamp_utc": "2026-01-05T15:00:00Z",
+        "underlying_entry_timestamp_utc": "2026-01-05T15:00:00Z",
+        "underlying_entry_price": np.nan,
+        "underlying_entry_price_method": "unavailable_no_intraday_quote",
+        "underlying_outcome_eligible": False,
+    }
+    out = r.add_underlying_outcomes(row, prices)
+    assert not out["underlying_outcome_eligible"]
+    assert pd.isna(out["underlying_entry_price"])
+
+
+def test_after_close_signal_uses_next_session_open_when_available(tmp_path: Path, monkeypatch):
+    prices = {
+        "NVDA": pd.DataFrame(
+            [
+                {"date": "2026-01-06", "open": 101.0, "adjusted_close": 105.0},
+                {"date": "2026-01-07", "open": 106.0, "adjusted_close": 110.0},
+            ]
+        )
+    }
+    monkeypatch.setattr(r, "load_price_history", lambda root: prices)
+    signals = pd.DataFrame(
+        [
+            {
+                "signal_event_id": "s1",
+                "ticker": "NVDA",
+                "strategy_bucket": "S_breakout_momentum",
+                "original_rank": "S",
+                "setup_type": "breakout",
+                "event_timestamp_utc": "2026-01-05T22:00:00Z",
+                "event_session_context": "after_close",
+                "analysis_mode": "historical_reconstructed",
+                "cta_vol_join_eligible": True,
+            }
+        ]
+    )
+    panel = r.build_outcome_panel(tmp_path, signals, pd.DataFrame(), pd.DataFrame(), pd.DataFrame(), True)
+    assert panel.loc[0, "underlying_entry_price_method"] == "next_regular_open_proxy"
+    assert panel.loc[0, "underlying_entry_price"] == 101.0
+    assert bool(panel.loc[0, "underlying_outcome_eligible"])
+
+
+def test_broker_realized_pnl_field_is_preserved_without_lot_matching(tmp_path: Path):
+    fills = pd.DataFrame(
+        [
+            {
+                "trade_id": "t1",
+                "decision_id": "",
+                "signal_event_id": "",
+                "ticker": "NVDA",
+                "fill_timestamp_utc": "2026-01-05T15:00:00Z",
+                "fill_price": 10,
+                "quantity": 1,
+                "multiplier": 100,
+                "source_evidence_level": "raw_broker_execution",
+                "analysis_mode": "strict_live_replay",
+                "cta_vol_join_eligible": True,
+                "broker_realized_pnl_currency": "",
+                "broker_realized_pnl_pct": "",
+            }
+        ]
+    )
+    exits = pd.DataFrame(
+        [
+            {
+                "trade_id": "t1",
+                "exit_price": 15,
+                "exit_quantity": 1,
+                "source_evidence_level": "raw_broker_execution",
+                "broker_realized_pnl_currency": 500,
+                "broker_realized_pnl_pct": 0.5,
+            }
+        ]
+    )
+    panel = r.build_outcome_panel(tmp_path, pd.DataFrame(), pd.DataFrame(), fills, exits, False)
+    assert bool(panel.loc[0, "observed_option_pnl_available"])
+    assert panel.loc[0, "observed_pnl_calculation_method"] == "broker_statement_realized_pnl"
+    assert panel.loc[0, "observed_option_pnl_pct"] == 0.5

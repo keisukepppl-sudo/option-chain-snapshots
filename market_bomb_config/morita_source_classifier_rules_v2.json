@@ -1,0 +1,52 @@
+{
+  "version": "morita_source_classifier_rules_v2",
+  "global_filename_denylist": [
+    "excluded_candidates",
+    "excluded",
+    "universe",
+    "all_candidates",
+    "candidate_cache",
+    "watchlist_only",
+    "research_only",
+    "debug",
+    "test"
+  ],
+  "notified_signal_csv": {
+    "filename_allowlist": [
+      "notified_candidates",
+      "scanner_alerts",
+      "signal_events"
+    ],
+    "filename_denylist": [
+      "excluded_candidates",
+      "all_candidates",
+      "candidate_cache"
+    ],
+    "required_columns_any": [
+      ["ticker", "symbol"],
+      ["alert_rank", "rank", "original_rank"],
+      ["event_timestamp_utc", "alert_timestamp_utc", "timestamp_utc"]
+    ],
+    "notification_evidence_columns": [
+      "notification_sent",
+      "alert_emitted",
+      "source_is_explicitly_notified"
+    ],
+    "explicit_signal_columns": [
+      "is_final_signal",
+      "final_signal",
+      "signal_emitted"
+    ]
+  },
+  "scanner_output_csv": {
+    "filename_allowlist": [
+      "scanner_output",
+      "scanner_alerts",
+      "signal_events"
+    ],
+    "required_columns_any": [
+      ["ticker", "symbol"],
+      ["alert_rank", "rank", "original_rank"]
+    ]
+  }
+}

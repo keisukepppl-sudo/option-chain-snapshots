@@ -1,0 +1,58 @@
+{
+  "version": "morita_source_parser_matrix_v2",
+  "notified_signal_csv": {
+    "allow": ["signal"],
+    "evidence_level": "raw_scanner_output",
+    "phase3_2c_eligible": true
+  },
+  "scanner_output_csv": {
+    "allow": ["signal"],
+    "evidence_level": "raw_scanner_output",
+    "phase3_2c_eligible": false
+  },
+  "scanner_candidate_csv": {
+    "allow": [],
+    "evidence_level": "raw_scanner_output",
+    "phase3_2c_eligible": false
+  },
+  "excluded_candidate_csv": {
+    "allow": [],
+    "evidence_level": "raw_scanner_output",
+    "phase3_2c_eligible": false
+  },
+  "daily_scan_log_csv": {
+    "allow": [],
+    "evidence_level": "raw_action_artifact",
+    "phase3_2c_eligible": false
+  },
+  "notification_export_csv": {
+    "allow": ["signal", "decision"],
+    "evidence_level": "raw_notification_export",
+    "phase3_2c_eligible": true
+  },
+  "github_actions_artifact_csv": {
+    "allow": ["signal"],
+    "evidence_level": "raw_action_artifact",
+    "phase3_2c_eligible": false
+  },
+  "broker_order_csv": {
+    "allow": ["decision"],
+    "evidence_level": "raw_broker_order",
+    "phase3_2c_eligible": true
+  },
+  "broker_execution_csv": {
+    "allow": ["fill", "exit"],
+    "evidence_level": "raw_broker_execution",
+    "phase3_2c_eligible": true
+  },
+  "manual_reconstruction_csv": {
+    "allow": ["signal", "decision", "fill", "exit"],
+    "evidence_level": "structured_manual_entry",
+    "phase3_2c_eligible": false
+  },
+  "unknown": {
+    "allow": [],
+    "evidence_level": "unknown",
+    "phase3_2c_eligible": false
+  }
+}

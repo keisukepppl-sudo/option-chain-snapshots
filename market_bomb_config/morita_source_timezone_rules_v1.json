@@ -3,6 +3,11 @@
   "default_policy": "unknown_blocks_strict_join",
   "source_type_defaults": {
     "scanner_alert_csv": "America/New_York",
+    "notified_signal_csv": "America/New_York",
+    "scanner_output_csv": "America/New_York",
+    "scanner_candidate_csv": "America/New_York",
+    "excluded_candidate_csv": "America/New_York",
+    "github_actions_artifact_csv": "America/New_York",
     "notified_candidates_csv": "Asia/Tokyo",
     "daily_scan_log_csv": "Asia/Tokyo",
     "notification_export_csv": "Asia/Tokyo",

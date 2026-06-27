@@ -9,10 +9,20 @@ on:
         default: true
         type: boolean
       include_github_action_artifacts:
-        description: "Attempt to retrieve available GitHub Actions artifacts with actions:read"
+        description: "Retrieve selected historical scanner artifacts for reconstruction"
         required: true
         default: false
         type: boolean
+      artifact_run_ids:
+        description: "Comma-separated GitHub Actions run IDs to ingest; blank means no retrieval"
+        required: false
+        default: ""
+        type: string
+      artifact_allowlist:
+        description: "Comma-separated artifact names or prefixes allowed for ingest"
+        required: false
+        default: "scanner-alerts,daily-scan,scanner-output"
+        type: string
       build_underlying_outcomes:
         description: "Build reconstructed underlying outcome panel"
         required: true
@@ -65,6 +75,12 @@ jobs:
           if [ "${{ inputs.include_github_action_artifacts }}" = "true" ]; then
             ARGS="$ARGS --include-github-action-artifacts"
           fi
+          if [ -n "${{ inputs.artifact_run_ids }}" ]; then
+            ARGS="$ARGS --artifact-run-ids=${{ inputs.artifact_run_ids }}"
+          fi
+          if [ -n "${{ inputs.artifact_allowlist }}" ]; then
+            ARGS="$ARGS --artifact-allowlist=${{ inputs.artifact_allowlist }}"
+          fi
           if [ "${{ inputs.build_underlying_outcomes }}" != "true" ]; then
             ARGS="$ARGS --skip-underlying-outcomes"
           fi
@@ -102,6 +118,9 @@ jobs:
             market_bomb_reconstruction/source_inventory.md
             market_bomb_reconstruction/source_file_manifest.csv
             market_bomb_reconstruction/source_ingestion_audit.md
+            market_bomb_reconstruction/artifact_sources/*.csv
+            market_bomb_reconstruction/artifact_sources/*.md
+            market_bomb_reconstruction/artifact_sources/raw/**/*.csv
             market_bomb_reconstruction/normalized/*.csv
             market_bomb_reconstruction/normalized/*.parquet
             market_bomb_reconstruction/audit/*.csv

@@ -3,11 +3,15 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import io
 import json
 import math
 import os
 import re
+import urllib.error
+import urllib.request
 import uuid
+import zipfile
 from datetime import date, time, timedelta
 from pathlib import Path
 from typing import Any
@@ -25,15 +29,17 @@ except Exception:  # pragma: no cover
 ET = ZoneInfo("America/New_York")
 UTC = ZoneInfo("UTC")
 JST = ZoneInfo("Asia/Tokyo")
-PARSER_VERSION = "morita_history_reconstruction_parser_v2"
-RECONSTRUCTION_VERSION = "market_bomb_phase3_2b_morita_history_reconstruction_v2_20260627"
+PARSER_VERSION = "morita_history_reconstruction_parser_v2_1"
+RECONSTRUCTION_VERSION = "market_bomb_phase3_2b1_source_ingest_outcome_integrity_v1_20260627"
 TIMEZONE_RULES_VERSION = "morita_source_timezone_rules_v1"
-PARSER_MATRIX_VERSION = "morita_source_parser_matrix_v1"
-OUTCOME_RULES_VERSION = "morita_reconstruction_rules_v2"
+SOURCE_CLASSIFIER_VERSION = "morita_source_classifier_rules_v2"
+PARSER_MATRIX_VERSION = "morita_source_parser_matrix_v2"
+OUTCOME_RULES_VERSION = "morita_reconstruction_rules_v3"
 MAX_FEATURE_AGE_HOURS = 96
 SOURCE_TIMEZONE_RULES_PATH = Path("market_bomb_config/morita_source_timezone_rules_v1.json")
-PARSER_MATRIX_PATH = Path("market_bomb_config/morita_source_parser_matrix_v1.json")
-RECONSTRUCTION_RULES_PATH = Path("market_bomb_config/morita_reconstruction_rules_v2.json")
+SOURCE_CLASSIFIER_PATH = Path("market_bomb_config/morita_source_classifier_rules_v2.json")
+PARSER_MATRIX_PATH = Path("market_bomb_config/morita_source_parser_matrix_v2.json")
+RECONSTRUCTION_RULES_PATH = Path("market_bomb_config/morita_reconstruction_rules_v3.json")
 
 SIGNAL_COLUMNS = [
     "signal_event_id", "setup_id", "source_id", "source_hash", "source_row_number", "source_record_key",
@@ -48,6 +54,8 @@ SIGNAL_COLUMNS = [
     "parser_matrix_version", "timezone_rules_version", "outcome_rules_version", "analysis_base_commit_sha",
     "analysis_run_id", "reconstruction_version", "source_priority", "evidence_priority",
     "timestamp_quality_priority", "canonical_selection_rank", "canonical_selection_reason",
+    "notification_evidence_status", "notification_evidence_field", "notification_evidence_value",
+    "notification_evidence_source", "source_phase3_2c_eligible",
 ]
 
 DECISION_COLUMNS = [
@@ -62,6 +70,9 @@ DECISION_COLUMNS = [
     "timezone_confidence", "event_time_precision", "cta_vol_join_eligible", "parser_version",
     "parser_matrix_version", "timezone_rules_version", "outcome_rules_version", "analysis_base_commit_sha",
     "analysis_run_id", "reconstruction_version",
+    "broker_adapter_name", "broker_adapter_version", "broker_transaction_id", "broker_order_id",
+    "broker_execution_id", "broker_realized_pnl_currency", "broker_realized_pnl_pct",
+    "observed_option_pnl_status", "observed_option_pnl_reason",
 ]
 
 FILL_COLUMNS = [
@@ -75,6 +86,9 @@ FILL_COLUMNS = [
     "timezone_confidence", "event_time_precision", "cta_vol_join_eligible", "parser_version",
     "parser_matrix_version", "timezone_rules_version", "outcome_rules_version", "analysis_base_commit_sha",
     "analysis_run_id", "reconstruction_version",
+    "broker_adapter_name", "broker_adapter_version", "broker_transaction_id", "broker_order_id",
+    "broker_execution_id", "broker_realized_pnl_currency", "broker_realized_pnl_pct",
+    "observed_option_pnl_status", "observed_option_pnl_reason",
 ]
 
 EXIT_COLUMNS = [
@@ -87,17 +101,42 @@ EXIT_COLUMNS = [
     "timezone_confidence", "event_time_precision", "cta_vol_join_eligible", "parser_version",
     "parser_matrix_version", "timezone_rules_version", "outcome_rules_version", "analysis_base_commit_sha",
     "analysis_run_id", "reconstruction_version",
+    "broker_adapter_name", "broker_adapter_version", "broker_transaction_id", "broker_order_id",
+    "broker_execution_id", "broker_realized_pnl_currency", "broker_realized_pnl_pct",
+    "observed_option_pnl_status", "observed_option_pnl_reason",
 ]
 
 PARSER_EXECUTION_COLUMNS = [
     "source_id", "source_type", "parser_name", "parser_allowed", "parser_executed",
     "parser_skipped_reason", "rows_read", "rows_parsed", "rows_rejected",
+    "source_phase3_2c_eligible",
 ]
 
 TIMESTAMP_AUDIT_COLUMNS = [
     "source_id", "source_path", "source_type", "timestamp_field_name", "raw_timestamp",
     "declared_timezone", "source_timezone_policy", "timezone_resolution_method",
     "timezone_confidence", "timestamp_utc", "timestamp_quality", "parse_warning", "row_count",
+]
+
+SOURCE_CLASSIFICATION_AUDIT_COLUMNS = [
+    "source_id", "source_path", "source_filename", "detected_source_type", "classification_reason",
+    "denylist_matched", "allowlist_matched", "required_columns_status", "notification_evidence_status",
+    "notification_evidence_field", "notification_evidence_value", "source_phase3_2c_eligible",
+    "eligible_for_parser", "row_count_raw",
+]
+
+NOTIFICATION_EVIDENCE_AUDIT_COLUMNS = [
+    "source_id", "source_path", "source_type", "source_row_number", "ticker",
+    "notification_evidence_status", "notification_evidence_field", "notification_evidence_value",
+    "notification_evidence_source", "phase3_2c_signal_eligible",
+]
+
+ARTIFACT_MANIFEST_COLUMNS = [
+    "workflow_run_id", "workflow_name", "artifact_id", "artifact_name", "artifact_digest",
+    "artifact_created_at_utc", "artifact_expired", "artifact_download_status",
+    "artifact_unavailable_reason", "artifact_file_path", "artifact_file_hash",
+    "artifact_file_size_bytes", "detected_source_type", "classification_reason",
+    "eligible_for_parser", "ingestion_timestamp_utc", "analysis_base_commit_sha",
 ]
 
 
@@ -198,6 +237,11 @@ def timezone_rules(root: Path) -> dict[str, Any]:
         "default_policy": "unknown_blocks_strict_join",
         "source_type_defaults": {
             "scanner_alert_csv": "America/New_York",
+            "notified_signal_csv": "America/New_York",
+            "scanner_output_csv": "America/New_York",
+            "scanner_candidate_csv": "America/New_York",
+            "excluded_candidate_csv": "America/New_York",
+            "github_actions_artifact_csv": "America/New_York",
             "notified_candidates_csv": "Asia/Tokyo",
             "daily_scan_log_csv": "Asia/Tokyo",
             "notification_export_csv": "Asia/Tokyo",
@@ -214,14 +258,35 @@ def timezone_rules(root: Path) -> dict[str, Any]:
 def parser_matrix(root: Path) -> dict[str, Any]:
     return load_json_config(root, PARSER_MATRIX_PATH, {
         "version": PARSER_MATRIX_VERSION,
-        "scanner_alert_csv": {"allow": ["signal"], "evidence_level": "raw_scanner_output"},
-        "notified_candidates_csv": {"allow": ["signal"], "evidence_level": "raw_scanner_output"},
-        "daily_scan_log_csv": {"allow": ["signal"], "evidence_level": "raw_scanner_output"},
-        "notification_export_csv": {"allow": ["signal", "decision"], "evidence_level": "raw_notification_export"},
-        "broker_order_csv": {"allow": ["decision"], "evidence_level": "raw_broker_order"},
-        "broker_execution_csv": {"allow": ["fill", "exit"], "evidence_level": "raw_broker_execution"},
-        "manual_reconstruction_csv": {"allow": ["signal", "decision", "fill", "exit"], "evidence_level": "structured_manual_entry"},
-        "unknown": {"allow": [], "evidence_level": "unknown"},
+        "notified_signal_csv": {"allow": ["signal"], "evidence_level": "raw_scanner_output", "phase3_2c_eligible": True},
+        "scanner_output_csv": {"allow": ["signal"], "evidence_level": "raw_scanner_output", "phase3_2c_eligible": False},
+        "scanner_candidate_csv": {"allow": [], "evidence_level": "raw_scanner_output", "phase3_2c_eligible": False},
+        "excluded_candidate_csv": {"allow": [], "evidence_level": "raw_scanner_output", "phase3_2c_eligible": False},
+        "daily_scan_log_csv": {"allow": [], "evidence_level": "raw_action_artifact", "phase3_2c_eligible": False},
+        "notification_export_csv": {"allow": ["signal", "decision"], "evidence_level": "raw_notification_export", "phase3_2c_eligible": True},
+        "github_actions_artifact_csv": {"allow": ["signal"], "evidence_level": "raw_action_artifact", "phase3_2c_eligible": False},
+        "broker_order_csv": {"allow": ["decision"], "evidence_level": "raw_broker_order", "phase3_2c_eligible": True},
+        "broker_execution_csv": {"allow": ["fill", "exit"], "evidence_level": "raw_broker_execution", "phase3_2c_eligible": True},
+        "manual_reconstruction_csv": {"allow": ["signal", "decision", "fill", "exit"], "evidence_level": "structured_manual_entry", "phase3_2c_eligible": False},
+        "unknown": {"allow": [], "evidence_level": "unknown", "phase3_2c_eligible": False},
+    })
+
+
+def source_classifier_rules(root: Path) -> dict[str, Any]:
+    return load_json_config(root, SOURCE_CLASSIFIER_PATH, {
+        "version": SOURCE_CLASSIFIER_VERSION,
+        "global_filename_denylist": ["excluded_candidates", "excluded", "universe", "all_candidates", "candidate_cache", "watchlist_only", "research_only", "debug", "test"],
+        "notified_signal_csv": {
+            "filename_allowlist": ["notified_candidates", "scanner_alerts", "signal_events"],
+            "filename_denylist": ["excluded_candidates", "all_candidates", "candidate_cache"],
+            "required_columns_any": [["ticker", "symbol"], ["alert_rank", "rank", "original_rank"], ["event_timestamp_utc", "alert_timestamp_utc", "timestamp_utc"]],
+            "notification_evidence_columns": ["notification_sent", "alert_emitted", "source_is_explicitly_notified"],
+            "explicit_signal_columns": ["is_final_signal", "final_signal", "signal_emitted"],
+        },
+        "scanner_output_csv": {
+            "filename_allowlist": ["scanner_output", "scanner_alerts", "signal_events"],
+            "required_columns_any": [["ticker", "symbol"], ["alert_rank", "rank", "original_rank"]],
+        },
     })
 
 
@@ -233,7 +298,20 @@ def reconstruction_rules(root: Path) -> dict[str, Any]:
             "allow_daily_research_proxy": False,
             "daily_proxy_entry_method": "next_trading_close_proxy",
         },
+        "daily_proxy_research": {
+            "enabled": False,
+            "entry_method": "next_trading_close_proxy",
+            "exclude_from_event_time_cta_vol_analysis": True,
+        },
         "pre_open_signal_policy": {"allow_next_regular_open_proxy": True},
+        "underlying_outcome_policy": {
+            "use_daily_close_for_intraday_entries": False,
+            "require_open_for_regular_open_proxy": True,
+        },
+        "observed_option_pnl_policy": {
+            "auto_lot_matching_enabled": False,
+            "allow_broker_statement_realized_pnl": True,
+        },
     })
 
 
@@ -485,6 +563,60 @@ def analysis_mode(evidence: str, timestamp_quality: str, unit: str) -> str:
     return "unavailable"
 
 
+def has_any_column_group(df: pd.DataFrame, groups: list[list[str]]) -> bool:
+    cols = {str(c).lower() for c in df.columns}
+    for group in groups:
+        if not any(c.lower() in cols for c in group):
+            return False
+    return True
+
+
+def truthy_value(value: Any) -> bool:
+    if value is None or (isinstance(value, float) and pd.isna(value)):
+        return False
+    return str(value).strip().lower() in {"true", "1", "yes", "y", "sent", "emitted", "notified"}
+
+
+def source_level_notification_evidence(df: pd.DataFrame, rules: dict[str, Any]) -> tuple[str, str, str]:
+    if df.empty:
+        return "unknown", "", ""
+    signal_rules = rules.get("notified_signal_csv", {}) or {}
+    evidence_cols = signal_rules.get("notification_evidence_columns", ["notification_sent", "alert_emitted", "source_is_explicitly_notified"])
+    explicit_cols = signal_rules.get("explicit_signal_columns", ["is_final_signal", "final_signal", "signal_emitted"])
+    for col in evidence_cols:
+        if col in df.columns:
+            values = df[col].dropna().astype(str)
+            if any(truthy_value(v) for v in values):
+                return "confirmed_notified", col, "true"
+            return "no_notification_evidence", col, "false"
+    for col in explicit_cols:
+        if col in df.columns:
+            values = df[col].dropna().astype(str)
+            if any(truthy_value(v) for v in values):
+                return "explicit_signal_not_notification_verified", col, "true"
+    return "no_notification_evidence", "", ""
+
+
+def row_notification_evidence(row: pd.Series, source: pd.Series) -> tuple[str, str, str, str]:
+    source_status = str(source.get("notification_evidence_status", "unknown"))
+    source_field = str(source.get("source_notification_evidence_field", ""))
+    source_value = str(source.get("source_notification_evidence_value", ""))
+    for col in ["notification_sent", "alert_emitted", "source_is_explicitly_notified"]:
+        if col in row:
+            return (
+                "confirmed_notified" if truthy_value(row[col]) else "no_notification_evidence",
+                col,
+                str(row[col]),
+                "row",
+            )
+    for col in ["is_final_signal", "final_signal", "signal_emitted"]:
+        if col in row and truthy_value(row[col]):
+            return ("explicit_signal_not_notification_verified", col, str(row[col]), "row")
+    if source_status in {"confirmed_notified", "explicit_signal_not_notification_verified", "no_notification_evidence", "excluded_candidate"}:
+        return (source_status, source_field, source_value, "source")
+    return ("unknown", "", "", "none")
+
+
 def source_type_for(path: Path) -> str:
     p = str(path).lower().replace("\\", "/")
     name = path.name.lower()
@@ -497,21 +629,79 @@ def source_type_for(path: Path) -> str:
     if "notification" in p or "pushover" in p or "discord" in p:
         return "notification_export_csv"
     if "notified_candidates" in p:
-        return "notified_candidates_csv"
+        return "notified_signal_csv"
     if "daily_scan" in p or "scan_log" in p:
         return "daily_scan_log_csv"
     if "scanner_alert" in p or "scanner" in p or "candidate" in name:
-        return "scanner_alert_csv"
+        return "scanner_output_csv"
     return "unknown"
+
+
+def classify_source(path: Path, df: pd.DataFrame, root: Path, rules: dict[str, Any]) -> dict[str, Any]:
+    rel = str(path.relative_to(root)).replace("\\", "/")
+    p = rel.lower()
+    name = path.name.lower()
+    deny = [x for x in (rules.get("global_filename_denylist", []) or []) if x in p or x in name]
+    base_type = source_type_for(path)
+    notification_status, notification_field, notification_value = source_level_notification_evidence(df, rules)
+    required_status = "not_checked"
+    allowlist_matched = ""
+    reason = f"path_rule:{base_type}"
+
+    if deny:
+        stype = "excluded_candidate_csv" if any("excluded" in x for x in deny) else "scanner_candidate_csv"
+        return {
+            "source_type": stype,
+            "classification_reason": f"denylist:{','.join(deny)}",
+            "denylist_matched": ",".join(deny),
+            "allowlist_matched": "",
+            "required_columns_status": "not_checked_denied",
+            "notification_evidence_status": "excluded_candidate" if stype == "excluded_candidate_csv" else "no_notification_evidence",
+            "notification_evidence_field": notification_field,
+            "notification_evidence_value": notification_value,
+        }
+
+    if "artifact_sources/raw" in p:
+        base_type = "github_actions_artifact_csv"
+
+    if base_type in {"notified_signal_csv", "scanner_output_csv"}:
+        signal_rules = rules.get("notified_signal_csv", {}) or {}
+        required_status = "passed" if has_any_column_group(df, signal_rules.get("required_columns_any", [])) else "missing_required_columns"
+        for token in signal_rules.get("filename_allowlist", []):
+            if token in p or token in name:
+                allowlist_matched = token
+                break
+        if allowlist_matched and required_status == "passed":
+            stype = "notified_signal_csv" if notification_status in {"confirmed_notified", "explicit_signal_not_notification_verified"} else "scanner_output_csv"
+            reason = "allowlist_and_required_columns"
+        else:
+            stype = "scanner_candidate_csv" if "candidate" in name and "alert" not in p else "scanner_output_csv"
+            reason = required_status
+    else:
+        stype = base_type
+
+    return {
+        "source_type": stype,
+        "classification_reason": reason,
+        "denylist_matched": "",
+        "allowlist_matched": allowlist_matched,
+        "required_columns_status": required_status,
+        "notification_evidence_status": notification_status,
+        "notification_evidence_field": notification_field,
+        "notification_evidence_value": notification_value,
+    }
 
 
 def source_priority(source_type: str) -> int:
     return {
         "broker_execution_csv": 1,
         "broker_order_csv": 2,
-        "scanner_alert_csv": 3,
-        "notified_candidates_csv": 3,
-        "daily_scan_log_csv": 3,
+        "notified_signal_csv": 3,
+        "scanner_output_csv": 4,
+        "github_actions_artifact_csv": 4,
+        "scanner_candidate_csv": 90,
+        "excluded_candidate_csv": 90,
+        "daily_scan_log_csv": 90,
         "notification_export_csv": 4,
         "manual_reconstruction_csv": 5,
         "scanner_markdown_report": 4,
@@ -548,8 +738,10 @@ def evidence_level(source_type: str) -> str:
         return "raw_broker_execution"
     if source_type == "broker_order_csv":
         return "raw_broker_order"
-    if source_type in {"scanner_alert_csv", "notified_candidates_csv", "daily_scan_log_csv"}:
+    if source_type in {"notified_signal_csv", "scanner_output_csv", "scanner_candidate_csv", "excluded_candidate_csv"}:
         return "raw_scanner_output"
+    if source_type in {"daily_scan_log_csv", "github_actions_artifact_csv"}:
+        return "raw_action_artifact"
     if source_type == "notification_export_csv":
         return "raw_notification_export"
     if source_type == "manual_reconstruction_csv":
@@ -567,11 +759,20 @@ def candidate_source_paths(root: Path) -> list[Path]:
         "morita_decision_history/**/*.csv",
         "morita_trade_log/**/*.csv",
         "market_bomb_reconstruction/raw_sources/**/*.csv",
+        "market_bomb_reconstruction/artifact_sources/raw/**/*.csv",
     ]
     paths: list[Path] = []
     for pattern in globs:
         paths.extend(root.glob(pattern))
-    return sorted({p for p in paths if p.is_file() and "market_bomb_reconstruction/normalized" not in str(p).replace("\\", "/")})
+    excluded_parts = [
+        "market_bomb_reconstruction/normalized",
+        "market_bomb_reconstruction/audit",
+        "market_bomb_reconstruction/analysis",
+        "market_bomb_reconstruction/templates",
+        "market_bomb_reconstruction/artifact_sources/raw_artifact_manifest.csv",
+        "market_bomb_reconstruction/artifact_sources/artifact_ingestion_audit.csv",
+    ]
+    return sorted({p for p in paths if p.is_file() and not any(x in str(p).replace("\\", "/") for x in excluded_parts)})
 
 
 def first_present(row: pd.Series, names: list[str], default: Any = "") -> Any:
@@ -634,18 +835,21 @@ def build_source_inventory(root: Path, include_repo_sources: bool = True) -> tup
     paths = candidate_source_paths(root) if include_repo_sources else []
     tz_rules = timezone_rules(root)
     matrix = parser_matrix(root)
+    classifier = source_classifier_rules(root)
     rows = []
     manifest = []
     for i, path in enumerate(paths, start=1):
         rel = str(path.relative_to(root)).replace("\\", "/")
-        stype = source_type_for(path)
-        tz_policy = resolve_source_timezone_policy(stype, rel, tz_rules)
-        matrix_entry = matrix.get(stype, matrix.get("unknown", {"allow": [], "evidence_level": "unknown"}))
         sha = hash_file(path)
         try:
             df = pd.read_csv(path)
         except Exception:
             df = pd.DataFrame()
+        classification = classify_source(path, df, root, classifier)
+        stype = classification["source_type"]
+        tz_policy = resolve_source_timezone_policy(stype, rel, tz_rules)
+        matrix_entry = matrix.get(stype, matrix.get("unknown", {"allow": [], "evidence_level": "unknown", "phase3_2c_eligible": False}))
+        phase3_eligible = bool(matrix_entry.get("phase3_2c_eligible", False)) and classification["notification_evidence_status"] in {"confirmed_notified", "explicit_signal_not_notification_verified", "unknown"} if stype not in {"notified_signal_csv", "scanner_output_csv"} else bool(matrix_entry.get("phase3_2c_eligible", False)) and classification["notification_evidence_status"] in {"confirmed_notified", "explicit_signal_not_notification_verified"}
         source_id = deterministic_id("src", rel, sha)
         rows.append(
             {
@@ -653,11 +857,23 @@ def build_source_inventory(root: Path, include_repo_sources: bool = True) -> tup
                 "source_path": rel,
                 "source_filename": path.name,
                 "source_type": stype,
+                "source_origin": "github_actions_artifact" if "artifact_sources/raw" in rel else "repository_raw",
+                "source_ingest_batch_id": os.environ.get("GITHUB_RUN_ID", ""),
+                "source_classifier_version": SOURCE_CLASSIFIER_VERSION,
+                "classification_reason": classification["classification_reason"],
+                "denylist_matched": classification["denylist_matched"],
+                "allowlist_matched": classification["allowlist_matched"],
+                "required_columns_status": classification["required_columns_status"],
+                "source_is_explicitly_notified": classification["notification_evidence_status"] == "confirmed_notified",
+                "source_notification_evidence_field": classification["notification_evidence_field"],
+                "source_notification_evidence_value": classification["notification_evidence_value"],
+                "notification_evidence_status": classification["notification_evidence_status"],
                 "source_priority": source_priority(stype),
                 "source_timezone_policy": tz_policy,
                 "source_timezone_policy_version": str(tz_rules.get("version", TIMEZONE_RULES_VERSION)),
                 "parser_allowed_units": ",".join(matrix_entry.get("allow", [])),
                 "source_evidence_level": matrix_entry.get("evidence_level", evidence_level(stype)),
+                "source_phase3_2c_eligible": phase3_eligible,
                 "source_hash": sha,
                 "file_size_bytes": path.stat().st_size,
                 "source_created_at_utc": pd.Timestamp(path.stat().st_ctime, unit="s", tz=UTC).isoformat(),
@@ -677,7 +893,18 @@ def build_source_inventory(root: Path, include_repo_sources: bool = True) -> tup
                 "notes": "" if not df.empty else "empty_or_unreadable",
             }
         )
-        manifest.append({"source_id": source_id, "source_path": rel, "source_hash": sha, "source_type": stype, "row_count_raw": len(df)})
+        manifest.append({
+            "source_id": source_id,
+            "source_path": rel,
+            "source_hash": sha,
+            "source_type": stype,
+            "source_origin": "github_actions_artifact" if "artifact_sources/raw" in rel else "repository_raw",
+            "source_is_explicitly_notified": classification["notification_evidence_status"] == "confirmed_notified",
+            "source_notification_evidence_field": classification["notification_evidence_field"],
+            "source_notification_evidence_value": classification["notification_evidence_value"],
+            "source_phase3_2c_eligible": phase3_eligible,
+            "row_count_raw": len(df),
+        })
     return pd.DataFrame(rows), pd.DataFrame(manifest)
 
 
@@ -686,7 +913,7 @@ def parser_for_type(source_type: str) -> str:
         return "broker_execution_csv_parser"
     if source_type == "broker_order_csv":
         return "broker_order_csv_parser"
-    if source_type in {"scanner_alert_csv", "notified_candidates_csv", "daily_scan_log_csv"}:
+    if source_type in {"notified_signal_csv", "scanner_output_csv", "github_actions_artifact_csv"}:
         return "scanner_signal_csv_parser"
     if source_type == "manual_reconstruction_csv":
         return "manual_reconstruction_csv_parser"
@@ -698,7 +925,7 @@ def parser_for_type(source_type: str) -> str:
 def recommended_use(source_type: str) -> str:
     if source_type in {"broker_execution_csv", "broker_order_csv"}:
         return "trade_fill_exit_reconstruction"
-    if source_type in {"scanner_alert_csv", "notified_candidates_csv", "daily_scan_log_csv"}:
+    if source_type in {"notified_signal_csv", "scanner_output_csv", "github_actions_artifact_csv"}:
         return "signal_reconstruction"
     if source_type == "manual_reconstruction_csv":
         return "manual_research_reconstruction_only"
@@ -718,11 +945,15 @@ def normalize_signal_row(row: pd.Series, source: pd.Series, row_num: int, rules:
         return None
     evidence = evidence_level(str(source["source_type"]))
     mode = analysis_mode(evidence, tq, "signal")
+    notification_status, notification_field, notification_value, notification_source = row_notification_evidence(row, source)
     setup_type = str(first_present(row, ["setup_type", "entry_rule"], "unknown")).lower()
     if setup_type not in {"breakout", "first_pullback", "institutional_pullback"}:
         setup_type = "unknown"
     sid = deterministic_id("sig", source["source_hash"], row_num, ticker, ts.isoformat())
     setup_id = deterministic_id("setup", source["source_hash"], ticker, raw_rank, setup_type, ts.date())
+    provenance = provenance_metadata(source, parsed, mode)
+    phase3_signal_eligible = bool(source.get("source_phase3_2c_eligible", False)) and notification_status in {"confirmed_notified", "explicit_signal_not_notification_verified"}
+    provenance["cta_vol_join_eligible"] = bool(provenance["cta_vol_join_eligible"]) and phase3_signal_eligible
     return {
         "signal_event_id": sid,
         "setup_id": setup_id,
@@ -760,7 +991,12 @@ def normalize_signal_row(row: pd.Series, source: pd.Series, row_num: int, rules:
         "timestamp_quality_priority": timestamp_quality_priority(tq),
         "canonical_selection_rank": "",
         "canonical_selection_reason": "",
-        **provenance_metadata(source, parsed, mode),
+        "notification_evidence_status": notification_status,
+        "notification_evidence_field": notification_field,
+        "notification_evidence_value": notification_value,
+        "notification_evidence_source": notification_source,
+        "source_phase3_2c_eligible": phase3_signal_eligible,
+        **provenance,
     }
 
 
@@ -864,6 +1100,15 @@ def normalize_fill_row(row: pd.Series, source: pd.Series, row_num: int, rules: d
         "analysis_mode": mode,
         "is_reconstructed": evidence != "raw_broker_execution",
         "raw_payload_reference": source["source_path"],
+        "broker_adapter_name": first_present(row, ["broker_adapter_name"], ""),
+        "broker_adapter_version": first_present(row, ["broker_adapter_version"], ""),
+        "broker_transaction_id": first_present(row, ["broker_transaction_id", "transaction_id"], ""),
+        "broker_order_id": first_present(row, ["broker_order_id", "order_id"], ""),
+        "broker_execution_id": first_present(row, ["broker_execution_id", "execution_id"], ""),
+        "broker_realized_pnl_currency": first_present(row, ["broker_realized_pnl_currency", "realized_pnl_currency"], ""),
+        "broker_realized_pnl_pct": first_present(row, ["broker_realized_pnl_pct", "realized_pnl_pct", "pnl_pct"], ""),
+        "observed_option_pnl_status": "available_from_broker_statement" if str(first_present(row, ["broker_realized_pnl_currency", "broker_realized_pnl_pct", "realized_pnl_currency", "realized_pnl_pct", "pnl_pct"], "")).strip() else "unavailable_no_broker_realized_pnl",
+        "observed_option_pnl_reason": "" if str(first_present(row, ["broker_realized_pnl_currency", "broker_realized_pnl_pct", "realized_pnl_currency", "realized_pnl_pct", "pnl_pct"], "")).strip() else "broker_realized_pnl_missing",
         **provenance_metadata(source, parsed, mode),
     }
 
@@ -904,6 +1149,15 @@ def normalize_exit_row(row: pd.Series, source: pd.Series, row_num: int, rules: d
         "analysis_mode": mode,
         "is_reconstructed": evidence != "raw_broker_execution",
         "raw_payload_reference": source["source_path"],
+        "broker_adapter_name": first_present(row, ["broker_adapter_name"], ""),
+        "broker_adapter_version": first_present(row, ["broker_adapter_version"], ""),
+        "broker_transaction_id": first_present(row, ["broker_transaction_id", "transaction_id"], ""),
+        "broker_order_id": first_present(row, ["broker_order_id", "order_id"], ""),
+        "broker_execution_id": first_present(row, ["broker_execution_id", "execution_id"], ""),
+        "broker_realized_pnl_currency": first_present(row, ["broker_realized_pnl_currency", "realized_pnl_currency"], ""),
+        "broker_realized_pnl_pct": first_present(row, ["broker_realized_pnl_pct", "realized_pnl_pct", "pnl_pct"], ""),
+        "observed_option_pnl_status": "available_from_broker_statement" if str(first_present(row, ["broker_realized_pnl_currency", "broker_realized_pnl_pct", "realized_pnl_currency", "realized_pnl_pct", "pnl_pct"], "")).strip() else "unavailable_no_broker_realized_pnl",
+        "observed_option_pnl_reason": "" if str(first_present(row, ["broker_realized_pnl_currency", "broker_realized_pnl_pct", "realized_pnl_currency", "realized_pnl_pct", "pnl_pct"], "")).strip() else "broker_realized_pnl_missing",
         **provenance_metadata(source, parsed, mode),
     }
 
@@ -951,6 +1205,7 @@ def parse_sources_with_audits(root: Path, inventory: pd.DataFrame) -> tuple[pd.D
                 "rows_read": 0,
                 "rows_parsed": 0,
                 "rows_rejected": 0,
+                "source_phase3_2c_eligible": bool(source.get("source_phase3_2c_eligible", False)),
             })
             continue
         stype = str(source.get("source_type", "unknown"))
@@ -972,6 +1227,7 @@ def parse_sources_with_audits(root: Path, inventory: pd.DataFrame) -> tuple[pd.D
                 "rows_read": len(df),
                 "rows_parsed": 0,
                 "rows_rejected": len(df) if unit in allowed else 0,
+                "source_phase3_2c_eligible": bool(source.get("source_phase3_2c_eligible", False)),
             })
         if not allowed:
             continue
@@ -1103,19 +1359,26 @@ def build_outcome_panel(root: Path, signals: pd.DataFrame, decisions: pd.DataFra
         for _, fill in fills.iterrows():
             trade_id = str(fill.get("trade_id", ""))
             exit_row = exit_by_trade.get(trade_id)
-            observed_available = bool(exit_row is not None and fill.get("source_evidence_level") == "raw_broker_execution" and exit_row.get("source_evidence_level") == "raw_broker_execution")
+            realized_currency_raw = fill.get("broker_realized_pnl_currency", "")
+            realized_pct_raw = fill.get("broker_realized_pnl_pct", "")
+            if exit_row is not None:
+                realized_currency_raw = exit_row.get("broker_realized_pnl_currency", exit_row.get("realized_pnl_currency", realized_currency_raw))
+                realized_pct_raw = exit_row.get("broker_realized_pnl_pct", exit_row.get("realized_pnl_pct", realized_pct_raw))
+            observed_available = bool(
+                exit_row is not None
+                and fill.get("source_evidence_level") == "raw_broker_execution"
+                and exit_row.get("source_evidence_level") == "raw_broker_execution"
+                and (str(realized_currency_raw).strip() or str(realized_pct_raw).strip())
+            )
             observed_pct = np.nan
             observed_currency = np.nan
             method = ""
+            observed_status = "available_from_broker_statement" if observed_available else "unavailable_lot_matching_not_implemented"
+            observed_reason = "" if observed_available else "broker_realized_pnl_missing_or_lot_matching_not_implemented"
             if observed_available:
-                entry_price = safe_float(fill.get("fill_price"))
-                exit_price = safe_float(exit_row.get("exit_price"))
-                qty = abs(safe_float(exit_row.get("exit_quantity", fill.get("quantity", math.nan))))
-                multiplier = safe_float(fill.get("multiplier", 100), 100)
-                if not pd.isna(entry_price) and not pd.isna(exit_price) and entry_price > 0:
-                    observed_pct = exit_price / entry_price - 1
-                    observed_currency = (exit_price - entry_price) * qty * multiplier
-                    method = "actual_entry_exit_fill"
+                observed_pct = safe_float(realized_pct_raw)
+                observed_currency = safe_float(realized_currency_raw)
+                method = "broker_statement_realized_pnl"
             sig_id = str(fill.get("signal_event_id", ""))
             dec_id = str(fill.get("decision_id", ""))
             if sig_id:
@@ -1144,10 +1407,24 @@ def build_outcome_panel(root: Path, signals: pd.DataFrame, decisions: pd.DataFra
                 "observed_option_pnl_available": observed_available,
                 "observed_pnl_link_confidence": "high" if observed_available else "none",
                 "observed_pnl_calculation_method": method,
+                "observed_option_pnl_status": observed_status,
+                "observed_option_pnl_reason": observed_reason,
+                "broker_adapter_name": fill.get("broker_adapter_name", ""),
+                "broker_adapter_version": fill.get("broker_adapter_version", ""),
+                "broker_transaction_id": fill.get("broker_transaction_id", ""),
+                "broker_order_id": fill.get("broker_order_id", ""),
+                "broker_execution_id": fill.get("broker_execution_id", ""),
+                "broker_realized_pnl_currency": realized_currency_raw,
+                "broker_realized_pnl_pct": realized_pct_raw,
                 "modelled_option_pnl_pct": np.nan,
                 "modelled_option_pnl_available": False,
                 "underlying_entry_timestamp_utc": fill.get("fill_timestamp_utc", ""),
                 "underlying_entry_price": np.nan,
+                "underlying_entry_price_method": "unavailable_no_intraday_quote",
+                "underlying_entry_price_quality": "unavailable",
+                "underlying_entry_price_source": "",
+                "underlying_entry_price_available": False,
+                "underlying_outcome_eligible": False,
                 "outcome_price_source": "",
                 "outcome_calculation_version": RECONSTRUCTION_VERSION,
                 "reconstruction_version": RECONSTRUCTION_VERSION,
@@ -1187,10 +1464,24 @@ def build_outcome_panel(root: Path, signals: pd.DataFrame, decisions: pd.DataFra
                 "observed_option_pnl_available": False,
                 "observed_pnl_link_confidence": "none",
                 "observed_pnl_calculation_method": "",
+                "observed_option_pnl_status": "unavailable_no_broker_realized_pnl",
+                "observed_option_pnl_reason": "decision_has_no_broker_fill",
+                "broker_adapter_name": "",
+                "broker_adapter_version": "",
+                "broker_transaction_id": "",
+                "broker_order_id": "",
+                "broker_execution_id": "",
+                "broker_realized_pnl_currency": "",
+                "broker_realized_pnl_pct": "",
                 "modelled_option_pnl_pct": np.nan,
                 "modelled_option_pnl_available": False,
                 "underlying_entry_timestamp_utc": entry_ts if price_method == "exact_decision_price" else "",
                 "underlying_entry_price": np.nan,
+                "underlying_entry_price_method": "unavailable_no_intraday_quote" if price_method == "exact_decision_price" else "unavailable_no_fill_or_price",
+                "underlying_entry_price_quality": "unavailable",
+                "underlying_entry_price_source": "",
+                "underlying_entry_price_available": False,
+                "underlying_outcome_eligible": False,
                 "outcome_price_source": "",
                 "outcome_calculation_version": RECONSTRUCTION_VERSION,
                 "reconstruction_version": RECONSTRUCTION_VERSION,
@@ -1252,9 +1543,23 @@ def build_outcome_panel(root: Path, signals: pd.DataFrame, decisions: pd.DataFra
             "observed_option_pnl_available": False,
             "observed_pnl_link_confidence": "none",
             "observed_pnl_calculation_method": "",
+            "observed_option_pnl_status": "unavailable_no_broker_realized_pnl",
+            "observed_option_pnl_reason": "signal_event_has_no_broker_fill",
+            "broker_adapter_name": "",
+            "broker_adapter_version": "",
+            "broker_transaction_id": "",
+            "broker_order_id": "",
+            "broker_execution_id": "",
+            "broker_realized_pnl_currency": "",
+            "broker_realized_pnl_pct": "",
             "modelled_option_pnl_available": False,
             "underlying_entry_timestamp_utc": entry_ts.isoformat() if entry_ts is not None else "",
             "underlying_entry_price": np.nan,
+            "underlying_entry_price_method": method if method in {"next_regular_open_proxy", "next_trading_close_proxy"} else method,
+            "underlying_entry_price_quality": "pending_proxy_resolution" if method in {"next_regular_open_proxy", "next_trading_close_proxy"} else "unavailable",
+            "underlying_entry_price_source": "",
+            "underlying_entry_price_available": False,
+            "underlying_outcome_eligible": method in {"next_regular_open_proxy", "next_trading_close_proxy"},
             "outcome_price_source": "",
             "outcome_calculation_version": RECONSTRUCTION_VERSION,
             "reconstruction_version": RECONSTRUCTION_VERSION,
@@ -1267,25 +1572,63 @@ def build_outcome_panel(root: Path, signals: pd.DataFrame, decisions: pd.DataFra
 def add_underlying_outcomes(row: dict[str, Any], prices: dict[str, pd.DataFrame]) -> dict[str, Any]:
     for col in ["underlying_return_1d", "underlying_return_5d", "underlying_return_10d", "underlying_max_adverse_excursion", "underlying_max_favorable_excursion"]:
         row[col] = np.nan
+    row.setdefault("underlying_entry_price_method", "unavailable")
+    row.setdefault("underlying_entry_price_quality", "unavailable")
+    row.setdefault("underlying_entry_price_source", "")
+    row.setdefault("underlying_entry_price_available", False)
+    row.setdefault("underlying_outcome_eligible", False)
+    if not bool(row.get("underlying_outcome_eligible", False)):
+        return row
     if not prices:
+        row["underlying_outcome_eligible"] = False
+        row["underlying_entry_price_quality"] = "unavailable_price_history_missing"
         return row
     ticker = row["ticker"] if row["ticker"] in prices and not prices[row["ticker"]].empty else "QQQ"
     df = prices.get(ticker, pd.DataFrame())
     ts = parse_timestamp(row.get("entry_timestamp_utc"))[0]
     if df.empty or ts is None:
+        row["underlying_outcome_eligible"] = False
+        row["underlying_entry_price_quality"] = "unavailable_no_entry_timestamp"
         return row
     if "date" not in df.columns:
+        row["underlying_outcome_eligible"] = False
+        row["underlying_entry_price_quality"] = "unavailable_missing_date_column"
         return row
     work = df.copy()
     work["date_norm"] = pd.to_datetime(work["date"], errors="coerce").dt.normalize()
     date = ts.tz_convert(ET).tz_localize(None).normalize()
     future = work[work["date_norm"] >= date].head(11).reset_index(drop=True)
     if len(future) < 2:
+        row["underlying_outcome_eligible"] = False
+        row["underlying_entry_price_quality"] = "unavailable_insufficient_future_prices"
         return row
-    entry = safe_float(future.loc[0, "adjusted_close"])
+    method = str(row.get("underlying_entry_price_method", ""))
+    if method == "next_regular_open_proxy":
+        if "open" not in future.columns:
+            row["underlying_outcome_eligible"] = False
+            row["underlying_entry_price_quality"] = "unavailable_missing_open_column"
+            return row
+        entry = safe_float(future.loc[0, "open"])
+        row["underlying_entry_price_quality"] = "daily_open_proxy"
+        row["underlying_entry_price_source"] = f"price_history_open:{ticker}"
+    elif method == "next_trading_close_proxy":
+        if "adjusted_close" not in future.columns:
+            row["underlying_outcome_eligible"] = False
+            row["underlying_entry_price_quality"] = "unavailable_missing_adjusted_close_column"
+            return row
+        entry = safe_float(future.loc[0, "adjusted_close"])
+        row["underlying_entry_price_quality"] = "daily_close_proxy_research_only"
+        row["underlying_entry_price_source"] = f"price_history_adjusted_close:{ticker}"
+    else:
+        row["underlying_outcome_eligible"] = False
+        row["underlying_entry_price_quality"] = "unavailable_method_not_supported"
+        return row
     if pd.isna(entry) or entry <= 0:
+        row["underlying_outcome_eligible"] = False
+        row["underlying_entry_price_quality"] = "unavailable_invalid_entry_price"
         return row
     row["underlying_entry_price"] = entry
+    row["underlying_entry_price_available"] = True
     row["outcome_price_source"] = f"price_history:{ticker}"
     returns = future["adjusted_close"] / entry - 1
     for horizon in [1, 5, 10]:
@@ -1389,6 +1732,319 @@ def build_cta_vol_join(root: Path, panel: pd.DataFrame) -> pd.DataFrame:
     return pd.DataFrame(rows)
 
 
+def build_source_classification_audit(inventory: pd.DataFrame) -> pd.DataFrame:
+    if inventory.empty:
+        return pd.DataFrame(columns=SOURCE_CLASSIFICATION_AUDIT_COLUMNS)
+    rows = []
+    for _, src in inventory.iterrows():
+        rows.append({
+            "source_id": src.get("source_id", ""),
+            "source_path": src.get("source_path", ""),
+            "source_filename": src.get("source_filename", ""),
+            "detected_source_type": src.get("source_type", ""),
+            "classification_reason": src.get("classification_reason", ""),
+            "denylist_matched": src.get("denylist_matched", ""),
+            "allowlist_matched": src.get("allowlist_matched", ""),
+            "required_columns_status": src.get("required_columns_status", ""),
+            "notification_evidence_status": src.get("notification_evidence_status", ""),
+            "notification_evidence_field": src.get("source_notification_evidence_field", ""),
+            "notification_evidence_value": src.get("source_notification_evidence_value", ""),
+            "source_phase3_2c_eligible": src.get("source_phase3_2c_eligible", False),
+            "eligible_for_parser": bool(str(src.get("parser_allowed_units", "")).strip()),
+            "row_count_raw": src.get("row_count_raw", 0),
+        })
+    return pd.DataFrame(rows, columns=SOURCE_CLASSIFICATION_AUDIT_COLUMNS)
+
+
+def build_notification_evidence_audit(signals: pd.DataFrame) -> pd.DataFrame:
+    if signals.empty:
+        return pd.DataFrame(columns=NOTIFICATION_EVIDENCE_AUDIT_COLUMNS)
+    rows = []
+    for _, sig in signals.iterrows():
+        rows.append({
+            "source_id": sig.get("source_id", ""),
+            "source_path": sig.get("raw_payload_reference", ""),
+            "source_type": "",
+            "source_row_number": sig.get("source_row_number", ""),
+            "ticker": sig.get("ticker", ""),
+            "notification_evidence_status": sig.get("notification_evidence_status", ""),
+            "notification_evidence_field": sig.get("notification_evidence_field", ""),
+            "notification_evidence_value": sig.get("notification_evidence_value", ""),
+            "notification_evidence_source": sig.get("notification_evidence_source", ""),
+            "phase3_2c_signal_eligible": bool(sig.get("source_phase3_2c_eligible", False)) and bool(sig.get("cta_vol_join_eligible", False)),
+        })
+    return pd.DataFrame(rows, columns=NOTIFICATION_EVIDENCE_AUDIT_COLUMNS)
+
+
+def build_underlying_outcome_integrity_audit(panel: pd.DataFrame) -> pd.DataFrame:
+    cols = [
+        "analysis_unit", "signal_event_id", "decision_id", "trade_id", "ticker",
+        "entry_price_method", "underlying_entry_price_method", "underlying_entry_price_quality",
+        "underlying_entry_price_available", "underlying_outcome_eligible", "integrity_status",
+        "integrity_reason",
+    ]
+    if panel.empty:
+        return pd.DataFrame(columns=cols)
+    rows = []
+    for _, row in panel.iterrows():
+        method = str(row.get("entry_price_method", ""))
+        underlying_method = str(row.get("underlying_entry_price_method", ""))
+        eligible = bool(row.get("underlying_outcome_eligible", False))
+        if method == "actual_fill" and eligible:
+            status, reason = "failed", "actual_option_fill_must_not_use_daily_underlying_close"
+        elif eligible and underlying_method not in {"next_regular_open_proxy", "next_trading_close_proxy"}:
+            status, reason = "failed", "unsupported_underlying_entry_price_method"
+        else:
+            status, reason = "passed", ""
+        rows.append({
+            "analysis_unit": row.get("analysis_unit", ""),
+            "signal_event_id": row.get("signal_event_id", ""),
+            "decision_id": row.get("decision_id", ""),
+            "trade_id": row.get("trade_id", ""),
+            "ticker": row.get("ticker", ""),
+            "entry_price_method": method,
+            "underlying_entry_price_method": underlying_method,
+            "underlying_entry_price_quality": row.get("underlying_entry_price_quality", ""),
+            "underlying_entry_price_available": row.get("underlying_entry_price_available", False),
+            "underlying_outcome_eligible": eligible,
+            "integrity_status": status,
+            "integrity_reason": reason,
+        })
+    return pd.DataFrame(rows, columns=cols)
+
+
+def build_observed_option_pnl_integrity_audit(panel: pd.DataFrame) -> pd.DataFrame:
+    cols = [
+        "analysis_unit", "trade_id", "ticker", "observed_option_pnl_available",
+        "observed_option_pnl_status", "observed_option_pnl_reason",
+        "observed_pnl_calculation_method", "integrity_status", "integrity_reason",
+    ]
+    if panel.empty:
+        return pd.DataFrame(columns=cols)
+    rows = []
+    for _, row in panel.iterrows():
+        available = bool(row.get("observed_option_pnl_available", False))
+        method = str(row.get("observed_pnl_calculation_method", ""))
+        if available and method != "broker_statement_realized_pnl":
+            status, reason = "failed", "observed_pnl_available_without_broker_statement"
+        else:
+            status, reason = "passed", ""
+        rows.append({
+            "analysis_unit": row.get("analysis_unit", ""),
+            "trade_id": row.get("trade_id", ""),
+            "ticker": row.get("ticker", ""),
+            "observed_option_pnl_available": available,
+            "observed_option_pnl_status": row.get("observed_option_pnl_status", ""),
+            "observed_option_pnl_reason": row.get("observed_option_pnl_reason", ""),
+            "observed_pnl_calculation_method": method,
+            "integrity_status": status,
+            "integrity_reason": reason,
+        })
+    return pd.DataFrame(rows, columns=cols)
+
+
+def github_api_json(url: str, token: str) -> dict[str, Any]:
+    req = urllib.request.Request(url, headers={
+        "Accept": "application/vnd.github+json",
+        "Authorization": f"Bearer {token}",
+        "X-GitHub-Api-Version": "2022-11-28",
+        "User-Agent": "morita-history-reconstruction",
+    })
+    with urllib.request.urlopen(req, timeout=30) as resp:
+        return json.loads(resp.read().decode("utf-8"))
+
+
+def github_api_bytes(url: str, token: str) -> bytes:
+    req = urllib.request.Request(url, headers={
+        "Accept": "application/vnd.github+json",
+        "Authorization": f"Bearer {token}",
+        "X-GitHub-Api-Version": "2022-11-28",
+        "User-Agent": "morita-history-reconstruction",
+    })
+    with urllib.request.urlopen(req, timeout=60) as resp:
+        return resp.read()
+
+
+def ingest_github_action_artifacts(root: Path, include: bool = False, artifact_run_ids: str = "", artifact_allowlist: str = "scanner-alerts,daily-scan,scanner-output") -> tuple[pd.DataFrame, str]:
+    out = root / "market_bomb_reconstruction" / "artifact_sources"
+    raw = out / "raw"
+    out.mkdir(parents=True, exist_ok=True)
+    raw.mkdir(parents=True, exist_ok=True)
+    meta = analysis_metadata()
+    rows: list[dict[str, Any]] = []
+    allow = [x.strip().lower() for x in artifact_allowlist.split(",") if x.strip()]
+    run_ids = [x.strip() for x in artifact_run_ids.split(",") if x.strip()]
+    status = "not_requested"
+    repo = os.environ.get("GITHUB_REPOSITORY", "")
+    token = os.environ.get("GITHUB_TOKEN", "")
+    now = pd.Timestamp.now(tz=UTC).isoformat()
+
+    if not include:
+        manifest = pd.DataFrame(rows, columns=ARTIFACT_MANIFEST_COLUMNS)
+        manifest.to_csv(out / "raw_artifact_manifest.csv", index=False)
+        manifest.to_csv(out / "artifact_ingestion_audit.csv", index=False)
+        (out / "artifact_ingestion_audit.md").write_text("# Artifact Ingestion Audit\n\nartifact_source_status: `not_requested`\n", encoding="utf-8")
+        return manifest, status
+    if not run_ids:
+        status = "unavailable_blank_run_ids_no_search"
+        rows.append({
+            "workflow_run_id": "",
+            "workflow_name": "",
+            "artifact_id": "",
+            "artifact_name": "",
+            "artifact_digest": "",
+            "artifact_created_at_utc": "",
+            "artifact_expired": "",
+            "artifact_download_status": "skipped",
+            "artifact_unavailable_reason": "artifact_run_ids_blank_no_historical_search",
+            "artifact_file_path": "",
+            "artifact_file_hash": "",
+            "artifact_file_size_bytes": "",
+            "detected_source_type": "",
+            "classification_reason": "",
+            "eligible_for_parser": False,
+            "ingestion_timestamp_utc": now,
+            "analysis_base_commit_sha": meta["analysis_base_commit_sha"],
+        })
+    elif not repo or not token:
+        status = "unavailable_missing_github_context_or_token"
+        for rid in run_ids:
+            rows.append({
+                "workflow_run_id": rid,
+                "workflow_name": "",
+                "artifact_id": "",
+                "artifact_name": "",
+                "artifact_digest": "",
+                "artifact_created_at_utc": "",
+                "artifact_expired": "",
+                "artifact_download_status": "unavailable",
+                "artifact_unavailable_reason": "missing_github_repository_or_token",
+                "artifact_file_path": "",
+                "artifact_file_hash": "",
+                "artifact_file_size_bytes": "",
+                "detected_source_type": "",
+                "classification_reason": "",
+                "eligible_for_parser": False,
+                "ingestion_timestamp_utc": now,
+                "analysis_base_commit_sha": meta["analysis_base_commit_sha"],
+            })
+    else:
+        status = "attempted"
+        for rid in run_ids:
+            try:
+                payload = github_api_json(f"https://api.github.com/repos/{repo}/actions/runs/{rid}/artifacts", token)
+                artifacts = payload.get("artifacts", [])
+            except Exception as exc:
+                artifacts = []
+                rows.append({
+                    "workflow_run_id": rid,
+                    "workflow_name": "",
+                    "artifact_id": "",
+                    "artifact_name": "",
+                    "artifact_digest": "",
+                    "artifact_created_at_utc": "",
+                    "artifact_expired": "",
+                    "artifact_download_status": "unavailable",
+                    "artifact_unavailable_reason": f"artifact_list_failed:{type(exc).__name__}",
+                    "artifact_file_path": "",
+                    "artifact_file_hash": "",
+                    "artifact_file_size_bytes": "",
+                    "detected_source_type": "",
+                    "classification_reason": "",
+                    "eligible_for_parser": False,
+                    "ingestion_timestamp_utc": now,
+                    "analysis_base_commit_sha": meta["analysis_base_commit_sha"],
+                })
+            for artifact in artifacts:
+                name = str(artifact.get("name", ""))
+                allowed_artifact = any(name.lower().startswith(x) or x in name.lower() for x in allow)
+                if not allowed_artifact:
+                    rows.append({
+                        "workflow_run_id": rid,
+                        "workflow_name": "",
+                        "artifact_id": artifact.get("id", ""),
+                        "artifact_name": name,
+                        "artifact_digest": artifact.get("digest", ""),
+                        "artifact_created_at_utc": artifact.get("created_at", ""),
+                        "artifact_expired": artifact.get("expired", ""),
+                        "artifact_download_status": "skipped",
+                        "artifact_unavailable_reason": "artifact_name_not_allowlisted",
+                        "artifact_file_path": "",
+                        "artifact_file_hash": "",
+                        "artifact_file_size_bytes": "",
+                        "detected_source_type": "",
+                        "classification_reason": "",
+                        "eligible_for_parser": False,
+                        "ingestion_timestamp_utc": now,
+                        "analysis_base_commit_sha": meta["analysis_base_commit_sha"],
+                    })
+                    continue
+                try:
+                    data = github_api_bytes(str(artifact.get("archive_download_url", "")), token)
+                    with zipfile.ZipFile(io.BytesIO(data)) as zf:
+                        for member in zf.namelist():
+                            if not member.lower().endswith(".csv"):
+                                continue
+                            target = raw / str(rid) / str(artifact.get("id", "")) / Path(member).name
+                            target.parent.mkdir(parents=True, exist_ok=True)
+                            content = zf.read(member)
+                            target.write_bytes(content)
+                            file_hash = hashlib.sha256(content).hexdigest()
+                            rel = str(target.relative_to(root)).replace("\\", "/")
+                            rows.append({
+                                "workflow_run_id": rid,
+                                "workflow_name": "",
+                                "artifact_id": artifact.get("id", ""),
+                                "artifact_name": name,
+                                "artifact_digest": artifact.get("digest", ""),
+                                "artifact_created_at_utc": artifact.get("created_at", ""),
+                                "artifact_expired": artifact.get("expired", ""),
+                                "artifact_download_status": "downloaded",
+                                "artifact_unavailable_reason": "",
+                                "artifact_file_path": rel,
+                                "artifact_file_hash": file_hash,
+                                "artifact_file_size_bytes": len(content),
+                                "detected_source_type": "github_actions_artifact_csv",
+                                "classification_reason": "artifact_allowlist_and_csv",
+                                "eligible_for_parser": True,
+                                "ingestion_timestamp_utc": now,
+                                "analysis_base_commit_sha": meta["analysis_base_commit_sha"],
+                            })
+                except Exception as exc:
+                    rows.append({
+                        "workflow_run_id": rid,
+                        "workflow_name": "",
+                        "artifact_id": artifact.get("id", ""),
+                        "artifact_name": name,
+                        "artifact_digest": artifact.get("digest", ""),
+                        "artifact_created_at_utc": artifact.get("created_at", ""),
+                        "artifact_expired": artifact.get("expired", ""),
+                        "artifact_download_status": "unavailable",
+                        "artifact_unavailable_reason": f"artifact_download_failed:{type(exc).__name__}",
+                        "artifact_file_path": "",
+                        "artifact_file_hash": "",
+                        "artifact_file_size_bytes": "",
+                        "detected_source_type": "",
+                        "classification_reason": "",
+                        "eligible_for_parser": False,
+                        "ingestion_timestamp_utc": now,
+                        "analysis_base_commit_sha": meta["analysis_base_commit_sha"],
+                    })
+
+    manifest = pd.DataFrame(rows, columns=ARTIFACT_MANIFEST_COLUMNS)
+    manifest.to_csv(out / "raw_artifact_manifest.csv", index=False)
+    manifest.to_csv(out / "artifact_ingestion_audit.csv", index=False)
+    (out / "artifact_ingestion_audit.md").write_text(
+        "# Artifact Ingestion Audit\n\n"
+        f"artifact_source_status: `{status}`\n\n"
+        f"artifact_rows: `{len(manifest)}`\n\n"
+        + markdown_table(manifest)
+        + "\n",
+        encoding="utf-8",
+    )
+    return manifest, status
+
+
 def write_templates(root: Path) -> None:
     tdir = root / "market_bomb_reconstruction" / "templates"
     tdir.mkdir(parents=True, exist_ok=True)
@@ -1406,7 +2062,7 @@ def write_templates(root: Path) -> None:
     )
 
 
-def gate_audit(root: Path, inventory: pd.DataFrame, signals: pd.DataFrame, decisions: pd.DataFrame, fills: pd.DataFrame, exits: pd.DataFrame, join: pd.DataFrame, mutation_count: int = 0, artifact_status: str = "not_requested") -> Path:
+def gate_audit(root: Path, inventory: pd.DataFrame, signals: pd.DataFrame, decisions: pd.DataFrame, fills: pd.DataFrame, exits: pd.DataFrame, panel: pd.DataFrame, join: pd.DataFrame, mutation_count: int = 0, artifact_status: str = "not_requested") -> Path:
     path = root / "morita_history_reconstruction_gate_audit.md"
     normalized_count = len(signals) + len(decisions) + len(fills) + len(exits)
     has_inventory = (root / "market_bomb_reconstruction" / "source_inventory.csv").exists()
@@ -1422,10 +2078,33 @@ def gate_audit(root: Path, inventory: pd.DataFrame, signals: pd.DataFrame, decis
         (audit_dir / "parser_execution_audit.csv").exists(),
         (audit_dir / "trade_decision_signal_linkage_audit.csv").exists(),
         (audit_dir / "analysis_run_metadata.json").exists(),
+        (audit_dir / "source_classification_audit.csv").exists(),
+        (audit_dir / "notification_evidence_audit.csv").exists(),
+        (audit_dir / "underlying_outcome_integrity_audit.csv").exists(),
+        (audit_dir / "observed_option_pnl_integrity_audit.csv").exists(),
+        (audit_dir / "source_ingest_dry_run_audit.md").exists(),
+        (root / "market_bomb_reconstruction" / "artifact_sources" / "artifact_ingestion_audit.csv").exists(),
         (root / "market_bomb_reconstruction" / "analysis" / "cta_vol_event_join_audit.csv").exists(),
         has_templates,
     ])
-    ready_32c = bool(len(join[join.get("join_status", pd.Series(dtype=str)).isin(["joined", "partial"])]) > 0 and (signals["strategy_bucket"].isin(["S_breakout_momentum", "AB_institutional_pullback"]).any() if not signals.empty else False))
+    source_ingest_pipeline_gate = pipeline_passed
+    eligible_signals = signals[
+        signals.get("source_phase3_2c_eligible", pd.Series(dtype=bool)).astype(str).str.lower().isin(["true", "1"])
+    ] if not signals.empty and "source_phase3_2c_eligible" in signals.columns else pd.DataFrame()
+    real_source_dry_run_gate = bool(
+        not inventory.empty
+        and mutation_count == 0
+        and not eligible_signals.empty
+        and eligible_signals["strategy_bucket"].isin(["S_breakout_momentum", "AB_institutional_pullback", "unclassified"]).any()
+    )
+    joined = join[join.get("join_status", pd.Series(dtype=str)).isin(["joined", "partial"])] if not join.empty else pd.DataFrame()
+    outcome_ready = bool(panel.get("underlying_outcome_eligible", pd.Series(dtype=bool)).astype(str).str.lower().isin(["true", "1"]).any()) if not panel.empty else False
+    ready_32c = bool(
+        not eligible_signals.empty
+        and eligible_signals["strategy_bucket"].isin(["S_breakout_momentum", "AB_institutional_pullback"]).any()
+        and not joined.empty
+        and outcome_ready
+    )
     reasons = []
     if not pipeline_passed:
         reasons.append("reconstruction_pipeline_gate requirements not fully met")
@@ -1438,6 +2117,8 @@ def gate_audit(root: Path, inventory: pd.DataFrame, signals: pd.DataFrame, decis
     text = (
         "# Morita History Reconstruction Gate Audit\n\n"
         f"reconstruction_pipeline_gate: `{'passed' if pipeline_passed else 'blocked'}`\n\n"
+        f"source_ingest_pipeline_gate: `{'passed' if source_ingest_pipeline_gate else 'blocked'}`\n\n"
+        f"first_real_source_dry_run_gate: `{'passed' if real_source_dry_run_gate else 'blocked'}`\n\n"
         f"phase3_2c_research_ready: `{str(ready_32c).lower()}`\n\n"
         f"source_count: `{len(inventory)}`\n\n"
         f"signal_events: `{len(signals)}`\n\n"
@@ -1489,6 +2170,31 @@ def write_outputs(root: Path, inventory: pd.DataFrame, manifest: pd.DataFrame, s
     parser_audit.to_csv(audit / "parser_execution_audit.csv", index=False)
     timestamp_audit.to_csv(audit / "timestamp_resolution_audit.csv", index=False)
     (audit / "timestamp_resolution_audit.md").write_text("# Timestamp Resolution Audit\n\n" + markdown_table(timestamp_audit) + "\n", encoding="utf-8")
+    source_classification = build_source_classification_audit(inventory)
+    notification_audit = build_notification_evidence_audit(signals)
+    underlying_integrity = build_underlying_outcome_integrity_audit(panel)
+    observed_pnl_integrity = build_observed_option_pnl_integrity_audit(panel)
+    source_classification.to_csv(audit / "source_classification_audit.csv", index=False)
+    notification_audit.to_csv(audit / "notification_evidence_audit.csv", index=False)
+    underlying_integrity.to_csv(audit / "underlying_outcome_integrity_audit.csv", index=False)
+    observed_pnl_integrity.to_csv(audit / "observed_option_pnl_integrity_audit.csv", index=False)
+    (audit / "source_classification_audit.md").write_text("# Source Classification Audit\n\n" + markdown_table(source_classification) + "\n", encoding="utf-8")
+    (audit / "notification_evidence_audit.md").write_text("# Notification Evidence Audit\n\n" + markdown_table(notification_audit) + "\n", encoding="utf-8")
+    (audit / "underlying_outcome_integrity_audit.md").write_text("# Underlying Outcome Integrity Audit\n\n" + markdown_table(underlying_integrity) + "\n", encoding="utf-8")
+    (audit / "observed_option_pnl_integrity_audit.md").write_text("# Observed Option PnL Integrity Audit\n\n" + markdown_table(observed_pnl_integrity) + "\n", encoding="utf-8")
+    dry_run_lines = [
+        "# Source Ingest Dry Run Audit",
+        "",
+        f"sources_discovered: `{len(inventory)}`",
+        "",
+        f"eligible_signals: `{len(notification_audit[notification_audit.get('phase3_2c_signal_eligible', pd.Series(dtype=bool)).astype(str).str.lower().isin(['true', '1'])]) if not notification_audit.empty else 0}`",
+        "",
+        f"input_source_mutation_count_pending: `see input_source_mutation_count.txt`",
+        "",
+        "Dry-run status is passed only after at least one real eligible source produces normalized signals.",
+        "",
+    ]
+    (audit / "source_ingest_dry_run_audit.md").write_text("\n".join(dry_run_lines), encoding="utf-8")
     before_manifest_path = audit / "input_source_hash_manifest_before.csv"
     before = pd.read_csv(before_manifest_path) if before_manifest_path.exists() else input_source_hash_manifest(root, include_repo_sources)
     after = input_source_hash_manifest(root, include_repo_sources)
@@ -1504,7 +2210,7 @@ def write_outputs(root: Path, inventory: pd.DataFrame, manifest: pd.DataFrame, s
     write_table(panel, analysis / "morita_event_outcome_panel.csv", analysis / "morita_event_outcome_panel.parquet")
     write_table(join, analysis / "cta_vol_event_join_audit.csv", analysis / "cta_vol_event_join_audit.parquet")
     write_templates(root)
-    gate = gate_audit(root, inventory, signals, decisions, fills, exits, join, mutation_count=mutation_count, artifact_status=artifact_status)
+    gate = gate_audit(root, inventory, signals, decisions, fills, exits, panel, join, mutation_count=mutation_count, artifact_status=artifact_status)
     (root / "raw_source_mutation_count.txt").write_text(f"raw_source_mutation_count={mutation_count}\n", encoding="utf-8")
     (root / "raw_source_mutation_report.txt").write_text(mutation_report, encoding="utf-8")
     return {
@@ -1517,18 +2223,20 @@ def write_outputs(root: Path, inventory: pd.DataFrame, manifest: pd.DataFrame, s
         "cta_vol_join": analysis / "cta_vol_event_join_audit.csv",
         "parser_execution_audit": audit / "parser_execution_audit.csv",
         "timestamp_resolution_audit": audit / "timestamp_resolution_audit.csv",
+        "source_classification_audit": audit / "source_classification_audit.csv",
+        "notification_evidence_audit": audit / "notification_evidence_audit.csv",
+        "underlying_outcome_integrity_audit": audit / "underlying_outcome_integrity_audit.csv",
+        "observed_option_pnl_integrity_audit": audit / "observed_option_pnl_integrity_audit.csv",
         "input_source_mutation_count": root / "input_source_mutation_count.txt",
         "gate": gate,
     }
 
 
-def run(root: Path = Path("."), include_repo_sources: bool = True, include_github_action_artifacts: bool = False, build_underlying_outcomes: bool = True) -> dict[str, Path]:
+def run(root: Path = Path("."), include_repo_sources: bool = True, include_github_action_artifacts: bool = False, build_underlying_outcomes: bool = True, artifact_run_ids: str = "", artifact_allowlist: str = "scanner-alerts,daily-scan,scanner-output") -> dict[str, Path]:
+    _, artifact_status = ingest_github_action_artifacts(root, include_github_action_artifacts, artifact_run_ids, artifact_allowlist)
     audit = root / "market_bomb_reconstruction" / "audit"
     write_input_source_hash_manifest(root, audit / "input_source_hash_manifest_before.csv", include_repo_sources)
     inventory, manifest = build_source_inventory(root, include_repo_sources)
-    artifact_status = "unavailable" if include_github_action_artifacts else "not_requested"
-    if include_github_action_artifacts:
-        artifact_status = "unavailable_api_retrieval_not_implemented_in_research_runner"
     signals, decisions, fills, exits, parser_audit, timestamp_audit = parse_sources_with_audits(root, inventory)
     dupes, linkage, canonical_signals = duplicate_audit(signals)
     panel = build_outcome_panel(root, canonical_signals, decisions, fills, exits, build_underlying_outcomes)
@@ -1541,6 +2249,8 @@ def main() -> None:
     parser.add_argument("--root", default=".")
     parser.add_argument("--skip-repo-sources", action="store_true")
     parser.add_argument("--include-github-action-artifacts", action="store_true")
+    parser.add_argument("--artifact-run-ids", default="")
+    parser.add_argument("--artifact-allowlist", default="scanner-alerts,daily-scan,scanner-output")
     parser.add_argument("--skip-underlying-outcomes", action="store_true")
     args = parser.parse_args()
     outputs = run(
@@ -1548,6 +2258,8 @@ def main() -> None:
         include_repo_sources=not args.skip_repo_sources,
         include_github_action_artifacts=args.include_github_action_artifacts,
         build_underlying_outcomes=not args.skip_underlying_outcomes,
+        artifact_run_ids=args.artifact_run_ids,
+        artifact_allowlist=args.artifact_allowlist,
     )
     for name, path in outputs.items():
         print(f"{name}: {path}")
