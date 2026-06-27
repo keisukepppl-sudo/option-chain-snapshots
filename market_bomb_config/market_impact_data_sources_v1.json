@@ -12,6 +12,8 @@
     "vol_control_proxy": "market_bomb_history/vol_control_proxy_history.csv",
     "leveraged_etf_aum": "market_bomb_history/leveraged_etf_aum_history.csv",
     "dealer_gamma": "dealer_gamma_proxy_history.csv",
-    "expiry_calendar": "market_bomb_config/options_expiry_calendar_v1.csv"
+    "expiry_calendar": "market_bomb_config/options_expiry_calendar_v1.csv",
+    "nyse_regular_sessions": "market_bomb_config/nyse_regular_sessions_v1.csv",
+    "expiry_intraday_rules": "market_bomb_config/market_impact_expiry_intraday_rules_v1.json"
   }
 }

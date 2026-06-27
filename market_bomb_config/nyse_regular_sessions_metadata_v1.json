@@ -1,0 +1,8 @@
+{
+  "calendar_version": "nyse_regular_sessions_v1",
+  "source_name": "repo_static_nyse_regular_session_calendar",
+  "coverage_start": "2022-01-03",
+  "coverage_end": "2026-12-31",
+  "retrieved_at_utc": "2026-06-27T00:00:00Z",
+  "early_close_policy": "excluded_from_primary_intraday_or_handled_explicitly"
+}

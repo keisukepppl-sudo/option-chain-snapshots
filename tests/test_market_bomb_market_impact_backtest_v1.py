@@ -29,6 +29,40 @@ def write_price(root: Path, ticker: str, values):
     price_frame(values).to_csv(d / f"{ticker}_daily_price_history.csv", index=False)
 
 
+def write_nyse_calendar(root: Path, rows=None):
+    cfg = root / "market_bomb_config"
+    cfg.mkdir(parents=True, exist_ok=True)
+    default_rows = [
+        {"session_date": "2025-11-28", "is_regular_session": True, "regular_open_et": "09:30", "regular_close_et": "16:00", "is_early_close": False},
+        {"session_date": "2025-12-31", "is_regular_session": True, "regular_open_et": "09:30", "regular_close_et": "16:00", "is_early_close": False},
+        {"session_date": "2026-01-02", "is_regular_session": True, "regular_open_et": "09:30", "regular_close_et": "16:00", "is_early_close": False},
+        {"session_date": "2026-01-05", "is_regular_session": True, "regular_open_et": "09:30", "regular_close_et": "16:00", "is_early_close": False},
+        {"session_date": "2026-01-16", "is_regular_session": True, "regular_open_et": "09:30", "regular_close_et": "16:00", "is_early_close": False},
+        {"session_date": "2026-06-18", "is_regular_session": True, "regular_open_et": "09:30", "regular_close_et": "16:00", "is_early_close": False},
+        {"session_date": "2026-06-19", "is_regular_session": False, "regular_open_et": "", "regular_close_et": "", "is_early_close": False},
+        {"session_date": "2026-06-22", "is_regular_session": True, "regular_open_et": "09:30", "regular_close_et": "16:00", "is_early_close": False},
+    ]
+    data = rows or default_rows
+    df = pd.DataFrame(data)
+    df["calendar_source"] = "unit_test_calendar"
+    df["calendar_version"] = "nyse_regular_sessions_v1"
+    df["source_retrieved_at_utc"] = "2026-06-27T00:00:00Z"
+    df.to_csv(cfg / "nyse_regular_sessions_v1.csv", index=False)
+
+
+def write_expiry_intraday_bars(root: Path, ticker="QQQ", day="2026-01-16"):
+    bars_dir = root / "market_bomb_history" / "intraday_bars"
+    bars_dir.mkdir(parents=True, exist_ok=True)
+    day_date = pd.Timestamp(day).date()
+    pd.DataFrame(
+        [
+            {"timestamp_utc": pd.Timestamp.combine(day_date, pd.Timestamp("09:30").time()).tz_localize("America/New_York").tz_convert("UTC").isoformat(), "open": 100, "high": 101, "low": 99, "close": 100.5, "volume": 100},
+            {"timestamp_utc": pd.Timestamp.combine(day_date, pd.Timestamp("10:00").time()).tz_localize("America/New_York").tz_convert("UTC").isoformat(), "open": 100.5, "high": 104, "low": 98, "close": 102, "volume": 100},
+            {"timestamp_utc": pd.Timestamp.combine(day_date, pd.Timestamp("16:00").time()).tz_localize("America/New_York").tz_convert("UTC").isoformat(), "open": 102, "high": 103, "low": 101, "close": 103, "volume": 100},
+        ]
+    ).to_csv(bars_dir / f"{ticker}_5m.csv", index=False)
+
+
 def test_cta_vol_feature_after_decision_is_not_joined():
     features = pd.DataFrame(
         [
@@ -87,6 +121,7 @@ def test_aum_missing_is_unavailable_not_zero():
 
 
 def test_leveraged_pressure_uses_1530_return_not_close_to_close(tmp_path: Path):
+    write_nyse_calendar(tmp_path)
     aum = tmp_path / "market_bomb_history"
     aum.mkdir(parents=True)
     pd.DataFrame(
@@ -313,6 +348,7 @@ def test_dealer_state_keeps_no_local_flip_distance_uses_only_local_flip():
 
 
 def test_exact_1530_and_1600_bars_required_for_leveraged_panel(tmp_path: Path):
+    write_nyse_calendar(tmp_path)
     hist = tmp_path / "market_bomb_history"
     hist.mkdir(parents=True)
     pd.DataFrame(
@@ -336,6 +372,10 @@ def test_exact_1530_and_1600_bars_required_for_leveraged_panel(tmp_path: Path):
 
 
 def test_leveraged_primary_does_not_use_full_day_volume_denominator(tmp_path: Path):
+    write_nyse_calendar(tmp_path, [
+        {"session_date": d.date().isoformat(), "is_regular_session": True, "regular_open_et": "09:30", "regular_close_et": "16:00", "is_early_close": False}
+        for d in pd.bdate_range("2025-11-28", periods=24)
+    ])
     hist = tmp_path / "market_bomb_history"
     hist.mkdir(parents=True)
     pd.DataFrame(
@@ -363,13 +403,22 @@ def test_leveraged_primary_does_not_use_full_day_volume_denominator(tmp_path: Pa
 
 
 def test_previous_regular_session_skips_2026_juneteenth():
-    prev = m.previous_regular_session_close_utc(pd.Timestamp("2026-06-22"), m.rules(Path(".")))
+    calendar = pd.DataFrame(
+        [
+            {"session_date": "2026-06-18", "is_regular_session": True, "regular_open_et": "09:30", "regular_close_et": "16:00", "is_early_close": False},
+            {"session_date": "2026-06-19", "is_regular_session": False, "regular_open_et": "", "regular_close_et": "", "is_early_close": False},
+            {"session_date": "2026-06-22", "is_regular_session": True, "regular_open_et": "09:30", "regular_close_et": "16:00", "is_early_close": False},
+        ]
+    )
+    prev = m.previous_regular_session_close_utc(pd.Timestamp("2026-06-22"), calendar)
     assert prev.tz_convert("America/New_York").date().isoformat() == "2026-06-18"
 
 
 def test_expiry_calendar_and_gamma_conditioned_are_separate(tmp_path: Path):
+    write_nyse_calendar(tmp_path)
+    write_expiry_intraday_bars(tmp_path)
     cfg = tmp_path / "market_bomb_config"
-    cfg.mkdir()
+    cfg.mkdir(exist_ok=True)
     pd.DataFrame([{"date": "2026-01-16", "market": "US", "expiry_type": "monthly", "holiday_adjusted_flag": False}]).to_csv(cfg / "options_expiry_calendar_v1.csv", index=False)
     outcomes = pd.DataFrame(
         [
@@ -398,17 +447,21 @@ def test_expiry_calendar_and_gamma_conditioned_are_separate(tmp_path: Path):
             }
         ]
     ).to_csv(tmp_path / "dealer_gamma_proxy_history.csv", index=False)
-    calendar, conditioned, audit = m.build_dealer_gamma_expiry_event_panel(tmp_path, outcomes, m.rules(tmp_path))
+    calendar, conditioned, post, audit, outcome_audit = m.build_dealer_gamma_expiry_event_panel(tmp_path, outcomes, m.rules(tmp_path))
     assert not calendar.empty
     assert not conditioned.empty
     assert set(calendar["feature_family"]) == {"ExpiryCalendar"}
     assert set(conditioned["feature_family"]) == {"DealerGammaExpiryConditioned"}
     assert "selected_snapshot_asof_utc" in conditioned.columns
+    assert "expiry_session_return_0930_to_close" in calendar.columns
+    assert not post.empty
 
 
 def test_expiry_rejects_gamma_snapshot_after_0930(tmp_path: Path):
+    write_nyse_calendar(tmp_path)
+    write_expiry_intraday_bars(tmp_path)
     cfg = tmp_path / "market_bomb_config"
-    cfg.mkdir()
+    cfg.mkdir(exist_ok=True)
     pd.DataFrame([{"date": "2026-01-16", "market": "US", "expiry_type": "monthly"}]).to_csv(cfg / "options_expiry_calendar_v1.csv", index=False)
     outcomes = pd.DataFrame([{"target_market": "QQQ", "decision_date": "2026-01-16", "decision_timestamp_utc": "2026-01-15T21:00:00Z"}])
     pd.DataFrame(
@@ -424,6 +477,93 @@ def test_expiry_rejects_gamma_snapshot_after_0930(tmp_path: Path):
             }
         ]
     ).to_csv(tmp_path / "dealer_gamma_proxy_history.csv", index=False)
-    _, conditioned, audit = m.build_dealer_gamma_expiry_event_panel(tmp_path, outcomes, m.rules(tmp_path))
+    _, conditioned, _, audit, _ = m.build_dealer_gamma_expiry_event_panel(tmp_path, outcomes, m.rules(tmp_path))
     assert conditioned.empty
     assert "no_strict_prior_gamma_snapshot" in set(audit.get("availability_failure_reason", pd.Series(dtype=str)).astype(str))
+
+
+def test_nyse_calendar_coverage_missing_makes_session_unavailable():
+    calendar = pd.DataFrame([{"session_date": "2026-01-05", "is_regular_session": True, "regular_open_et": "09:30", "regular_close_et": "16:00", "is_early_close": False}])
+    session = m.get_nyse_session("2026-01-06", calendar)
+    assert session["availability_status"] == "unavailable"
+    assert session["availability_failure_reason"] == "nyse_calendar_coverage_missing"
+
+
+def test_early_close_excluded_from_leveraged_and_expiry_primary(tmp_path: Path):
+    write_nyse_calendar(tmp_path, [
+        {"session_date": "2026-11-25", "is_regular_session": True, "regular_open_et": "09:30", "regular_close_et": "16:00", "is_early_close": False},
+        {"session_date": "2026-11-27", "is_regular_session": True, "regular_open_et": "09:30", "regular_close_et": "13:00", "is_early_close": True},
+    ])
+    hist = tmp_path / "market_bomb_history"
+    hist.mkdir(parents=True)
+    pd.DataFrame(
+        [
+            {"ticker": t, "effective_available_at_utc": "2026-11-25T21:00:00Z", "as_of_timestamp_utc": "2026-11-25T21:00:00Z", "net_assets_usd": 100.0, "aum_value_type": "net_assets_usd"}
+            for t in ["TQQQ", "SQQQ", "QLD", "QID"]
+        ]
+    ).to_csv(hist / "leveraged_etf_aum_history.csv", index=False)
+    write_expiry_intraday_bars(tmp_path, day="2026-11-27")
+    panel, lev_audit = m.build_leveraged_etf_panel(tmp_path, m.rules(tmp_path))
+    outcome, expiry_audit = m.build_expiry_intraday_outcome(tmp_path, "QQQ", "2026-11-27", "non_expiry_friday", m.load_nyse_calendar(tmp_path), m.rules(tmp_path))
+    assert panel.empty
+    assert "early_close_session_excluded_from_primary" in set(lev_audit["availability_failure_reason"])
+    assert outcome is None
+    assert expiry_audit["outcome_availability_failure_reason"] == "early_close_session_excluded_from_primary"
+
+
+def test_expiry_primary_requires_exact_open_and_close_bars(tmp_path: Path):
+    write_nyse_calendar(tmp_path)
+    bars_dir = tmp_path / "market_bomb_history" / "intraday_bars"
+    bars_dir.mkdir(parents=True)
+    pd.DataFrame(
+        [
+            {"timestamp_utc": "2026-01-16T15:00:00Z", "open": 100, "high": 100, "low": 100, "close": 100, "volume": 100},
+            {"timestamp_utc": "2026-01-16T21:00:00Z", "open": 101, "high": 101, "low": 101, "close": 101, "volume": 100},
+        ]
+    ).to_csv(bars_dir / "QQQ_5m.csv", index=False)
+    outcome, audit = m.build_expiry_intraday_outcome(tmp_path, "QQQ", "2026-01-16", "monthly_expiry_non_quarterly", m.load_nyse_calendar(tmp_path), m.rules(tmp_path))
+    assert outcome is None
+    assert audit["outcome_availability_failure_reason"] == "expiry_exact_open_bar_missing"
+
+
+def test_expiry_intraday_range_uses_only_0930_to_close_window(tmp_path: Path):
+    write_nyse_calendar(tmp_path)
+    bars_dir = tmp_path / "market_bomb_history" / "intraday_bars"
+    bars_dir.mkdir(parents=True)
+    pd.DataFrame(
+        [
+            {"timestamp_utc": "2026-01-16T14:00:00Z", "open": 100, "high": 999, "low": 1, "close": 100, "volume": 100},
+            {"timestamp_utc": "2026-01-16T14:30:00Z", "open": 100, "high": 101, "low": 99, "close": 100, "volume": 100},
+            {"timestamp_utc": "2026-01-16T16:00:00Z", "open": 100, "high": 104, "low": 98, "close": 102, "volume": 100},
+            {"timestamp_utc": "2026-01-16T21:00:00Z", "open": 102, "high": 103, "low": 101, "close": 103, "volume": 100},
+        ]
+    ).to_csv(bars_dir / "QQQ_5m.csv", index=False)
+    outcome, audit = m.build_expiry_intraday_outcome(tmp_path, "QQQ", "2026-01-16", "monthly_expiry_non_quarterly", m.load_nyse_calendar(tmp_path), m.rules(tmp_path))
+    assert outcome is not None
+    assert np.isclose(outcome["expiry_session_high_low_range_pct"], (104 - 98) / 100)
+
+
+def test_oos_no_predictions_has_null_pvalue_not_run():
+    panel = pd.DataFrame({"target_market": ["QQQ"], "decision_timestamp_utc": ["2026-01-05T21:00:00Z"], "x": [1.0], "y": [0.1]})
+    cfg = m.rules(Path("."))
+    cfg["walk_forward"]["minimum_train_observations"] = 252
+    result, _ = m.run_oos_comparison(panel, module="X", test_family="unit", feature_sets={"x": ["x"]}, outcomes=["y"], baseline_cols=[], cfg=cfg, min_oos_rows=2, min_test_months=1)
+    assert pd.isna(result.loc[0, "raw_p_value"])
+    assert pd.isna(result.loc[0, "adjusted_p_value"])
+    assert result.loc[0, "p_value_status"] == "not_run"
+
+
+def test_module_quality_block_only_blocks_offending_module():
+    audit = pd.DataFrame(
+        [
+            {"module": "LeveragedETF", "no_lookahead_passed": False, "violation_reason": "feature_asof_after_decision"},
+            {"module": "CTA_Vol", "no_lookahead_passed": True, "violation_reason": ""},
+        ]
+    )
+    blocked = m.quality_blocked_modules(audit)
+    lev = pd.DataFrame([{"module": "LeveragedETF", "research_execution_gate": "insufficient_data", "evidence_verdict": "insufficient_data"}])
+    cta = pd.DataFrame([{"module": "CTA_Vol", "research_execution_gate": "insufficient_data", "evidence_verdict": "insufficient_data"}])
+    lev2 = m.apply_data_quality_block(lev, "LeveragedETF", blocked)
+    cta2 = m.apply_data_quality_block(cta, "CTA_Vol", blocked)
+    assert lev2.loc[0, "research_execution_gate"] == "data_quality_blocked"
+    assert cta2.loc[0, "research_execution_gate"] == "insufficient_data"
