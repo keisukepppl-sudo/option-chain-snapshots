@@ -1885,6 +1885,56 @@ def test_v113_target_clock_gate_blocks_oos_metrics_even_with_valid_bucket():
     assert row["target_clock_gate_reason"] == "unit_test_invalid_calendar"
 
 
+def test_v113_run_nonempty_actual_lineage_parity_and_bucket_fixture(tmp_path: Path):
+    sessions = [
+        {"session_date": d.date().isoformat(), "is_regular_session": True, "regular_open_et": "09:30", "regular_close_et": "16:00", "is_early_close": False}
+        for d in pd.bdate_range("2026-01-01", "2026-03-31")
+    ]
+    write_nyse_calendar(tmp_path, sessions)
+    write_expiry_intraday_rules(tmp_path, verified=True)
+    cfg_dir = tmp_path / "market_bomb_config"
+    cfg_dir.mkdir(parents=True, exist_ok=True)
+    (cfg_dir / "dealer_gamma_observed_rules_v1.json").write_text(
+        '{"sign_convention":"positive_net_gex_proxy_means_long_gamma_proxy_not_dealer_inventory"}',
+        encoding="utf-8",
+    )
+    for t in ["QQQ", "SPY", "SOXX", "SMH"]:
+        write_price(tmp_path, t, np.linspace(100, 150, 80))
+    hist = tmp_path / "market_bomb_history"
+    hist.mkdir(parents=True, exist_ok=True)
+    pd.DataFrame([
+        {"source_row_identifier": "gamma-row-1", "ticker": "QQQ", "effective_available_at_utc": "2026-01-29T20:00:00Z", "feature_as_of_timestamp_utc": "2026-01-29T20:00:00Z", "raw_chain_present": True, "raw_chain_quality": "high", "data_type": "reconstructed_from_raw_chain", "dealer_position_observed": False, "gamma_flip_state": "no_local_flip", "net_gex_proxy": 0.0},
+    ]).to_csv(tmp_path / "dealer_gamma_proxy_history.csv", index=False)
+    pd.DataFrame([
+        {"ticker": t, "effective_available_at_utc": "2026-01-28T21:00:00Z", "as_of_timestamp_utc": "2026-01-28T21:00:00Z", "net_assets_usd": 100.0, "aum_value_type": "net_assets_usd"}
+        for t in ["TQQQ", "SQQQ"]
+    ]).to_csv(hist / "leveraged_etf_aum_history.csv", index=False)
+    bars_dir = hist / "intraday_bars"
+    bars_dir.mkdir(exist_ok=True)
+    pd.DataFrame([
+        {"timestamp_utc": "2026-01-29T14:30:00Z", "open": 100, "high": 100, "low": 100, "close": 100, "volume": 100, "prior_regular_session_close": 100},
+        {"timestamp_utc": "2026-01-29T20:30:00Z", "open": 101, "high": 101, "low": 101, "close": 101, "volume": 100, "prior_regular_session_close": 100},
+        {"timestamp_utc": "2026-01-29T21:00:00Z", "open": 102, "high": 102, "low": 102, "close": 102, "volume": 100, "prior_regular_session_close": 100},
+    ]).to_csv(bars_dir / "QQQ_5m.csv", index=False)
+
+    m.run(tmp_path, run_cta_vol_analysis=False)
+    out = tmp_path / "market_bomb_market_impact"
+    lineage = pd.read_csv(out / "dealer_gamma_eod_actual_feature_lineage_v1.csv")
+    parity = pd.read_csv(out / "dealer_gamma_source_selection_parity_audit_v1.csv")
+    buckets = pd.read_csv(out / "market_level_decision_bucket_audit_v1.csv")
+    metrics = pd.read_csv(out / "market_level_oos_metrics_v1.csv")
+    manifest = pd.read_json(out / "analysis_manifest.json", typ="series")
+    assert not lineage.empty
+    assert "matched" in set(lineage["lineage_status"])
+    assert "matched" in set(parity["selection_parity_status"])
+    assert not buckets.empty
+    assert not metrics.empty
+    assert metrics["reconciliation_gap"].fillna(0).eq(0).all()
+    assert manifest["actionization_allowed"] is False
+    assert manifest["market_level_oos"]["calendar_fallback_allowed"] is False
+    assert manifest["market_level_oos"]["leveraged_self_match_allowed"] is False
+
+
 def test_v112_expiry_gamma_selection_uses_canonical_context():
     raw = _gamma_rows([{"source_row_identifier": "expiry-gamma-1", "net_gex_proxy": -3.0}])
     selected, audit = m.select_strict_gamma_snapshot_for_event(raw, "QQQ", pd.Timestamp("2026-01-05T20:30:00Z", tz="UTC"), m.rules(Path(".")))
