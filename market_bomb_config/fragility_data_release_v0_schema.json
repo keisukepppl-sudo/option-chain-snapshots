@@ -1,0 +1,44 @@
+{
+  "artifact_version": "fragility_data_release_schema_v0_2",
+  "source_bundle_manifest_required_fields": [
+    "bundle_version",
+    "staging_id",
+    "created_at_utc",
+    "operator_attestation",
+    "sources"
+  ],
+  "source_required_fields": [
+    "source_id",
+    "ticker",
+    "asset_family",
+    "relative_path",
+    "provider_name",
+    "provider_dataset_name",
+    "source_url_or_local_export_reference",
+    "terms_url_or_reference",
+    "terms_review_status",
+    "allowed_usage_assertion",
+    "retrieved_at_utc",
+    "price_basis",
+    "historical_effective_availability_policy",
+    "row_effective_timestamp_field",
+    "source_timezone",
+    "expected_schema_profile"
+  ],
+  "source_csv_required_columns": ["session_date", "close"],
+  "allowed_column_aliases": {
+    "date": "session_date",
+    "adj_close": "adjusted_close",
+    "adjusted_close": "adjusted_close"
+  },
+  "secret_key_substrings": [
+    "apikey",
+    "api_key",
+    "token",
+    "bearer",
+    "password",
+    "cookie",
+    "secret",
+    "authorization"
+  ]
+}
