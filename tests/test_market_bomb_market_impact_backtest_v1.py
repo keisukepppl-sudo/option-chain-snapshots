@@ -993,7 +993,8 @@ def test_leveraged_etf_input_candidate_audit_has_aum_and_exact_bars(tmp_path: Pa
         {"timestamp_utc": "2026-01-16T20:30:00Z", "open": 101, "high": 101, "low": 101, "close": 101, "volume": 100, "prior_regular_session_close": 100},
         {"timestamp_utc": "2026-01-16T21:00:00Z", "open": 102, "high": 102, "low": 102, "close": 102, "volume": 100, "prior_regular_session_close": 100},
     ]).to_csv(bars_dir / "QQQ_5m.csv", index=False)
-    candidate, _, universe, _ = m.build_leveraged_etf_input_candidate_audits(tmp_path, m.rules(tmp_path))
+    universe, _ = m.build_market_level_intraday_universe_with_gate(tmp_path, m.rules(tmp_path))
+    candidate, _, universe, _ = m.build_leveraged_etf_input_candidate_audits(tmp_path, m.rules(tmp_path), universe)
     assert {"aum", "decision_bar_1530", "close_bar_1600"}.issubset(set(candidate["input_component"]))
     assert "2026-01-16T20:25:00Z" not in set(candidate.get("actual_bar_timestamp_utc", pd.Series(dtype=str)).astype(str))
     assert not universe.empty
@@ -1600,10 +1601,11 @@ def test_v110_dealer_gamma_parity_matched_and_mismatch(tmp_path: Path):
     rows.to_csv(tmp_path / "dealer_gamma_proxy_history.csv", index=False)
     outcomes = pd.DataFrame([{"target_market": "QQQ", "decision_date": "2026-01-05", "decision_timestamp_utc": "2026-01-05T20:30:00Z"}])
     audit = m.build_dealer_gamma_eod_selection_audit(tmp_path, outcomes, m.rules(tmp_path))
-    parity = m.build_dealer_gamma_source_selection_parity_audit(tmp_path, audit, pd.DataFrame(), m.rules(tmp_path))
+    _, _, lineage, _ = m.build_dealer_gamma_panel_with_actual_lineage(tmp_path, outcomes, m.rules(tmp_path), audit)
+    parity = m.build_dealer_gamma_source_selection_parity_audit(tmp_path, lineage, pd.DataFrame(), m.rules(tmp_path))
     assert parity.iloc[0]["selection_parity_status"] == "matched"
-    changed = audit.copy()
-    changed.loc[0, "selected_source_content_hash"] = "wrong"
+    changed = lineage.copy()
+    changed.loc[0, "actual_feature_payload_hash"] = "wrong"
     mismatch = m.build_dealer_gamma_source_selection_parity_audit(tmp_path, changed, pd.DataFrame(), m.rules(tmp_path))
     assert mismatch.iloc[0]["selection_parity_status"] == "mismatch"
 
@@ -1751,9 +1753,10 @@ def test_v112_eod_actual_feature_lineage_drives_parity(tmp_path: Path):
         "decision_timestamp_utc": "2026-01-05T20:30:00Z",
     }])
     selection = m.build_dealer_gamma_eod_selection_audit(tmp_path, daily, m.rules(tmp_path))
-    lineage = m.build_dealer_gamma_eod_actual_feature_lineage(tmp_path, selection)
+    _, _, lineage, hydration = m.build_dealer_gamma_panel_with_actual_lineage(tmp_path, daily, m.rules(tmp_path), selection)
     assert lineage.iloc[0]["actual_feature_row_present"] is True or lineage.iloc[0]["actual_feature_row_present"] == True
     assert lineage.iloc[0]["actual_selected_source_row_identifier"] == "gamma-row-1"
+    assert hydration.iloc[0]["hydration_status"] == "hydrated"
     parity = m.build_dealer_gamma_source_selection_parity_audit(tmp_path, lineage, pd.DataFrame(), m.rules(tmp_path))
     assert parity.iloc[0]["selection_parity_status"] == "matched"
 
@@ -1806,6 +1809,80 @@ def test_v112_leveraged_input_audit_iterates_full_intraday_universe(tmp_path: Pa
     assert not day15.empty
     assert "decision_bar_1530" in set(day15["input_component"])
     assert day15[day15["input_component"].eq("decision_bar_1530")].iloc[0]["primary_eligible"] is False or day15[day15["input_component"].eq("decision_bar_1530")].iloc[0]["primary_eligible"] == False
+
+
+def test_v113_leveraged_input_audit_requires_explicit_intraday_universe(tmp_path: Path):
+    with pytest.raises(ValueError, match="intraday_decision_universe is required"):
+        m.build_leveraged_etf_input_candidate_audits(tmp_path, m.rules(tmp_path))
+
+
+def test_v113_leveraged_parity_does_not_self_match_without_panel_manifest(tmp_path: Path):
+    write_nyse_calendar(tmp_path, [
+        {"session_date": "2026-01-15", "is_regular_session": True, "regular_open_et": "09:30", "regular_close_et": "16:00", "is_early_close": False},
+        {"session_date": "2026-01-16", "is_regular_session": True, "regular_open_et": "09:30", "regular_close_et": "16:00", "is_early_close": False},
+    ])
+    write_expiry_intraday_rules(tmp_path, verified=True)
+    hist = tmp_path / "market_bomb_history"
+    hist.mkdir(parents=True, exist_ok=True)
+    pd.DataFrame([
+        {"ticker": t, "effective_available_at_utc": "2026-01-15T21:00:00Z", "as_of_timestamp_utc": "2026-01-15T21:00:00Z", "net_assets_usd": 100.0, "aum_value_type": "net_assets_usd"}
+        for t in ["TQQQ", "SQQQ", "QLD", "QID"]
+    ]).to_csv(hist / "leveraged_etf_aum_history.csv", index=False)
+    bars_dir = hist / "intraday_bars"
+    bars_dir.mkdir(exist_ok=True)
+    pd.DataFrame([
+        {"timestamp_utc": "2026-01-16T14:30:00Z", "open": 100, "high": 100, "low": 100, "close": 100, "volume": 100, "prior_regular_session_close": 100},
+        {"timestamp_utc": "2026-01-16T20:30:00Z", "open": 101, "high": 101, "low": 101, "close": 101, "volume": 100, "prior_regular_session_close": 100},
+        {"timestamp_utc": "2026-01-16T21:00:00Z", "open": 102, "high": 102, "low": 102, "close": 102, "volume": 100, "prior_regular_session_close": 100},
+    ]).to_csv(bars_dir / "QQQ_5m.csv", index=False)
+    universe = pd.DataFrame([{"target_market": "QQQ", "decision_timestamp_utc": "2026-01-16T20:30:00Z"}])
+    _, _, _, parity = m.build_leveraged_etf_input_candidate_audits(tmp_path, m.rules(tmp_path), universe)
+    assert "matched" not in set(parity["selection_parity_status"])
+    assert "audit_missing" in set(parity["selection_parity_status"])
+
+
+def test_v113_target_clock_gate_blocks_oos_metrics_even_with_valid_bucket():
+    panel = _v119_base_market_panel("EOD", "QQQ")
+    panel["prior_return_1d"] = 0.0
+    integrity = pd.DataFrame([{
+        "target_market": "QQQ",
+        "decision_timestamp_utc": "2026-01-05T21:00:00Z",
+        "model_clock": "EOD",
+        "model_scope": "B0",
+        "required_component": "baseline",
+        "scope_integrity_status": "valid",
+    }])
+    bucket = pd.DataFrame([{
+        "target_market": "QQQ",
+        "decision_timestamp_utc": "2026-01-05T21:00:00Z",
+        "model_clock": "EOD",
+        "model_scope": "B0",
+        "outcome": "next_session_return",
+        "bucket": "valid_included",
+    }])
+    gate = pd.DataFrame([{
+        "target_market": "QQQ",
+        "model_clock": "EOD",
+        "model_scope": "B0",
+        "outcome": "next_session_return",
+        "target_clock_gate_status": "selected_invalid",
+        "target_clock_gate_reason": "unit_test_invalid_calendar",
+        "candidate_decision_count": 1,
+        "universe_gate_selected_invalid_count": 1,
+        "universe_gate_unavailable_coverage_count": 0,
+    }])
+    _, _, _, metrics, _, _, _ = m.run_market_level_oos_backtest(
+        panel,
+        integrity,
+        {"walk_forward": {"minimum_train_observations": 252}},
+        {"daily": ["prior_return_1d"], "intraday": []},
+        bucket,
+        gate,
+    )
+    row = metrics[(metrics["target_market"] == "QQQ") & (metrics["model_scope"] == "B0") & (metrics["outcome"] == "next_session_return")].iloc[0]
+    assert row["result_status"] == "data_quality_blocked"
+    assert row["universe_gate_selected_invalid_count"] == 1
+    assert row["target_clock_gate_reason"] == "unit_test_invalid_calendar"
 
 
 def test_v112_expiry_gamma_selection_uses_canonical_context():
