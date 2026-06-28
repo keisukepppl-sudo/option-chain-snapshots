@@ -5,8 +5,12 @@ import argparse
 import hashlib
 import json
 import os
+import shutil
 import subprocess
+import tempfile
+import uuid
 from pathlib import Path
+from pathlib import PurePosixPath, PureWindowsPath
 from typing import Any
 
 import pandas as pd
@@ -14,8 +18,10 @@ import pandas as pd
 import market_bomb_fragility_score_v0 as scorer
 
 
-ARTIFACT_VERSION = "fragility_data_release_v0_2_1"
-RELEASE_CONTENT_MANIFEST_VERSION = "fragility_release_content_manifest_v0_2_1"
+ARTIFACT_VERSION = "fragility_data_release_v0_2_2"
+RELEASE_CONTENT_MANIFEST_VERSION = "fragility_release_content_manifest_v0_2_2"
+RELEASE_CORE_METADATA_VERSION = "fragility_release_core_metadata_v0_2_2"
+EXECUTION_CONTENT_MANIFEST_VERSION = "fragility_execution_content_manifest_v0_2_2"
 ACTIONIZATION_ALLOWED = False
 REQUIRED_TICKERS = ["SPY", "QQQ", "VIX", "VIX3M"]
 OPTIONAL_TICKERS = ["SOXX", "VIX9D"]
@@ -164,6 +170,15 @@ def utc_now() -> pd.Timestamp:
     return pd.Timestamp.now(tz="UTC")
 
 
+def parse_now_utc(value: str | None) -> pd.Timestamp | None:
+    if not value:
+        return None
+    ts = pd.Timestamp(value)
+    if ts.tzinfo is None:
+        raise SystemExit("--now-utc must be timezone-aware")
+    return ts.tz_convert("UTC")
+
+
 def iso_utc(ts: Any) -> str:
     if ts is None or pd.isna(ts):
         return ""
@@ -222,6 +237,62 @@ def active_pointer_path(root: Path) -> Path:
     return history_root(root) / "active_release.json"
 
 
+def staging_path_has_symlink(path: Path, stop_at: Path) -> bool:
+    current = path.resolve()
+    stop = stop_at.resolve()
+    parts = []
+    while True:
+        parts.append(current)
+        if current == stop:
+            break
+        if current.parent == current:
+            break
+        current = current.parent
+    for item in parts:
+        if item.exists() and item.is_symlink():
+            return True
+    return False
+
+
+def validate_source_relative_path(relative_path: Any) -> str:
+    rel_text = str(relative_path or "").replace("\\", "/").strip()
+    if not rel_text:
+        raise SystemExit("empty source relative_path is not allowed")
+    posix = PurePosixPath(rel_text)
+    windows = PureWindowsPath(str(relative_path or ""))
+    if posix.is_absolute() or windows.is_absolute() or windows.drive or str(relative_path or "").startswith("\\\\"):
+        raise SystemExit(f"absolute source relative_path is not allowed: {relative_path}")
+    if ".." in posix.parts or ".." in windows.parts:
+        raise SystemExit(f"path traversal source relative_path is not allowed: {relative_path}")
+    return posix.as_posix()
+
+
+def validate_staging_source_paths(root: Path, staging_id: str, sources: list[dict[str, Any]]) -> dict[str, Path]:
+    base = staging_dir(root, staging_id).resolve()
+    if base.is_symlink() or not base.exists():
+        raise SystemExit(f"missing or unsafe staging directory: {base}")
+    resolved: dict[str, Path] = {}
+    used_paths: set[str] = set()
+    for source in sources:
+        source_id = str(source.get("source_id", ""))
+        rel_text = validate_source_relative_path(source.get("relative_path", ""))
+        path = (base / rel_text).resolve()
+        try:
+            path.relative_to(base)
+        except Exception as exc:
+            raise SystemExit(f"source relative_path escapes staging root: {rel_text}") from exc
+        normalized = path.as_posix().lower() if os.name == "nt" else path.as_posix()
+        if normalized in used_paths:
+            raise SystemExit(f"duplicate staged source path is not allowed: {rel_text}")
+        used_paths.add(normalized)
+        if staging_path_has_symlink(path, base):
+            raise SystemExit(f"symlinked staging source path is not allowed: {rel_text}")
+        if not path.is_file():
+            raise SystemExit(f"staged source is not a regular file: {rel_text}")
+        resolved[source_id] = path
+    return resolved
+
+
 def content_manifest_path(rel: Path) -> Path:
     return rel / "release_content_manifest.json"
 
@@ -231,7 +302,13 @@ def receipt_path(rel: Path) -> Path:
 
 
 def safe_relative_path(base: Path, path: Path) -> str:
-    rel = path.resolve().relative_to(base.resolve())
+    resolved_text = str(path.resolve())
+    base_text = str(base.resolve())
+    if resolved_text.startswith("\\\\?\\"):
+        resolved_text = resolved_text[4:]
+    if base_text.startswith("\\\\?\\"):
+        base_text = base_text[4:]
+    rel = Path(resolved_text).relative_to(Path(base_text))
     text = rel.as_posix()
     if text.startswith("../") or text == ".." or Path(text).is_absolute():
         raise SystemExit(f"unsafe release manifest path: {text}")
@@ -244,8 +321,9 @@ def release_core_candidate_files(rel: Path) -> list[Path]:
         rel / "canonical_input",
         rel / "preflight_fragility_outputs",
     ]:
-        if base.exists():
-            files.extend([p for p in base.rglob("*") if p.is_file()])
+        platform_base = platform_write_path(base)
+        if platform_base.exists():
+            files.extend([p for p in platform_base.rglob("*") if p.is_file()])
     for name in [
         "source_attestations.csv",
         "source_file_inventory.csv",
@@ -256,11 +334,27 @@ def release_core_candidate_files(rel: Path) -> list[Path]:
         "source_terms_audit.csv",
         "source_cross_source_audit.csv",
         "release_quality_gate.csv",
+        "release_core_metadata.json",
     ]:
-        path = rel / name
+        path = platform_write_path(rel / name)
         if path.exists():
             files.append(path)
     return sorted(files, key=lambda p: safe_relative_path(rel, p))
+
+
+def required_release_core_files() -> set[str]:
+    return {
+        "source_attestations.csv",
+        "source_file_inventory.csv",
+        "source_schema_audit.csv",
+        "source_coverage_audit.csv",
+        "source_availability_policy_audit.csv",
+        "source_timeliness_audit.csv",
+        "source_terms_audit.csv",
+        "source_cross_source_audit.csv",
+        "release_quality_gate.csv",
+        "release_core_metadata.json",
+    }
 
 
 def core_entry_category(relative_path: str) -> str:
@@ -354,6 +448,13 @@ def validate_content_manifest(rel: Path, manifest: dict[str, Any]) -> None:
     actual_core_files = {safe_relative_path(rel, p) for p in release_core_candidate_files(rel)}
     if actual_core_files != seen:
         raise SystemExit("immutable release core file set does not match content manifest")
+    missing_required = sorted(required_release_core_files() - seen)
+    if missing_required:
+        raise SystemExit(f"missing required immutable release core file(s): {','.join(missing_required)}")
+    if not any(p.startswith("canonical_input/") for p in seen):
+        raise SystemExit("missing canonical input from immutable release core")
+    if not any(p.startswith("preflight_fragility_outputs/") for p in seen):
+        raise SystemExit("missing preflight output from immutable release core")
     actual_set_hash = content_set_hash(recomputed_entries)
     if manifest.get("core_content_set_sha256") != actual_set_hash:
         raise SystemExit("release core content set hash mismatch")
@@ -361,13 +462,13 @@ def validate_content_manifest(rel: Path, manifest: dict[str, Any]) -> None:
 
 def build_execution_content_manifest(execution_dir: Path, release_id: str, execution_id: str) -> dict[str, Any]:
     entries = []
-    for path in sorted([p for p in execution_dir.rglob("*") if p.is_file()], key=lambda p: str(p)):
+    for path in sorted([p for p in platform_write_path(execution_dir).rglob("*") if p.is_file()], key=lambda p: str(p)):
         rel = safe_relative_path(execution_dir, path)
         if rel in {"execution_content_manifest.json", "fragility_score_execution_receipt_v0.json"}:
             continue
         entries.append({"relative_path": rel, "sha256": file_sha256(path), "bytes": path.stat().st_size})
     return {
-        "artifact_version": "fragility_execution_content_manifest_v0_2_1",
+        "artifact_version": EXECUTION_CONTENT_MANIFEST_VERSION,
         "release_id": release_id,
         "execution_id": execution_id,
         "created_at_utc": iso_utc(utc_now()),
@@ -453,7 +554,14 @@ def source_terms_ok(manifest: dict[str, Any], source: dict[str, Any], required: 
 
 
 def staged_source_path(root: Path, staging_id: str, source: dict[str, Any]) -> Path:
-    return staging_dir(root, staging_id) / str(source.get("relative_path", ""))
+    rel_text = validate_source_relative_path(source.get("relative_path", ""))
+    base = staging_dir(root, staging_id).resolve()
+    path = (base / rel_text).resolve()
+    try:
+        path.relative_to(base)
+    except Exception as exc:
+        raise SystemExit(f"source relative_path escapes staging root: {rel_text}") from exc
+    return path
 
 
 def validate_source_set(manifest: dict[str, Any]) -> list[dict[str, Any]]:
@@ -474,6 +582,7 @@ def compute_bundle_hash(root: Path, staging_id: str, manifest: dict[str, Any]) -
     h = hashlib.sha256()
     manifest_bytes = manifest_path_for_staging(root, staging_id).read_bytes()
     h.update(manifest_bytes)
+    validate_staging_source_paths(root, staging_id, source_records(manifest))
     for source in sorted(source_records(manifest), key=lambda s: str(s.get("source_id", ""))):
         path = staged_source_path(root, staging_id, source)
         h.update(str(source.get("source_id", "")).encode())
@@ -646,13 +755,18 @@ def recent_window_complete(valid_dates: set[str], calendar_dates: list[str], lat
 def build_release(root: Path, staging_id: str, allow_stale: bool = False, now_utc: str | None = None) -> str:
     manifest = load_staging_manifest(root, staging_id)
     sources = validate_source_set(manifest)
+    validate_staging_source_paths(root, staging_id, sources)
     release_id = make_release_id(root, staging_id, manifest)
-    rel = release_dir(root, release_id)
-    if rel.exists():
+    final_rel = release_dir(root, release_id)
+    if final_rel.exists():
         raise SystemExit(f"release already exists and cannot be overwritten: {release_id}")
+    releases_dir(root).mkdir(parents=True, exist_ok=True)
+    rel = releases_dir(root) / f".building_{release_id}_{uuid.uuid4().hex[:8]}"
+    if rel.exists():
+        raise SystemExit(f"temporary release build directory collision: {rel.name}")
     rel.mkdir(parents=True)
     canonical_root = rel / "canonical_input"
-    latest_session = latest_completed_session(root, pd.Timestamp(now_utc).tz_convert("UTC") if now_utc else None)
+    latest_session = latest_completed_session(root, parse_now_utc(now_utc) if now_utc else None)
     cal_df = scorer.load_calendar(root)
     cal_dates = list(cal_df["session_date"].astype(str))
     calendar_min = cal_dates[0] if cal_dates else ""
@@ -799,9 +913,13 @@ def build_release(root: Path, staging_id: str, allow_stale: bool = False, now_ut
         scorer.run(root, canonical_root, platform_write_path(scorer_out), as_of_date=preflight_session, strict=False)
     gate = build_quality_gate(release_id, pd.DataFrame(attestations), pd.DataFrame(schema_rows), pd.DataFrame(coverage_rows), pd.DataFrame(availability_rows), scorer_out, allow_stale, calendar_policy_status, calendar_policy_reason, preflight_session)
     write_csv(gate, rel / "release_quality_gate.csv", GATE_COLUMNS)
+    metadata = release_core_metadata(root, staging_id, release_id, manifest, sources, gate, scorer_out, preflight_session)
+    (rel / "release_core_metadata.json").write_text(json.dumps(metadata, indent=2, ensure_ascii=False), encoding="utf-8")
     content_manifest = write_content_manifest(rel, release_id)
-    receipt = release_receipt(root, staging_id, release_id, manifest, sources, gate, scorer_out, content_manifest, preflight_session)
+    receipt = release_receipt(rel, release_id, content_manifest)
     receipt_path(rel).write_text(json.dumps(receipt, indent=2, ensure_ascii=False), encoding="utf-8")
+    rel.replace(final_rel)
+    verify_release(root, release_id)
     return release_id
 
 
@@ -935,24 +1053,34 @@ def build_quality_gate(
     return pd.DataFrame(rows, columns=GATE_COLUMNS)
 
 
-def release_receipt(root: Path, staging_id: str, release_id: str, manifest: dict[str, Any], sources: list[dict[str, Any]], gate: pd.DataFrame, scorer_out: Path, content_manifest: dict[str, Any], latest_session: str) -> dict[str, Any]:
+def release_core_metadata(root: Path, staging_id: str, release_id: str, manifest: dict[str, Any], sources: list[dict[str, Any]], gate: pd.DataFrame, scorer_out: Path, latest_session: str) -> dict[str, Any]:
     score_manifest = scorer_out / "fragility_score_manifest_v0.json"
     release_row = gate[gate["gate_scope"] == "release"].iloc[0] if not gate.empty else {}
     return {
-        "artifact_version": ARTIFACT_VERSION,
+        "artifact_version": RELEASE_CORE_METADATA_VERSION,
         "release_id": release_id,
         "staging_id": staging_id,
         "built_at_utc": iso_utc(utc_now()),
         "source_bundle_sha256_at_build": compute_bundle_hash(root, staging_id, manifest),
         "source_file_hashes": {s.get("source_id", ""): file_sha256(staged_source_path(root, staging_id, s)) for s in sources if staged_source_path(root, staging_id, s).exists()},
-        "release_content_manifest_sha256": file_sha256(content_manifest_path(release_dir(root, release_id))),
-        "release_core_content_set_sha256": content_manifest.get("core_content_set_sha256", ""),
         "release_quality_status": str(release_row.get("quality_gate_status", "data_quality_blocked")) if hasattr(release_row, "get") else "data_quality_blocked",
         "promotion_eligible_default": bool(release_row.get("promotion_eligible_default", False)) if hasattr(release_row, "get") else False,
         "promotion_eligible_with_stale_override": bool(release_row.get("promotion_eligible_with_stale_override", False)) if hasattr(release_row, "get") else False,
         "promotion_eligible": bool(release_row.get("promotion_eligible", False)) if hasattr(release_row, "get") else False,
         "preflight_as_of_session_date": latest_session,
         "score_manifest_sha256": file_sha256(score_manifest) if score_manifest.exists() else "",
+        "actionization_allowed": ACTIONIZATION_ALLOWED,
+    }
+
+
+def release_receipt(rel: Path, release_id: str, content_manifest: dict[str, Any]) -> dict[str, Any]:
+    metadata_path = rel / "release_core_metadata.json"
+    return {
+        "artifact_version": ARTIFACT_VERSION,
+        "release_id": release_id,
+        "release_content_manifest_sha256": file_sha256(content_manifest_path(rel)),
+        "release_core_content_set_sha256": content_manifest.get("core_content_set_sha256", ""),
+        "release_core_metadata_sha256": file_sha256(metadata_path) if metadata_path.exists() else "",
         "actionization_allowed": ACTIONIZATION_ALLOWED,
     }
 
@@ -978,6 +1106,8 @@ def write_oos_summary(rel: Path, release_id: str) -> None:
 
 def verify_release(root: Path, release_id: str) -> dict[str, Any]:
     rel = release_dir(root, release_id)
+    if rel.name != release_id:
+        raise SystemExit("release directory id mismatch")
     r_path = receipt_path(rel)
     if not r_path.exists():
         raise SystemExit(f"missing release receipt: {release_id}")
@@ -989,10 +1119,46 @@ def verify_release(root: Path, release_id: str) -> dict[str, Any]:
     if receipt.get("release_content_manifest_sha256") != manifest_sha:
         raise SystemExit("release content manifest hash mismatch")
     manifest = load_json(cm_path)
+    if manifest.get("release_id") != release_id or receipt.get("release_id") != release_id:
+        raise SystemExit("release id mismatch in release wrapper or content manifest")
     validate_content_manifest(rel, manifest)
     if receipt.get("release_core_content_set_sha256") != manifest.get("core_content_set_sha256"):
         raise SystemExit("release receipt core content set hash mismatch")
-    return receipt
+    metadata_path = rel / "release_core_metadata.json"
+    if not metadata_path.exists():
+        raise SystemExit("missing release core metadata")
+    metadata_sha = file_sha256(metadata_path)
+    if receipt.get("release_core_metadata_sha256") != metadata_sha:
+        raise SystemExit("release core metadata hash mismatch")
+    metadata = load_json(metadata_path)
+    if metadata.get("release_id") != release_id:
+        raise SystemExit("release core metadata id mismatch")
+    gate = pd.read_csv(rel / "release_quality_gate.csv")
+    release_rows = gate[gate["gate_scope"] == "release"]
+    if len(release_rows) != 1:
+        raise SystemExit("release quality gate must have exactly one release row")
+    release_row = release_rows.iloc[0]
+    if str(release_row.get("quality_gate_status", "")) != str(metadata.get("release_quality_status", "")):
+        raise SystemExit("release core metadata quality status mismatch")
+    for col, key in [
+        ("promotion_eligible_default", "promotion_eligible_default"),
+        ("promotion_eligible_with_stale_override", "promotion_eligible_with_stale_override"),
+        ("promotion_eligible", "promotion_eligible"),
+    ]:
+        if str(release_row.get(col, "")).lower() != str(metadata.get(key, "")).lower():
+            raise SystemExit(f"release core metadata {key} mismatch")
+    required_coverage = pd.read_csv(rel / "source_coverage_audit.csv")
+    if required_coverage[required_coverage["ticker"].isin(REQUIRED_TICKERS)].groupby("ticker").size().to_dict().keys() != set(REQUIRED_TICKERS):
+        raise SystemExit("required source coverage rows are not unique and complete")
+    latest = pd.read_csv(rel / "preflight_fragility_outputs" / "fragility_score_latest_v0.csv")
+    if len(latest[latest["score_target"] == "MARKET"]) != 1:
+        raise SystemExit("preflight latest MARKET row is not unique")
+    return {
+        **metadata,
+        "release_content_manifest_sha256": manifest_sha,
+        "release_core_content_set_sha256": manifest.get("core_content_set_sha256", ""),
+        "release_core_metadata_sha256": metadata_sha,
+    }
 
 
 def promote_release(root: Path, release_id: str, allow_stale: bool = False) -> None:
@@ -1034,8 +1200,55 @@ def promote_release(root: Path, release_id: str, allow_stale: bool = False) -> N
 
 
 def release_preflight_session(rel: Path) -> str:
-    receipt = load_json(receipt_path(rel))
-    return str(receipt.get("preflight_as_of_session_date", ""))
+    metadata = load_json(rel / "release_core_metadata.json")
+    return str(metadata.get("preflight_as_of_session_date", ""))
+
+
+def release_source_latest_session(rel: Path) -> str:
+    coverage = pd.read_csv(rel / "source_coverage_audit.csv")
+    required = coverage[coverage["ticker"].isin(REQUIRED_TICKERS)].copy()
+    if required.empty:
+        return ""
+    vals = required["actual_last_valid_session_date"].dropna().astype(str)
+    return vals.min() if not vals.empty else ""
+
+
+def resolve_verified_release_admission(root: Path, release_id: str, now_utc: str | None = None, allow_stale: bool = False, allow_blocked_inspection: bool = False) -> dict[str, Any]:
+    metadata = verify_release(root, release_id)
+    rel = release_dir(root, release_id)
+    runtime_latest = latest_completed_session(root, parse_now_utc(now_utc) if now_utc else None)
+    source_latest = release_source_latest_session(rel)
+    quality = str(metadata.get("release_quality_status", "data_quality_blocked"))
+    stale_at_runtime = bool(runtime_latest and source_latest and source_latest < runtime_latest)
+    if quality == "data_quality_blocked":
+        if not allow_blocked_inspection:
+            raise SystemExit("release_data_quality_blocked")
+        mode = "blocked_inspection_only"
+        freshness = "blocked_inspection_not_current"
+        warning = "DATA QUALITY BLOCKED - INSPECTION ONLY - NOT OFFICIAL MARKET STATE"
+        official = False
+    elif quality == "valid_current" and not stale_at_runtime:
+        mode = "official_current"
+        freshness = "current"
+        warning = ""
+        official = True
+    else:
+        if not allow_stale:
+            raise SystemExit("release_stale_requires_allow_stale")
+        mode = "stale_historical_override"
+        freshness = "stale_historical_not_current"
+        warning = "STALE HISTORICAL RELEASE - NOT CURRENT MARKET STATE"
+        official = False
+    return {
+        "metadata": metadata,
+        "execution_mode": mode,
+        "official_market_state": official,
+        "runtime_freshness_status": freshness,
+        "admission_warning": warning,
+        "admission_release_quality_status": quality,
+        "admission_runtime_latest_completed_session": runtime_latest,
+        "admission_source_latest_session": source_latest,
+    }
 
 
 def execution_id_for_release(receipt: dict[str, Any]) -> str:
@@ -1051,6 +1264,8 @@ def write_execution_summary(execution_dir: Path, release_id: str, freshness_labe
     lines = []
     if freshness_label == "stale_historical_not_current":
         lines += ["# STALE HISTORICAL RELEASE - NOT CURRENT MARKET STATE", ""]
+    elif freshness_label == "blocked_inspection_not_current":
+        lines += ["# DATA QUALITY BLOCKED - INSPECTION ONLY - NOT OFFICIAL MARKET STATE", ""]
     else:
         lines += ["# Fragility Real-History OOS Execution Summary", ""]
     lines += [f"- Release ID: {release_id}", "- OOS mode: descriptive only", "- No fitted weights or actionization."]
@@ -1063,9 +1278,76 @@ def write_execution_summary(execution_dir: Path, release_id: str, freshness_labe
     platform_write_path(execution_dir / "fragility_real_history_oos_release_summary.md").write_text("\n".join(lines) + "\n", encoding="utf-8")
 
 
-def run_score(root: Path, release_id: str, strict: bool = False, runtime_freshness_status: str = "current") -> dict[str, Any]:
+def verify_execution(root: Path, release_id: str, execution_id: str) -> dict[str, Any]:
+    release_meta = verify_release(root, release_id)
     rel = release_dir(root, release_id)
-    receipt = verify_release(root, release_id)
+    execution_dir = rel / "executions" / execution_id
+    try:
+        execution_dir.resolve().relative_to(rel.resolve())
+    except Exception as exc:
+        raise SystemExit("execution directory escapes release") from exc
+    manifest_path = execution_dir / "execution_content_manifest.json"
+    receipt_file = execution_dir / "fragility_score_execution_receipt_v0.json"
+    if not platform_write_path(manifest_path).exists() or not platform_write_path(receipt_file).exists():
+        raise SystemExit("missing execution manifest or receipt")
+    manifest = load_json(platform_write_path(manifest_path))
+    receipt = load_json(platform_write_path(receipt_file))
+    if manifest.get("artifact_version") != EXECUTION_CONTENT_MANIFEST_VERSION:
+        raise SystemExit("unsupported execution manifest version")
+    if manifest.get("release_id") != release_id or manifest.get("execution_id") != execution_id:
+        raise SystemExit("execution manifest id mismatch")
+    if receipt.get("release_id") != release_id or receipt.get("execution_id") != execution_id:
+        raise SystemExit("execution receipt id mismatch")
+    if receipt.get("release_content_manifest_sha256") != release_meta.get("release_content_manifest_sha256"):
+        raise SystemExit("execution receipt release content manifest hash mismatch")
+    if receipt.get("release_core_content_set_sha256") != release_meta.get("release_core_content_set_sha256"):
+        raise SystemExit("execution receipt release core hash mismatch")
+    if receipt.get("execution_content_manifest_sha256") != file_sha256(manifest_path):
+        raise SystemExit("execution receipt manifest hash mismatch")
+    seen: set[str] = set()
+    recomputed = []
+    for entry in manifest.get("entries", []):
+        rel_path = str(entry.get("relative_path", ""))
+        if not rel_path or rel_path.startswith("/") or rel_path.startswith("\\") or ".." in Path(rel_path).parts:
+            raise SystemExit(f"unsafe execution manifest path: {rel_path}")
+        if rel_path in seen:
+            raise SystemExit(f"duplicate execution manifest path: {rel_path}")
+        seen.add(rel_path)
+        path = execution_dir / rel_path
+        ppath = platform_write_path(path)
+        if path.is_symlink() or not ppath.is_file():
+            raise SystemExit(f"missing or unsafe execution file: {rel_path}")
+        if int(entry.get("bytes", -1)) != ppath.stat().st_size:
+            raise SystemExit(f"execution file size mismatch: {rel_path}")
+        sha = file_sha256(ppath)
+        if entry.get("sha256") != sha:
+            raise SystemExit(f"execution file sha mismatch: {rel_path}")
+        recomputed.append({"relative_path": rel_path, "sha256": sha, "bytes": ppath.stat().st_size, "category": "execution", "required": True})
+    actual = {
+        safe_relative_path(execution_dir, p)
+        for p in platform_write_path(execution_dir).rglob("*")
+        if p.is_file() and safe_relative_path(execution_dir, p) not in {"execution_content_manifest.json", "fragility_score_execution_receipt_v0.json"}
+    }
+    if actual != seen:
+        raise SystemExit("execution file set does not match execution content manifest")
+    if manifest.get("execution_content_set_sha256") != content_set_hash(recomputed):
+        raise SystemExit("execution content set hash mismatch")
+    mode = str(receipt.get("execution_mode", ""))
+    official = bool(receipt.get("official_market_state", False))
+    warning = str(receipt.get("admission_warning", ""))
+    if mode == "official_current" and (not official or warning):
+        raise SystemExit("official execution receipt admission fields are inconsistent")
+    if mode in {"stale_historical_override", "blocked_inspection_only"} and (official or "NOT" not in warning):
+        raise SystemExit("non-current execution receipt admission fields are inconsistent")
+    return {"release_id": release_id, "execution_id": execution_id, "status": "valid", "execution_mode": mode, "official_market_state": official}
+
+
+def run_score(root: Path, release_id: str, strict: bool = False, now_utc: str | None = None, allow_stale: bool = False, allow_blocked_inspection: bool = False, runtime_freshness_status: str | None = None) -> dict[str, Any]:
+    rel = release_dir(root, release_id)
+    admission = resolve_verified_release_admission(root, release_id, now_utc, allow_stale, allow_blocked_inspection)
+    receipt = admission["metadata"]
+    if runtime_freshness_status is None:
+        runtime_freshness_status = admission["runtime_freshness_status"]
     latest = release_preflight_session(rel)
     execution_id = execution_id_for_release(receipt)
     execution_dir = rel / "executions" / execution_id
@@ -1090,6 +1372,12 @@ def run_score(root: Path, release_id: str, strict: bool = False, runtime_freshne
         "run_completed_at_utc": completed,
         "requested_as_of_date": latest,
         "runtime_freshness_status": runtime_freshness_status,
+        "execution_mode": admission["execution_mode"],
+        "official_market_state": admission["official_market_state"],
+        "admission_release_quality_status": admission["admission_release_quality_status"],
+        "admission_runtime_latest_completed_session": admission["admission_runtime_latest_completed_session"],
+        "admission_source_latest_session": admission["admission_source_latest_session"],
+        "admission_warning": admission["admission_warning"],
         "release_quality_status": receipt.get("release_quality_status", ""),
         "scorer_artifact_version": scorer.ARTIFACT_VERSION,
         "score_manifest_sha256": file_sha256(platform_write_path(score_manifest)),
@@ -1101,10 +1389,11 @@ def run_score(root: Path, release_id: str, strict: bool = False, runtime_freshne
         "actionization_allowed": ACTIONIZATION_ALLOWED,
     }
     platform_write_path(execution_dir / "fragility_score_execution_receipt_v0.json").write_text(json.dumps(exec_receipt, indent=2, ensure_ascii=False), encoding="utf-8")
+    verify_execution(root, release_id, execution_id)
     return exec_receipt
 
 
-def run_active_score(root: Path, strict: bool = False, allow_stale: bool = False, now_utc: str | None = None) -> dict[str, Any]:
+def run_active_score(root: Path, strict: bool = False, allow_stale: bool = False, now_utc: str | None = None, allow_blocked_inspection: bool = False) -> dict[str, Any]:
     path = active_pointer_path(root)
     if not path.exists():
         raise SystemExit("no active fragility release pointer")
@@ -1116,25 +1405,67 @@ def run_active_score(root: Path, strict: bool = False, allow_stale: bool = False
     expected = pointer.get("release_receipt_sha256", "")
     if expected and expected != file_sha256(rel / "release_receipt.json"):
         raise SystemExit("active release receipt hash mismatch")
-    verify_release(root, release_id)
-    runtime_latest = latest_completed_session(root, pd.Timestamp(now_utc).tz_convert("UTC") if now_utc else None)
-    source_latest = str(pointer.get("source_latest_session_date", ""))
-    stale_at_runtime = bool(runtime_latest and source_latest and source_latest < runtime_latest)
-    if stale_at_runtime and not allow_stale:
-        raise SystemExit("active_release_stale_at_runtime")
-    freshness = "stale_historical_not_current" if stale_at_runtime or pointer.get("market_state_freshness_label") == "stale_historical_not_current" else "current"
-    receipt = run_score(root, release_id, strict, runtime_freshness_status=freshness)
+    receipt = run_score(root, release_id, strict, now_utc=now_utc, allow_stale=allow_stale, allow_blocked_inspection=allow_blocked_inspection)
+    freshness = receipt.get("runtime_freshness_status", "current")
     summary_dir = root / "market_bomb_fragility_v0"
     summary_dir.mkdir(parents=True, exist_ok=True)
-    summary = {"warning": "STALE HISTORICAL RELEASE - NOT CURRENT MARKET STATE" if freshness == "stale_historical_not_current" else "", "active_release": pointer, "last_run": receipt, "runtime_latest_completed_nyse_session": runtime_latest}
+    summary = {"warning": receipt.get("admission_warning", ""), "active_release": pointer, "last_run": receipt, "runtime_latest_completed_nyse_session": receipt.get("admission_runtime_latest_completed_session", "")}
     (summary_dir / "active_release_summary.json").write_text(json.dumps(summary, indent=2, ensure_ascii=False), encoding="utf-8")
     return receipt
 
 
-def verify_staging(root: Path, staging_id: str) -> dict[str, Any]:
+def verify_staging(root: Path, staging_id: str, now_utc: str | None = None) -> dict[str, Any]:
     manifest = load_staging_manifest(root, staging_id)
     sources = validate_source_set(manifest)
-    return {"staging_id": staging_id, "source_count": len(sources), "status": "valid"}
+    validate_staging_source_paths(root, staging_id, sources)
+    with tempfile.TemporaryDirectory(prefix="fragility_verify_staging_") as tmp:
+        tmp_root = Path(tmp) / "repo"
+        (tmp_root / "market_bomb_config").mkdir(parents=True)
+        for name in [
+            "nyse_regular_sessions_v1.csv",
+            "fragility_score_v0_rules.json",
+            "fragility_data_release_v0_policy.json",
+            "fragility_data_release_v0_schema.json",
+        ]:
+            shutil.copyfile(root / "market_bomb_config" / name, tmp_root / "market_bomb_config" / name)
+        (tmp_root / ".gitignore").write_text(
+            "market_bomb_history/fragility_score_v0/staging/\n"
+            "market_bomb_history/fragility_score_v0/releases/\n"
+            "market_bomb_history/fragility_score_v0/active_release.json\n",
+            encoding="utf-8",
+        )
+        target_stage = staging_dir(tmp_root, staging_id)
+        target_stage.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copytree(staging_dir(root, staging_id), target_stage, symlinks=True)
+        now_text = now_utc or os.environ.get("FRAGILITY_RELEASE_NOW_UTC")
+        release_id = build_release(tmp_root, staging_id, now_utc=now_text)
+        rel = release_dir(tmp_root, release_id)
+        gate = pd.read_csv(rel / "release_quality_gate.csv")
+        row = gate[gate["gate_scope"] == "release"].iloc[0]
+        metadata = load_json(rel / "release_core_metadata.json")
+        status = str(row["quality_gate_status"])
+        candidate_status = "valid_current_candidate" if status == "valid_current" else "valid_historical_but_stale_candidate" if status == "valid_historical_but_stale" else "data_quality_blocked"
+        required = pd.read_csv(rel / "source_coverage_audit.csv")
+        source_results = required[required["ticker"].isin(REQUIRED_TICKERS)][["ticker", "coverage_status", "timeliness_coverage_status", "actual_last_valid_session_date"]].to_dict("records")
+        return {
+            "staging_id": staging_id,
+            "source_count": len(sources),
+            "status": "valid" if status == "valid_current" else status,
+            "as_of_now_utc": now_text or iso_utc(utc_now()),
+            "latest_completed_nyse_session": source_results[0].get("actual_last_valid_session_date", "") if source_results else "",
+            "candidate_preflight_as_of_session": metadata.get("preflight_as_of_session_date", ""),
+            "candidate_quality_status": candidate_status,
+            "candidate_quality_reason": str(row["quality_gate_reason"]),
+            "hard_gate_valid": bool(row["hard_gate_valid"]),
+            "freshness_valid": bool(row["freshness_valid"]),
+            "stale_only": bool(row["stale_only"]),
+            "promotion_eligible_default_preview": bool(row["promotion_eligible_default"]),
+            "promotion_eligible_with_stale_override_preview": bool(row["promotion_eligible_with_stale_override"]),
+            "required_source_results": source_results,
+            "calendar_policy_status": str(row["calendar_policy_gate_status"]),
+            "timeliness_status": str(row["timeliness_gate_status"]),
+            "scorer_preflight_status": str(row["scorer_preflight_status"]),
+        }
 
 
 def verify_staging_against_release(root: Path, release_id: str, staging_id: str) -> dict[str, Any]:
@@ -1172,14 +1503,21 @@ def main() -> None:
     p = sub.add_parser("run-score")
     p.add_argument("--release-id", required=True)
     p.add_argument("--strict", action="store_true")
+    p.add_argument("--now-utc", default=None)
+    p.add_argument("--allow-stale", action="store_true")
+    p.add_argument("--allow-blocked-inspection", action="store_true")
+    p = sub.add_parser("verify-execution")
+    p.add_argument("--release-id", required=True)
+    p.add_argument("--execution-id", required=True)
     p = sub.add_parser("run-active-score")
     p.add_argument("--strict", action="store_true")
     p.add_argument("--allow-stale", action="store_true")
+    p.add_argument("--allow-blocked-inspection", action="store_true")
     p.add_argument("--now-utc", default=None)
     args = parser.parse_args()
     root = Path(args.root).resolve()
     if args.command == "verify-staging":
-        print(json.dumps(verify_staging(root, args.staging_id), indent=2))
+        print(json.dumps(verify_staging(root, args.staging_id, args.now_utc), indent=2))
     elif args.command == "build-release":
         release_id = build_release(root, args.staging_id, args.allow_stale, args.now_utc)
         print(release_id)
@@ -1190,9 +1528,11 @@ def main() -> None:
     elif args.command == "promote-release":
         promote_release(root, args.release_id, args.allow_stale)
     elif args.command == "run-score":
-        print(json.dumps(run_score(root, args.release_id, args.strict), indent=2, default=str))
+        print(json.dumps(run_score(root, args.release_id, args.strict, args.now_utc, args.allow_stale, args.allow_blocked_inspection), indent=2, default=str))
+    elif args.command == "verify-execution":
+        print(json.dumps(verify_execution(root, args.release_id, args.execution_id), indent=2, default=str))
     elif args.command == "run-active-score":
-        print(json.dumps(run_active_score(root, args.strict, args.allow_stale, args.now_utc), indent=2, default=str))
+        print(json.dumps(run_active_score(root, args.strict, args.allow_stale, args.now_utc, args.allow_blocked_inspection), indent=2, default=str))
 
 
 if __name__ == "__main__":

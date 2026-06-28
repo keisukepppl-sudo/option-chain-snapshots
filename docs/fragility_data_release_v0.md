@@ -1,4 +1,4 @@
-# Fragility Data Release v0.2.1
+# Fragility Data Release v0.2.2
 
 This layer turns locally staged provider exports into an immutable, source-aware
 input release for `market_bomb_fragility_score_v0.py`. It does not change the
@@ -10,11 +10,15 @@ policy.
 - Input mode is local staged files only.
 - Default network download, scraping, or provider fetch is not allowed.
 - Raw provider exports are kept out of git.
+- `verify-staging` is a full dry preflight and creates no persistent release.
 - A release is immutable once built.
 - `verify-release` validates only the release core manifest and receipt; it does
   not depend on the staging directory after build.
+- `build-release` finalizes through a temporary `.building_*` directory.
 - Promotion to `active_release.json` is explicit and separate from build.
+- `run-score` and `run-active-score` use the same runtime admission gate.
 - Runtime score executions are append-only under `executions/<execution_id>/`.
+- `verify-execution` validates runtime execution artifacts.
 - `actionization_allowed=false` remains enforced in release and run receipts.
 
 Ignored local paths:
@@ -66,7 +70,7 @@ SOXX, VIX9D
 
 ```json
 {
-  "artifact_version": "fragility_data_release_v0_2",
+  "artifact_version": "fragility_data_release_v0_2_2",
   "staging_id": "manual_export_20260628",
   "created_at_utc": "2026-06-28T00:00:00Z",
   "operator_attestation": {
@@ -153,7 +157,13 @@ python market_bomb_fragility_data_release_v0.py promote-release --release-id <re
 Run scorer on a specific release:
 
 ```powershell
-python market_bomb_fragility_data_release_v0.py run-score --release-id <release_id>
+python market_bomb_fragility_data_release_v0.py run-score --release-id <release_id> --now-utc <timestamp>
+```
+
+Verify execution:
+
+```powershell
+python market_bomb_fragility_data_release_v0.py verify-execution --release-id <release_id> --execution-id <execution_id>
 ```
 
 Run scorer on the active release:
@@ -178,6 +188,7 @@ source_terms_audit.csv
 source_cross_source_audit.csv
 release_quality_gate.csv
 preflight_fragility_outputs/
+release_core_metadata.json
 release_content_manifest.json
 release_receipt.json
 executions/

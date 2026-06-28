@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import shutil
 from pathlib import Path
+import os
 
 import pandas as pd
 import pytest
@@ -67,6 +68,62 @@ def _release_row(root: Path, release_id: str) -> pd.Series:
     return gate[gate["gate_scope"] == "release"].iloc[0]
 
 
+def test_verify_staging_full_preflight_no_write_and_build_parity(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    root = _copy_root(tmp_path)
+    _stage_fixture(root)
+    monkeypatch.setenv("FRAGILITY_RELEASE_NOW_UTC", FIXED_NOW)
+    result = m.verify_staging(root, "fixture_clean", now_utc=FIXED_NOW)
+    assert result["candidate_quality_status"] == "valid_current_candidate"
+    assert not m.releases_dir(root).exists()
+    assert not m.active_pointer_path(root).exists()
+    release_id = m.build_release(root, "fixture_clean", now_utc=FIXED_NOW)
+    row = _release_row(root, release_id)
+    assert row["quality_gate_status"] == result["candidate_quality_status"].replace("_candidate", "")
+    assert str(row["quality_gate_reason"]) == result["candidate_quality_reason"]
+    assert bool(row["hard_gate_valid"]) == result["hard_gate_valid"]
+    assert bool(row["freshness_valid"]) == result["freshness_valid"]
+    assert bool(row["stale_only"]) == result["stale_only"]
+    assert bool(row["promotion_eligible_default"]) == result["promotion_eligible_default_preview"]
+    assert bool(row["promotion_eligible_with_stale_override"]) == result["promotion_eligible_with_stale_override_preview"]
+
+
+@pytest.mark.parametrize("bad_path", ["../outside.csv", "/tmp/outside.csv", "C:/temp/outside.csv", "\\\\server\\share\\outside.csv"])
+def test_staging_relative_path_escape_rejected_before_read(tmp_path: Path, bad_path: str) -> None:
+    root = _copy_root(tmp_path)
+    staged = _stage_fixture(root)
+    manifest = _manifest(staged)
+    manifest["sources"][0]["relative_path"] = bad_path
+    _write_manifest(staged, manifest)
+    with pytest.raises(SystemExit):
+        m.verify_staging(root, "fixture_clean", now_utc=FIXED_NOW)
+
+
+def test_duplicate_staged_source_path_rejected(tmp_path: Path) -> None:
+    root = _copy_root(tmp_path)
+    staged = _stage_fixture(root)
+    manifest = _manifest(staged)
+    manifest["sources"][1]["relative_path"] = manifest["sources"][0]["relative_path"]
+    _write_manifest(staged, manifest)
+    with pytest.raises(SystemExit, match="duplicate staged source path"):
+        m.verify_staging(root, "fixture_clean", now_utc=FIXED_NOW)
+
+
+def test_symlinked_staged_source_rejected_when_supported(tmp_path: Path) -> None:
+    root = _copy_root(tmp_path)
+    staged = _stage_fixture(root)
+    target = staged / "sources" / "price_spy.csv"
+    link = staged / "sources" / "spy_link.csv"
+    try:
+        os.symlink(target, link)
+    except (OSError, NotImplementedError):
+        pytest.skip("symlink creation unavailable")
+    manifest = _manifest(staged)
+    manifest["sources"][0]["relative_path"] = "sources/spy_link.csv"
+    _write_manifest(staged, manifest)
+    with pytest.raises(SystemExit, match="symlink"):
+        m.verify_staging(root, "fixture_clean", now_utc=FIXED_NOW)
+
+
 def test_clean_release_builds_valid_current_with_immutable_core(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     root, release_id = _build(tmp_path, monkeypatch)
     rel = m.release_dir(root, release_id)
@@ -112,12 +169,38 @@ def test_run_score_creates_append_only_execution_outputs(tmp_path: Path, monkeyp
     first = m.run_score(root, release_id, strict=True)
     second = m.run_score(root, release_id, strict=True)
     assert first["execution_id"] != second["execution_id"]
+    assert first["execution_mode"] == "official_current"
+    assert first["official_market_state"] is True
     rel = m.release_dir(root, release_id)
     assert m.platform_write_path(rel / "executions" / first["execution_id"] / "fragility_outputs" / "fragility_score_latest_v0.csv").exists()
     assert m.platform_write_path(rel / "executions" / second["execution_id"] / "execution_content_manifest.json").exists()
+    assert m.verify_execution(root, release_id, first["execution_id"])["status"] == "valid"
     manifest_entries = json.loads((rel / "release_content_manifest.json").read_text(encoding="utf-8"))["entries"]
     assert not any(str(e["relative_path"]).startswith("executions/") for e in manifest_entries)
     assert first["release_core_content_set_sha256"] == json.loads((rel / "release_receipt.json").read_text(encoding="utf-8"))["release_core_content_set_sha256"]
+
+
+def test_verify_execution_detects_output_tamper_extra_file_and_release_core_change(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    root, release_id = _build(tmp_path, monkeypatch)
+    receipt = m.run_score(root, release_id, strict=True)
+    rel = m.release_dir(root, release_id)
+    execution_dir = rel / "executions" / receipt["execution_id"]
+    score_path = execution_dir / "fragility_outputs" / "fragility_score_latest_v0.csv"
+    original = m.platform_write_path(score_path).read_text(encoding="utf-8")
+    m.platform_write_path(score_path).write_text(original + "\n", encoding="utf-8")
+    with pytest.raises(SystemExit):
+        m.verify_execution(root, release_id, receipt["execution_id"])
+    m.platform_write_path(score_path).write_text(original, encoding="utf-8")
+    extra = execution_dir / "extra.txt"
+    m.platform_write_path(extra).write_text("extra", encoding="utf-8")
+    with pytest.raises(SystemExit):
+        m.verify_execution(root, release_id, receipt["execution_id"])
+    m.platform_write_path(extra).unlink()
+    gate_path = rel / "release_quality_gate.csv"
+    gate_original = gate_path.read_text(encoding="utf-8")
+    gate_path.write_text(gate_original + "\n", encoding="utf-8")
+    with pytest.raises(SystemExit):
+        m.verify_execution(root, release_id, receipt["execution_id"])
 
 
 def test_calendar_policy_short_repo_calendar_blocks_even_with_allow_stale(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -236,7 +319,7 @@ def test_stale_only_release_and_stale_promotion_metadata(tmp_path: Path, monkeyp
 def test_active_release_runtime_staleness_fails_default_and_allows_explicit_stale(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     root, release_id = _build(tmp_path, monkeypatch)
     m.promote_release(root, release_id)
-    with pytest.raises(SystemExit, match="active_release_stale_at_runtime"):
+    with pytest.raises(SystemExit, match="release_stale_requires_allow_stale"):
         m.run_active_score(root, now_utc="2017-09-23T00:00:00Z")
     receipt = m.run_active_score(root, allow_stale=True, now_utc="2017-09-23T00:00:00Z")
     assert receipt["runtime_freshness_status"] == "stale_historical_not_current"
@@ -255,3 +338,21 @@ def test_hard_blocked_release_cannot_promote_with_allow_stale(tmp_path: Path, mo
     assert _release_row(root, release_id)["quality_gate_status"] == "data_quality_blocked"
     with pytest.raises(SystemExit):
         m.promote_release(root, release_id, allow_stale=True)
+
+
+def test_blocked_release_runtime_requires_explicit_inspection(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    root = _copy_root(tmp_path)
+    staged = _stage_fixture(root)
+    manifest = _manifest(staged)
+    manifest["sources"][0]["price_basis"] = "adjusted_close"
+    _write_manifest(staged, manifest)
+    monkeypatch.setenv("FRAGILITY_RELEASE_NOW_UTC", FIXED_NOW)
+    release_id = m.build_release(root, "fixture_clean", now_utc=FIXED_NOW)
+    with pytest.raises(SystemExit, match="release_data_quality_blocked"):
+        m.run_score(root, release_id, now_utc=FIXED_NOW)
+    with pytest.raises(SystemExit, match="release_data_quality_blocked"):
+        m.run_score(root, release_id, now_utc=FIXED_NOW, allow_stale=True)
+    receipt = m.run_score(root, release_id, now_utc=FIXED_NOW, allow_blocked_inspection=True)
+    assert receipt["execution_mode"] == "blocked_inspection_only"
+    assert receipt["official_market_state"] is False
+    assert "INSPECTION ONLY" in receipt["admission_warning"]

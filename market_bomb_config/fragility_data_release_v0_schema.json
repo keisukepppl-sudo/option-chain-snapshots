@@ -1,5 +1,5 @@
 {
-  "artifact_version": "fragility_data_release_schema_v0_2_1",
+  "artifact_version": "fragility_data_release_schema_v0_2_2",
   "source_bundle_manifest_required_fields": [
     "bundle_version",
     "staging_id",
@@ -26,7 +26,9 @@
     "expected_schema_profile"
   ],
   "source_csv_required_columns": ["session_date", "close"],
-  "release_content_manifest_version": "fragility_release_content_manifest_v0_2_1",
+  "release_content_manifest_version": "fragility_release_content_manifest_v0_2_2",
+  "release_core_metadata_version": "fragility_release_core_metadata_v0_2_2",
+  "execution_content_manifest_version": "fragility_execution_content_manifest_v0_2_2",
   "immutable_core_outputs": [
     "canonical_input/**/*.csv",
     "source_attestations.csv",
@@ -38,6 +40,7 @@
     "source_terms_audit.csv",
     "source_cross_source_audit.csv",
     "release_quality_gate.csv",
+    "release_core_metadata.json",
     "preflight_fragility_outputs/**/*"
   ],
   "allowed_column_aliases": {
