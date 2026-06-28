@@ -1,5 +1,7 @@
 {
   "artifact_version": "flow_pressure_research_v0_0_1",
+  "source_contract_version": "flow_provider_contract_v1",
+  "default_research_timing_class": "eod_next_session",
   "actionization_allowed": false,
   "implemented_modules": [
     "leveraged_etf_rebalance",
@@ -21,6 +23,9 @@
     0.12
   ],
   "vol_control_max_exposure": 1.0,
+  "vol_control_exposure_floor": 0.0,
+  "max_aum_observation_age_days": 3,
+  "return_consistency_tolerance": 0.0005,
   "backtest_forward_days": [
     1,
     3,

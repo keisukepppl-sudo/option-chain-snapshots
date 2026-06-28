@@ -1,9 +1,24 @@
 {
   "artifact_version": "flow_pressure_research_v0_0_1",
+  "source_contract_version": "flow_provider_contract_v1",
+  "allowed_research_timing_classes": [
+    "eod_next_session",
+    "eod_after_close",
+    "intraday_close_window",
+    "historical_descriptive_only"
+  ],
+  "allowed_dataset_types": [
+    "prices_daily",
+    "prices_intraday",
+    "leveraged_etf_reference",
+    "leveraged_etf_aum",
+    "vol_control_returns"
+  ],
   "required_source_manifest_fields": [
     "source_id",
     "source_name",
     "source_file",
+    "dataset_type",
     "source_as_of_timestamp",
     "available_at_timestamp",
     "market_timestamp",
@@ -12,7 +27,11 @@
     "relative_path",
     "coverage_start_date",
     "coverage_end_date",
-    "dataset_version"
+    "dataset_version",
+    "timezone",
+    "row_identifier_field",
+    "content_sha256",
+    "is_synthetic_fixture"
   ],
   "required_feature_fields": [
     "feature_state",
@@ -27,7 +46,9 @@
     "explicit_limitations",
     "is_observed_flow",
     "is_model_estimate",
-    "actionization_allowed"
+    "actionization_allowed",
+    "decision_time",
+    "research_timing_class"
   ],
   "release_core_files": [
     "release_core_metadata.json",
@@ -35,6 +56,9 @@
     "release_receipt.json",
     "source_coverage_audit.csv",
     "source_timeliness_audit.csv",
+    "source_file_inventory.csv",
+    "provider_contract_validation_report.json",
+    "timing_audit.csv",
     "feature_quality_gate.csv",
     "module_methodology.json",
     "parameter_registry.json",
