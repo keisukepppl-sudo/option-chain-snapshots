@@ -1,0 +1,1 @@
+v0.1.2 VIX history and raw duplicate closure fixture. Synthetic data only; includes VIX history gap, policy-assumed VIX history row, late VIX9D, SPY valid+late duplicate, and QQQ valid+invalid-close duplicate.

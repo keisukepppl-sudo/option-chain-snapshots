@@ -1,5 +1,5 @@
 {
-  "artifact_version": "market_fragility_score_v0_1_1",
+  "artifact_version": "market_fragility_score_v0_1_2",
   "score_policy_revision": "predeclared_fragility_rubric_v0_1",
   "score_decision_time_policy": "nyse_regular_session_close_plus_15_minutes_v0_1",
   "component_weights": {

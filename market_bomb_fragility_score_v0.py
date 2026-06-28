@@ -16,7 +16,7 @@ import numpy as np
 import pandas as pd
 
 
-ARTIFACT_VERSION = "market_fragility_score_v0_1_1"
+ARTIFACT_VERSION = "market_fragility_score_v0_1_2"
 SCORE_POLICY_REVISION = "predeclared_fragility_rubric_v0_1"
 SCORE_DECISION_TIME_POLICY = "nyse_regular_session_close_plus_15_minutes_v0_1"
 INPUT_MODE = "local_timestamped_csv_only_default"
@@ -25,8 +25,10 @@ ACTIONIZATION_ALLOWED = False
 AS_OF_SELECTION_POLICY = "exact_requested_session_only_no_stale_fallback_v0_1_1"
 ROLLING_WINDOW_POLICY = "consecutive_nyse_calendar_sessions_required_v0_1_1"
 FUTURE_OUTCOME_WINDOW_POLICY = "consecutive_nyse_calendar_sessions_required_v0_1_1"
-VIX_COMPONENT_LINEAGE_POLICY = "required_vix_vix3m_min_confidence_max_effective_timestamp_v0_1_1"
-DUPLICATE_FINAL_RECONCILIATION_POLICY = "duplicate_keys_selected_invalid_all_artifacts_v0_1_1"
+VIX_COMPONENT_LINEAGE_POLICY = "required_vix_vix3m_percentile_history_min_confidence_max_effective_timestamp_v0_1_2"
+DUPLICATE_FINAL_RECONCILIATION_POLICY = "duplicate_keys_selected_invalid_all_artifacts_v0_1_2"
+VIX_PERCENTILE_HISTORY_POLICY = "consecutive_valid_nyse_vix_sessions_126_to_252_v0_1_2"
+RAW_DUPLICATE_DETECTION_POLICY = "pre_status_filter_ticker_normalized_session_date_fail_closed_v0_1_2"
 ET = ZoneInfo("America/New_York")
 UTC = ZoneInfo("UTC")
 TARGETS = ["SPY", "QQQ", "SOXX", "MARKET"]
@@ -70,6 +72,8 @@ RAW_SOURCE_INVENTORY_COLUMNS = [
     "valid_row_count",
     "selected_invalid_row_count",
     "duplicate_selected_invalid_row_count",
+    "raw_duplicate_key_count",
+    "duplicate_selected_invalid_raw_row_count",
     "first_session_date",
     "last_session_date",
     "source_content_hash",
@@ -99,6 +103,8 @@ CALENDAR_AUDIT_COLUMNS = [
 ]
 AVAILABILITY_AUDIT_COLUMNS = [
     "ticker",
+    "raw_row_ordinal",
+    "source_row_identifier",
     "session_date",
     "decision_timestamp_utc",
     "source_as_of_timestamp_utc",
@@ -218,11 +224,27 @@ RAW_RECONCILIATION_COLUMNS = [
     "raw_selected_invalid_final_count",
     "availability_valid_final_count",
     "canonical_valid_final_count",
+    "raw_duplicate_key_count",
+    "duplicate_selected_invalid_raw_row_count",
+    "duplicate_key_canonical_leak_count",
     "raw_valid_key_set_sha256",
     "availability_valid_key_set_sha256",
     "canonical_valid_key_set_sha256",
     "raw_availability_canonical_reconciliation_status",
     "raw_availability_canonical_reconciliation_reason",
+]
+RAW_DUPLICATE_KEY_AUDIT_COLUMNS = [
+    "ticker",
+    "normalized_session_date",
+    "raw_duplicate_row_count",
+    "raw_duplicate_detected",
+    "duplicate_resolution_reason",
+    "raw_row_ordinals",
+    "preliminary_statuses",
+    "final_raw_statuses",
+    "availability_final_statuses",
+    "canonical_final_row_count",
+    "duplicate_resolution_status",
 ]
 COMPONENT_SCORE_COLUMNS = [
     "score_target",
@@ -451,12 +473,13 @@ def expected_source_path(input_root: Path, ticker: str) -> Path:
     return input_root / "volatility_indices" / f"{ticker}.csv"
 
 
-def ingest_raw_sources(root: Path, input_root: Path, calendar: pd.DataFrame) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame, pd.DataFrame]:
+def ingest_raw_sources(root: Path, input_root: Path, calendar: pd.DataFrame) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame, pd.DataFrame, pd.DataFrame]:
     cal_map = calendar.set_index("session_date")["decision_timestamp_utc"].to_dict() if not calendar.empty else {}
     inventory: list[dict[str, Any]] = []
     audit_rows: list[dict[str, Any]] = []
     canonical_candidates: list[dict[str, Any]] = []
     availability_rows: list[dict[str, Any]] = []
+    duplicate_audit_rows: list[dict[str, Any]] = []
     provisional_valid_counts: dict[str, int] = {ticker: 0 for ticker in ALL_TICKERS}
     raw_counts: dict[str, int] = {ticker: 0 for ticker in ALL_TICKERS}
     source_paths: dict[str, str] = {}
@@ -494,6 +517,35 @@ def ingest_raw_sources(root: Path, input_root: Path, calendar: pd.DataFrame) -> 
             raw = pd.DataFrame()
         raw_count = len(raw)
         raw_counts[ticker] = raw_count
+        duplicate_reason_by_ordinal: dict[int, str] = {}
+        duplicate_ordinals_by_key: dict[str, list[int]] = {}
+        if not raw.empty:
+            pre_rows: list[dict[str, Any]] = []
+            for ordinal, pre in enumerate(raw.to_dict("records"), start=1):
+                normalized_date = as_date(pre.get("session_date", ""))
+                if not normalized_date:
+                    continue
+                comp = {
+                    "close": str(pre.get("close", "")),
+                    "high": str(pre.get("high", "")),
+                    "low": str(pre.get("low", "")),
+                    "volume": str(pre.get("volume", "")),
+                    "effective_available_at_utc": "" if is_blank_value(pre.get("effective_available_at_utc", "")) else str(pre.get("effective_available_at_utc", "")),
+                    "source_as_of_timestamp_utc": "" if is_blank_value(pre.get("source_as_of_timestamp_utc", "")) else str(pre.get("source_as_of_timestamp_utc", "")),
+                }
+                pre_rows.append({"ordinal": ordinal, "session_date": normalized_date, "comparison": comp})
+            by_date: dict[str, list[dict[str, Any]]] = {}
+            for pre in pre_rows:
+                by_date.setdefault(pre["session_date"], []).append(pre)
+            for session_date, group in by_date.items():
+                if len(group) <= 1:
+                    continue
+                comparisons = {json.dumps(g["comparison"], sort_keys=True) for g in group}
+                reason = "duplicate_metadata_conflict" if len(comparisons) > 1 else "duplicate_ticker_session"
+                ordinals = [int(g["ordinal"]) for g in group]
+                duplicate_ordinals_by_key[session_date] = ordinals
+                for ordinal in ordinals:
+                    duplicate_reason_by_ordinal[ordinal] = reason
         for ordinal, row in enumerate(raw.to_dict("records"), start=1):
             raw_session = row.get("session_date", "")
             session_date = as_date(raw_session)
@@ -532,7 +584,14 @@ def ingest_raw_sources(root: Path, input_root: Path, calendar: pd.DataFrame) -> 
             if decision_ts and effective_ts is not None and pd.Timestamp(effective_ts).tz_convert("UTC") > parse_ts(decision_ts):
                 status = "unavailable_coverage"
                 reasons.append("future_availability_timestamp")
-            if reasons and status != "unavailable_coverage":
+            preliminary_status = status
+            preliminary_reasons = list(reasons)
+            duplicate_reason = duplicate_reason_by_ordinal.get(ordinal)
+            if duplicate_reason:
+                if duplicate_reason not in reasons:
+                    reasons.insert(0, duplicate_reason)
+                status = "selected_invalid"
+            if reasons and status != "unavailable_coverage" and not duplicate_reason:
                 status = "selected_invalid"
             reason = ";".join(reasons) if reasons else "valid"
             audit_rows.append(
@@ -554,6 +613,8 @@ def ingest_raw_sources(root: Path, input_root: Path, calendar: pd.DataFrame) -> 
                 availability_rows.append(
                     {
                         "ticker": ticker,
+                        "raw_row_ordinal": ordinal,
+                        "source_row_identifier": source_row_id,
                         "session_date": session_date,
                         "decision_timestamp_utc": decision_ts,
                         "source_as_of_timestamp_utc": iso_utc(source_as_of),
@@ -561,6 +622,22 @@ def ingest_raw_sources(root: Path, input_root: Path, calendar: pd.DataFrame) -> 
                         "availability_basis": availability_basis,
                         "availability_confidence": availability_confidence,
                         "availability_status": status,
+                        "availability_reason": reason,
+                    }
+                )
+            elif duplicate_reason and session_date and decision_ts:
+                availability_rows.append(
+                    {
+                        "ticker": ticker,
+                        "raw_row_ordinal": ordinal,
+                        "source_row_identifier": source_row_id,
+                        "session_date": session_date,
+                        "decision_timestamp_utc": decision_ts,
+                        "source_as_of_timestamp_utc": iso_utc(source_as_of),
+                        "effective_available_at_utc": iso_utc(effective_ts),
+                        "availability_basis": availability_basis,
+                        "availability_confidence": availability_confidence,
+                        "availability_status": "selected_invalid",
                         "availability_reason": reason,
                     }
                 )
@@ -587,12 +664,34 @@ def ingest_raw_sources(root: Path, input_root: Path, calendar: pd.DataFrame) -> 
                     }
                 )
 
+        for session_date, ordinals in duplicate_ordinals_by_key.items():
+            rows_for_key = [r for r in audit_rows if r["ticker"] == ticker and as_date(r["raw_session_date"]) == session_date]
+            av_for_key = [r for r in availability_rows if r["ticker"] == ticker and r["session_date"] == session_date]
+            duplicate_audit_rows.append(
+                {
+                    "ticker": ticker,
+                    "normalized_session_date": session_date,
+                    "raw_duplicate_row_count": len(ordinals),
+                    "raw_duplicate_detected": True,
+                    "duplicate_resolution_reason": duplicate_reason_by_ordinal.get(ordinals[0], "duplicate_ticker_session"),
+                    "raw_row_ordinals": ",".join(str(x) for x in ordinals),
+                    "preliminary_statuses": "",
+                    "final_raw_statuses": ",".join(sorted(set(str(r["raw_input_status"]) for r in rows_for_key))),
+                    "availability_final_statuses": ",".join(sorted(set(str(r["availability_status"]) for r in av_for_key))),
+                    "canonical_final_row_count": 0,
+                    "duplicate_resolution_status": "selected_invalid",
+                }
+            )
+
     canonical = pd.DataFrame(canonical_candidates, columns=CANONICAL_PANEL_COLUMNS)
     audit = pd.DataFrame(audit_rows, columns=RAW_INPUT_AUDIT_COLUMNS)
     availability = pd.DataFrame(availability_rows, columns=AVAILABILITY_AUDIT_COLUMNS)
+    duplicate_audit = pd.DataFrame(duplicate_audit_rows, columns=RAW_DUPLICATE_KEY_AUDIT_COLUMNS)
     if canonical.empty:
         for ticker in ALL_TICKERS:
             selected_invalid = len(audit[(audit["ticker"] == ticker) & (audit["raw_input_status"] == "selected_invalid")]) if not audit.empty else 0
+            duplicate_invalid = len(audit[(audit["ticker"] == ticker) & (audit["raw_input_reason"].astype(str).str.contains("duplicate_", na=False))]) if not audit.empty else 0
+            duplicate_key_count = len(duplicate_audit[duplicate_audit["ticker"] == ticker]) if not duplicate_audit.empty else 0
             inventory.append(
                 {
                     "ticker": ticker,
@@ -603,7 +702,9 @@ def ingest_raw_sources(root: Path, input_root: Path, calendar: pd.DataFrame) -> 
                     "final_canonical_valid_row_count": 0,
                     "valid_row_count": 0,
                     "selected_invalid_row_count": selected_invalid,
-                    "duplicate_selected_invalid_row_count": 0,
+                    "duplicate_selected_invalid_row_count": duplicate_invalid,
+                    "raw_duplicate_key_count": duplicate_key_count,
+                    "duplicate_selected_invalid_raw_row_count": duplicate_invalid,
                     "first_session_date": "",
                     "last_session_date": "",
                     "source_content_hash": source_hashes.get(ticker, ""),
@@ -612,7 +713,7 @@ def ingest_raw_sources(root: Path, input_root: Path, calendar: pd.DataFrame) -> 
                 }
             )
         inventory_df = pd.DataFrame(inventory, columns=RAW_SOURCE_INVENTORY_COLUMNS)
-        return inventory_df, audit, availability, canonical
+        return inventory_df, audit, availability, canonical, duplicate_audit
 
     duplicate_keys = canonical.duplicated(["ticker", "session_date"], keep=False)
     if duplicate_keys.any():
@@ -641,6 +742,7 @@ def ingest_raw_sources(root: Path, input_root: Path, calendar: pd.DataFrame) -> 
         candidates = canonical[canonical["ticker"] == ticker].to_dict("records") if not canonical.empty else []
         selected_invalid = len(audit[(audit["ticker"] == ticker) & (audit["raw_input_status"] == "selected_invalid")]) if not audit.empty else 0
         duplicate_invalid = len(audit[(audit["ticker"] == ticker) & (audit["raw_input_reason"].astype(str).str.contains("duplicate_", na=False))]) if not audit.empty else 0
+        duplicate_key_count = len(duplicate_audit[duplicate_audit["ticker"] == ticker]) if not duplicate_audit.empty else 0
         inventory.append(
             {
                 "ticker": ticker,
@@ -652,6 +754,8 @@ def ingest_raw_sources(root: Path, input_root: Path, calendar: pd.DataFrame) -> 
                 "valid_row_count": len(candidates),
                 "selected_invalid_row_count": selected_invalid,
                 "duplicate_selected_invalid_row_count": duplicate_invalid,
+                "raw_duplicate_key_count": duplicate_key_count,
+                "duplicate_selected_invalid_raw_row_count": duplicate_invalid,
                 "first_session_date": min([x["session_date"] for x in candidates], default=""),
                 "last_session_date": max([x["session_date"] for x in candidates], default=""),
                 "source_content_hash": source_hashes.get(ticker, ""),
@@ -660,7 +764,11 @@ def ingest_raw_sources(root: Path, input_root: Path, calendar: pd.DataFrame) -> 
             }
         )
     inventory_df = pd.DataFrame(inventory, columns=RAW_SOURCE_INVENTORY_COLUMNS)
-    return inventory_df, audit, availability, canonical.sort_values(["ticker", "session_date"]).reset_index(drop=True)
+    if not duplicate_audit.empty and not canonical.empty:
+        for idx, row in duplicate_audit.iterrows():
+            leak = len(canonical[(canonical["ticker"] == row["ticker"]) & (canonical["session_date"] == row["normalized_session_date"])])
+            duplicate_audit.loc[idx, "canonical_final_row_count"] = leak
+    return inventory_df, audit, availability, canonical.sort_values(["ticker", "session_date"]).reset_index(drop=True), duplicate_audit
 
 
 def build_decision_universe(canonical: pd.DataFrame, calendar: pd.DataFrame) -> pd.DataFrame:
@@ -890,12 +998,76 @@ def vix_features(panel: pd.DataFrame, calendar: pd.DataFrame | None = None) -> p
         return pd.DataFrame()
     out = piv.copy()
     if "VIX" in out:
-        out["vix_percentile_252"] = percentile_rank(out["VIX"])
+        valid = out["VIX"].notna().to_numpy()
+        values = out["VIX"].to_numpy(dtype=float)
+        run_lengths: list[int] = []
+        percentiles: list[float] = []
+        ref_lengths: list[int] = []
+        for idx, is_valid in enumerate(valid):
+            run = (run_lengths[-1] + 1) if is_valid and run_lengths else (1 if is_valid else 0)
+            run_lengths.append(run)
+            ref_len = min(252, run)
+            ref_lengths.append(ref_len)
+            if run >= 126:
+                ref = values[idx - ref_len + 1 : idx + 1]
+                percentiles.append(float((ref <= values[idx]).mean()))
+            else:
+                percentiles.append(np.nan)
+        out["vix_consecutive_valid_run_length"] = run_lengths
+        out["vix_percentile_reference_length"] = ref_lengths
+        out["vix_percentile_252"] = percentiles
     if "VIX" in out and "VIX3M" in out:
         out["backwardation"] = ((out["VIX"] / out["VIX3M"] - 1.0) / 0.15).apply(clip)
     if "VIX9D" in out and "VIX" in out:
         out["near_term_stress"] = ((out["VIX9D"] / out["VIX"] - 1.0) / 0.15).apply(clip)
     return out.reset_index()
+
+
+def build_vix_history_audit(vix_frame: pd.DataFrame, canonical: pd.DataFrame) -> pd.DataFrame:
+    rows: list[dict[str, Any]] = []
+    if vix_frame.empty:
+        return pd.DataFrame(rows, columns=LOOKBACK_COMPLETENESS_COLUMNS)
+    src = {row["session_date"]: row for row in canonical[canonical["ticker"] == "VIX"].to_dict("records")} if not canonical.empty else {}
+    for idx, row in vix_frame.reset_index(drop=True).iterrows():
+        session_date = row["session_date"]
+        decision_ts = row.get("decision_timestamp_utc", "")
+        run = int(row.get("vix_consecutive_valid_run_length", 0) or 0) if not pd.isna(row.get("vix_consecutive_valid_run_length", 0)) else 0
+        current_valid = session_date in src and not pd.isna(row.get("VIX", np.nan))
+        if run >= 126:
+            required = min(252, run)
+            start = idx - required + 1
+            window_dates = list(vix_frame.iloc[start : idx + 1]["session_date"].astype(str))
+            valid_dates = [d for d in window_dates if d in src]
+            missing_dates = [d for d in window_dates if d not in src]
+            status = "valid" if len(valid_dates) == required and current_valid else "unavailable_coverage"
+            reason = "valid" if status == "valid" else "vix_history_source_unavailable"
+        else:
+            required = 126
+            start = max(0, idx - required + 1)
+            window_dates = list(vix_frame.iloc[start : idx + 1]["session_date"].astype(str))
+            valid_dates = [d for d in window_dates if d in src]
+            missing_dates = [d for d in window_dates if d not in src]
+            status = "unavailable_coverage"
+            reason = "current_vix_source_missing" if not current_valid else "incomplete_vix_percentile_252_window"
+        effective_values = [str(src[d].get("effective_available_at_utc", "")) for d in valid_dates]
+        confidence_values = [str(src[d].get("availability_confidence", "")) for d in valid_dates]
+        rows.append(
+            {
+                "ticker": "VIX",
+                "session_date": session_date,
+                "decision_timestamp_utc": decision_ts,
+                "lookback_name": "vix_percentile_252",
+                "required_calendar_session_count": required,
+                "valid_source_session_count": len(valid_dates),
+                "missing_calendar_session_count": len(missing_dates) + max(0, required - len(window_dates)),
+                "missing_calendar_session_dates": ",".join(missing_dates),
+                "window_completeness_status": status,
+                "window_completeness_reason": reason,
+                "max_input_effective_available_at_utc": timestamp_max(effective_values),
+                "min_input_source_confidence": confidence_min(confidence_values),
+            }
+        )
+    return pd.DataFrame(rows, columns=LOOKBACK_COMPLETENESS_COLUMNS)
 
 
 def row_source_confidence(rows: pd.DataFrame) -> str:
@@ -930,10 +1102,13 @@ def build_feature_and_scores(
     calendar = universe[["session_date", "decision_timestamp_utc"]].drop_duplicates().sort_values("session_date").reset_index(drop=True)
     target_feature_frames = {t: compute_target_features(t, canonical, calendar) for t in PRICE_TICKERS}
     lookback_audit = build_lookback_completeness_audit(target_feature_frames)
+    vix_frame = vix_features(canonical, calendar)
+    vix_history_audit = build_vix_history_audit(vix_frame, canonical)
+    lookback_audit = pd.concat([lookback_audit, vix_history_audit], ignore_index=True)
     lookback_by_key = {
         (row["ticker"], row["session_date"], row["lookback_name"]): row for row in lookback_audit.to_dict("records")
     }
-    vix_frame = vix_features(canonical, calendar)
+    vix_history_by_date = {row["session_date"]: row for row in vix_history_audit.to_dict("records")}
     vix_by_date = vix_frame.set_index("session_date").to_dict("index") if not vix_frame.empty else {}
     source_rows_by_key = {
         (row["ticker"], row["session_date"]): row for row in canonical.to_dict("records")
@@ -1023,6 +1198,36 @@ def build_feature_and_scores(
             "data_type": "observed_market_volatility_index",
         }
         lineage_rows.append(row)
+        hist = vix_history_by_date.get(session_date, {})
+        hist_status = str(hist.get("window_completeness_status", "unavailable_coverage"))
+        hist_reason = str(hist.get("window_completeness_reason", "incomplete_vix_percentile_252_window"))
+        hist_eff = str(hist.get("max_input_effective_available_at_utc", ""))
+        hist_conf = str(hist.get("min_input_source_confidence", "Unavailable"))
+        hist_valid_count = int(hist.get("valid_source_session_count", 0) or 0) if hist else 0
+        hist_required = int(hist.get("required_calendar_session_count", 126) or 126) if hist else 126
+        lineage_rows.append(
+            {
+                "score_target": target,
+                "session_date": session_date,
+                "decision_timestamp_utc": decision_ts,
+                "component_name": "vix_term_structure_stress",
+                "input_family": "VIX_PERCENTILE_HISTORY",
+                "input_tickers": "VIX",
+                "input_session_count_required": hist_required,
+                "input_session_count_valid": hist_valid_count,
+                "input_session_completeness_status": hist_status,
+                "input_session_completeness_reason": hist_reason,
+                "max_input_effective_available_at_utc": hist_eff,
+                "min_input_source_confidence": hist_conf,
+                "input_source_path_or_provider_summary": "VIX",
+                "input_source_content_hash_summary": "",
+                "lineage_status": "valid" if hist_status == "valid" else "unavailable_coverage",
+                "lineage_reason": hist_reason,
+                "is_proxy": False,
+                "observed_flow": False,
+                "data_type": "observed_market_volatility_index",
+            }
+        )
         opt = optional[0] if optional else {}
         opt_valid = bool(use_vix9d and opt.get("ticker") == "VIX9D" and opt.get("availability_status", "valid") == "valid" and timestamp_lte(str(opt.get("effective_available_at_utc", "")), decision_ts))
         opt_row = {
@@ -1047,12 +1252,15 @@ def build_feature_and_scores(
             "data_type": "observed_market_volatility_index",
         }
         lineage_rows.append(opt_row)
-        used_conf = required_conf + ([str(opt.get("availability_confidence", ""))] if opt_valid else [])
-        used_eff = (required_effective if required_ok else all_required_effective) + ([str(opt.get("effective_available_at_utc", ""))] if opt_valid else [])
+        history_ok = hist_status == "valid"
+        used_conf = required_conf + ([hist_conf] if history_ok else []) + ([str(opt.get("availability_confidence", ""))] if opt_valid else [])
+        used_eff = (required_effective if required_ok else all_required_effective) + ([hist_eff] if hist_eff else []) + ([str(opt.get("effective_available_at_utc", ""))] if opt_valid else [])
+        final_ok = required_ok and history_ok
+        final_reason = reason if not required_ok else ("valid" if history_ok else hist_reason)
         return {
-            "status": "valid" if required_ok else "unavailable_coverage",
-            "reason": reason,
-            "source_confidence": confidence_min(used_conf) if required_ok else "Unavailable",
+            "status": "valid" if final_ok else "unavailable_coverage",
+            "reason": final_reason,
+            "source_confidence": confidence_min(used_conf) if final_ok else "Unavailable",
             "max_effective": timestamp_max(used_eff),
             "used_vix9d": opt_valid,
         }
@@ -1254,6 +1462,7 @@ def build_feature_and_scores(
             for cname, comp in comps.items():
                 max_input_eff = comp.get("max_effective", max_eff)
                 nl_blocked = bool(max_input_eff and parse_ts(max_input_eff) is not None and parse_ts(max_input_eff) > parse_ts(decision_ts))
+                history_unavailable = cname == "vix_term_structure_stress" and comp.get("status") != "valid"
                 no_lookahead_rows.append(
                     {
                         "score_target": target,
@@ -1262,8 +1471,8 @@ def build_feature_and_scores(
                         "feature_name": "",
                         "component_name": cname,
                         "max_input_effective_available_at_utc": max_input_eff,
-                        "no_lookahead_status": "data_quality_blocked" if nl_blocked else "valid",
-                        "no_lookahead_reason": "future_effective_available_at" if nl_blocked else "valid",
+                        "no_lookahead_status": "data_quality_blocked" if nl_blocked or history_unavailable else "valid",
+                        "no_lookahead_reason": "future_effective_available_at" if nl_blocked else (comp.get("reason", "vix_component_required_history_unavailable") if history_unavailable else "valid"),
                     }
                 )
                 component_rows.append(
@@ -1754,6 +1963,10 @@ def write_dashboard(out: Path, latest: pd.DataFrame, component_df: pd.DataFrame,
         "- Requested as-of dates never silently resolve to prior scores.",
         "- Rolling features and future labels require consecutive NYSE calendar sessions.",
         "- Duplicate raw keys are invalidated and reconciled across artifacts.",
+        "- VIX percentile history requires 126-252 consecutive valid NYSE calendar sessions.",
+        "- VIX history gaps are not skipped or forward-filled.",
+        "- Raw duplicate keys are detected before status filtering and invalidate all rows for the key.",
+        "- A valid-looking row cannot survive when another raw row shares its ticker/session key.",
     ]
     (out / "fragility_score_dashboard_v0.md").write_text("\n".join(text) + "\n", encoding="utf-8")
     (out / "fragility_score_report_v0.md").write_text("\n".join(text) + "\n", encoding="utf-8")
@@ -1768,7 +1981,7 @@ def build_data_quality_audit(raw_audit: pd.DataFrame, availability: pd.DataFrame
     return pd.DataFrame(rows)
 
 
-def build_raw_reconciliation_audit(inventory: pd.DataFrame, raw_audit: pd.DataFrame, availability: pd.DataFrame, canonical: pd.DataFrame) -> pd.DataFrame:
+def build_raw_reconciliation_audit(inventory: pd.DataFrame, raw_audit: pd.DataFrame, availability: pd.DataFrame, canonical: pd.DataFrame, duplicate_audit: pd.DataFrame | None = None) -> pd.DataFrame:
     rows: list[dict[str, Any]] = []
     for ticker in ALL_TICKERS:
         inv = inventory[inventory["ticker"] == ticker]
@@ -1785,20 +1998,28 @@ def build_raw_reconciliation_audit(inventory: pd.DataFrame, raw_audit: pd.DataFr
             (ticker, row["session_date"])
             for row in canonical[canonical["ticker"] == ticker].to_dict("records")
         ] if not canonical.empty else []
-        clean = set(raw_valid_keys) == set(availability_valid_keys) == set(canonical_valid_keys)
+        duplicate_keys = set()
+        if duplicate_audit is not None and not duplicate_audit.empty:
+            duplicate_keys = {(row["ticker"], row["normalized_session_date"]) for row in duplicate_audit[duplicate_audit["ticker"] == ticker].to_dict("records")}
+        duplicate_leaks = len(set(canonical_valid_keys) & duplicate_keys)
+        clean = set(raw_valid_keys) == set(availability_valid_keys) == set(canonical_valid_keys) and duplicate_leaks == 0
+        inv_row = inv.iloc[0] if not inv.empty else {}
         rows.append(
             {
                 "ticker": ticker,
-                "raw_row_count": int(inv.iloc[0]["raw_row_count"]) if not inv.empty else 0,
-                "raw_valid_before_duplicate_resolution_count": int(inv.iloc[0]["provisional_valid_row_count"]) if not inv.empty else 0,
-                "raw_selected_invalid_final_count": int(inv.iloc[0]["selected_invalid_row_count"]) if not inv.empty else 0,
+                "raw_row_count": int(inv_row.get("raw_row_count", 0)) if not inv.empty else 0,
+                "raw_valid_before_duplicate_resolution_count": int(inv_row.get("provisional_valid_row_count", 0)) if not inv.empty else 0,
+                "raw_selected_invalid_final_count": int(inv_row.get("selected_invalid_row_count", 0)) if not inv.empty else 0,
                 "availability_valid_final_count": len(set(availability_valid_keys)),
                 "canonical_valid_final_count": len(set(canonical_valid_keys)),
+                "raw_duplicate_key_count": int(inv_row.get("raw_duplicate_key_count", 0)) if not inv.empty else 0,
+                "duplicate_selected_invalid_raw_row_count": int(inv_row.get("duplicate_selected_invalid_raw_row_count", 0)) if not inv.empty else 0,
+                "duplicate_key_canonical_leak_count": duplicate_leaks,
                 "raw_valid_key_set_sha256": key_set_sha256(raw_valid_keys),
                 "availability_valid_key_set_sha256": key_set_sha256(availability_valid_keys),
                 "canonical_valid_key_set_sha256": key_set_sha256(canonical_valid_keys),
                 "raw_availability_canonical_reconciliation_status": "valid" if clean else "data_quality_blocked",
-                "raw_availability_canonical_reconciliation_reason": "valid" if clean else "raw_availability_canonical_valid_key_set_mismatch",
+                "raw_availability_canonical_reconciliation_reason": "valid" if clean else "raw_availability_canonical_valid_key_set_mismatch_or_duplicate_leak",
             }
         )
     return pd.DataFrame(rows, columns=RAW_RECONCILIATION_COLUMNS)
@@ -1869,7 +2090,7 @@ def run(root: Path, input_root: Path, output_root: Path, as_of_date: str | None 
     output_root.mkdir(parents=True, exist_ok=True)
     calendar = load_calendar(root)
     invalid_as_of = bool(as_of_date and as_of_date not in set(calendar["session_date"] if not calendar.empty else []))
-    inventory, raw_audit, availability, canonical = ingest_raw_sources(root, input_root, calendar)
+    inventory, raw_audit, availability, canonical, duplicate_audit = ingest_raw_sources(root, input_root, calendar)
     if as_of_date and not canonical.empty:
         canonical = canonical[canonical["session_date"] <= as_of_date].copy()
         availability = availability[availability["session_date"] <= as_of_date].copy()
@@ -1883,12 +2104,13 @@ def run(root: Path, input_root: Path, output_root: Path, as_of_date: str | None 
     feature_panel, feature_audit, no_lookahead, component_lineage, lookback_audit, component_scores, score_panel = build_feature_and_scores(canonical, universe, availability)
     oos_panel, oos_fold, oos_band, oos_summary = add_oos(score_panel, canonical, active_calendar)
     latest = latest_score(score_panel, as_of_date, calendar)
-    raw_reconciliation = build_raw_reconciliation_audit(inventory, raw_audit, availability, canonical)
+    raw_reconciliation = build_raw_reconciliation_audit(inventory, raw_audit, availability, canonical, duplicate_audit)
     as_of_audit = build_as_of_request_audit(as_of_date, calendar, universe, score_panel, latest)
     data_quality = build_data_quality_audit(raw_audit, availability, no_lookahead, score_panel)
 
     write_table(inventory, output_root / "fragility_raw_source_inventory_v0.csv")
     write_table(raw_audit, output_root / "fragility_raw_input_audit_v0.csv")
+    write_table(duplicate_audit, output_root / "fragility_raw_duplicate_key_audit_v0.csv")
     write_table(calendar, output_root / "fragility_daily_calendar_audit_v0.csv")
     write_table(availability, output_root / "fragility_daily_availability_audit_v0.csv")
     write_table(canonical, output_root / "fragility_daily_canonical_panel_v0.csv", output_root / "fragility_daily_canonical_panel_v0.parquet")
@@ -1921,7 +2143,10 @@ def run(root: Path, input_root: Path, output_root: Path, as_of_date: str | None 
         "rolling_window_policy": ROLLING_WINDOW_POLICY,
         "future_outcome_window_policy": FUTURE_OUTCOME_WINDOW_POLICY,
         "vix_component_lineage_policy": VIX_COMPONENT_LINEAGE_POLICY,
+        "vix_percentile_history_policy": VIX_PERCENTILE_HISTORY_POLICY,
+        "vix_component_required_lineage_families": ["VIX_REQUIRED", "VIX_PERCENTILE_HISTORY"],
         "duplicate_final_reconciliation_policy": DUPLICATE_FINAL_RECONCILIATION_POLICY,
+        "raw_duplicate_detection_policy": RAW_DUPLICATE_DETECTION_POLICY,
         "network_download_default": False,
         "calendar_fallback_allowed": False,
         "forward_fill_allowed": False,
@@ -1946,9 +2171,14 @@ def run(root: Path, input_root: Path, output_root: Path, as_of_date: str | None 
         "vix_component_high_confidence_count": int(((component_scores["component_name"] == "vix_term_structure_stress") & (component_scores["source_confidence"] == "High")).sum()) if not component_scores.empty else 0,
         "vix_component_medium_confidence_count": int(((component_scores["component_name"] == "vix_term_structure_stress") & (component_scores["source_confidence"] == "Medium")).sum()) if not component_scores.empty else 0,
         "vix_component_unavailable_count": int(((component_scores["component_name"] == "vix_term_structure_stress") & (component_scores["component_status"] != "valid")).sum()) if not component_scores.empty else 0,
+        "vix_percentile_history_valid_count": int(((component_lineage["input_family"] == "VIX_PERCENTILE_HISTORY") & (component_lineage["lineage_status"] == "valid")).sum()) if not component_lineage.empty else 0,
+        "vix_percentile_history_incomplete_count": int(((component_lineage["input_family"] == "VIX_PERCENTILE_HISTORY") & (component_lineage["lineage_status"] != "valid")).sum()) if not component_lineage.empty else 0,
+        "vix_component_blocked_by_history_count": int(((component_lineage["input_family"] == "VIX_PERCENTILE_HISTORY") & (component_lineage["lineage_status"] != "valid")).sum()) if not component_lineage.empty else 0,
         "lookback_incomplete_window_count": int((lookback_audit["window_completeness_status"] != "valid").sum()) if not lookback_audit.empty else 0,
         "future_outcome_calendar_incomplete_count": int((oos_panel["oos_reason"].astype(str).str.contains("future_outcome_calendar_session_missing", na=False)).sum()) if not oos_panel.empty else 0,
         "duplicate_selected_invalid_raw_row_count": int(inventory["duplicate_selected_invalid_row_count"].sum()) if not inventory.empty else 0,
+        "raw_duplicate_key_count": int(inventory["raw_duplicate_key_count"].sum()) if "raw_duplicate_key_count" in inventory else 0,
+        "duplicate_key_canonical_leak_count": int(raw_reconciliation["duplicate_key_canonical_leak_count"].sum()) if not raw_reconciliation.empty else 0,
         "raw_availability_canonical_reconciliation_mismatch_count": int((raw_reconciliation["raw_availability_canonical_reconciliation_status"] != "valid").sum()) if not raw_reconciliation.empty else 0,
         "rules_json": rules,
         "sources_json": sources,
