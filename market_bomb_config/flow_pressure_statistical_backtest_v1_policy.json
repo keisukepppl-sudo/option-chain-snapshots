@@ -1,0 +1,35 @@
+{
+  "artifact_version": "flow_pressure_statistical_backtest_v1",
+  "actionization_allowed": false,
+  "allowed_timing_classes": [
+    "eod_next_session",
+    "eod_after_close",
+    "intraday_close_window",
+    "historical_descriptive_only"
+  ],
+  "primary_timing_class": "eod_next_session",
+  "downside_tail_percentile": 0.2,
+  "neutral_pressure_band": 0.0,
+  "minimum_partition_rows": 50,
+  "minimum_partition_unique_dates": 40,
+  "minimum_holdout_rows": 30,
+  "minimum_holdout_unique_dates": 25,
+  "minimum_quantile_rows": 30,
+  "minimum_bootstrap_replicates": 1000,
+  "bootstrap_method": "moving_block_bootstrap",
+  "bootstrap_block_lengths": [
+    3,
+    5,
+    10
+  ],
+  "bootstrap_seed": 20260629,
+  "concentration_max_date_share": 0.35,
+  "evidence_labels": [
+    "blocked_by_data_quality",
+    "insufficient_data",
+    "insufficient_sample",
+    "no_reliable_evidence",
+    "exploratory_association",
+    "timing_valid_association_requiring_replication"
+  ]
+}

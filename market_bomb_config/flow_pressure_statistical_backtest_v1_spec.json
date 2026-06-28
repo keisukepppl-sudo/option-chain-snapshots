@@ -1,0 +1,48 @@
+{
+  "artifact_version": "flow_pressure_statistical_backtest_v1",
+  "statistical_backtest_spec_version": "flow_pressure_statistical_backtest_v1_spec",
+  "actionization_allowed": false,
+  "chronological_split": {
+    "train": 0.6,
+    "validation": 0.2,
+    "final_holdout": 0.2
+  },
+  "outcomes": [
+    "next_session_open_to_close_return",
+    "next_session_close_to_close_return",
+    "three_session_close_to_close_return",
+    "five_session_close_to_close_return",
+    "next_session_daily_range",
+    "three_session_mae",
+    "three_session_mfe",
+    "five_session_mae",
+    "five_session_mfe",
+    "subsequent_realized_volatility",
+    "conditional_drawdown"
+  ],
+  "feature_partitions": [
+    "flow_adverse_vs_non_adverse",
+    "pressure_sign",
+    "absolute_pressure_quintile"
+  ],
+  "interaction_definition": {
+    "fragility_regimes": [
+      "high",
+      "not_high"
+    ],
+    "flow_regimes": [
+      "adverse",
+      "non_adverse"
+    ]
+  },
+  "bootstrap": {
+    "method": "moving_block_bootstrap",
+    "block_lengths": [
+      3,
+      5,
+      10
+    ],
+    "replicates": 1000,
+    "seed": 20260629
+  }
+}

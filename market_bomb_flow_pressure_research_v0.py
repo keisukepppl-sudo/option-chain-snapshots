@@ -2271,6 +2271,12 @@ def main() -> None:
     p.add_argument("--staging-id", required=True)
     p.add_argument("--decision-time-utc", required=True)
     p.add_argument("--research-timing-class", default="eod_next_session", choices=sorted(TIMING_CLASSES))
+    p = sub.add_parser("run-flow-statistical-backtest")
+    p.add_argument("--release-id", required=True)
+    p.add_argument("--spec-path")
+    p = sub.add_parser("verify-flow-statistical-backtest")
+    p.add_argument("--release-id", required=True)
+    p.add_argument("--statistical-backtest-run-id", required=True)
     args = parser.parse_args()
     root = Path(args.root)
     if args.command == "build-flow-staging-template":
@@ -2295,6 +2301,14 @@ def main() -> None:
         result = inspect_release(root, args.release_id)
     elif args.command == "run-flow-real-data-study":
         result = run_flow_real_data_study(root, args.staging_id, args.decision_time_utc, args.research_timing_class)
+    elif args.command == "run-flow-statistical-backtest":
+        import market_bomb_flow_pressure_statistical_backtest_v1 as stat
+
+        result = {"statistical_backtest_run_id": stat.run_flow_statistical_backtest(root, args.release_id, args.spec_path)}
+    elif args.command == "verify-flow-statistical-backtest":
+        import market_bomb_flow_pressure_statistical_backtest_v1 as stat
+
+        result = stat.verify_flow_statistical_backtest(root, args.release_id, args.statistical_backtest_run_id)
     else:
         raise SystemExit(f"unknown command: {args.command}")
     if getattr(args, "output", None):

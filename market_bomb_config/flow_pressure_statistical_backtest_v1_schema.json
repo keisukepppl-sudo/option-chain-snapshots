@@ -1,0 +1,34 @@
+{
+  "artifact_version": "flow_pressure_statistical_backtest_v1_schema",
+  "actionization_allowed": false,
+  "required_outputs": [
+    "analysis_registry.csv",
+    "feature_outcome_panel.csv",
+    "chronological_split_manifest.json",
+    "derived_threshold_registry.json",
+    "partition_boundary_registry.json",
+    "statistical_summary.csv",
+    "effect_size_summary.csv",
+    "bootstrap_summary.csv",
+    "bootstrap_replicate_metadata.json",
+    "interaction_results.csv",
+    "interaction_difference_in_differences.csv",
+    "sample_stability_report.csv",
+    "outcome_coverage_report.csv",
+    "exclusion_reason_report.csv",
+    "evidence_classification.csv",
+    "holdout_results.csv",
+    "research_conclusion.md"
+  ],
+  "required_receipt_fields": [
+    "release_id",
+    "statistical_backtest_run_id",
+    "statistical_backtest_spec_version",
+    "split_manifest_sha256",
+    "derived_threshold_registry_sha256",
+    "partition_boundary_registry_sha256",
+    "analysis_registry_sha256",
+    "bootstrap_seed",
+    "actionization_allowed"
+  ]
+}
