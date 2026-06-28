@@ -1339,6 +1339,11 @@ def _identity_for_buckets(buckets: pd.DataFrame, status="matched", reason="") ->
                 "decision_timestamp_utc": row.get("decision_timestamp_utc", ""),
                 "model_scope": row.get("model_scope", ""),
                 "outcome": row.get("outcome", ""),
+                "identity_origin": "expected_grid",
+                "expected_universe_row_count": 1,
+                "actual_bucket_row_count": 1,
+                "candidate_in_universe_flag_status": "true",
+                "actual_bucket_values": row.get("bucket", ""),
                 "bucket_universe_identity_status": status,
                 "bucket_universe_identity_reason": reason,
             })
@@ -1351,6 +1356,8 @@ def _target_clock_gate_for_buckets(buckets: pd.DataFrame, status="valid", reason
         return pd.DataFrame(columns=m.MARKET_LEVEL_TARGET_CLOCK_GATE_COLUMNS)
     for keys, group in buckets.groupby(["target_market", "model_clock", "model_scope", "outcome"], dropna=False):
         target, clock, scope, outcome = keys
+        decisions = sorted(set(group["decision_timestamp_utc"].astype(str).tolist()))
+        digest = m.hashlib.sha256("\n".join(decisions).encode("utf-8")).hexdigest() if hasattr(m, "hashlib") else ""
         rows.append({
             "target_market": target,
             "model_clock": clock,
@@ -1359,6 +1366,8 @@ def _target_clock_gate_for_buckets(buckets: pd.DataFrame, status="valid", reason
             "target_clock_gate_status": status,
             "target_clock_gate_reason": reason,
             "candidate_decision_count": int(group["decision_timestamp_utc"].astype(str).nunique()),
+            "canonical_universe_decision_count": len(decisions),
+            "canonical_universe_decision_set_sha256": digest,
             "universe_gate_selected_invalid_count": int(status in {"selected_invalid", "audit_missing"}),
             "universe_gate_unavailable_coverage_count": int(status == "unavailable_coverage"),
         })
@@ -1960,6 +1969,8 @@ def test_v113_target_clock_gate_blocks_oos_metrics_even_with_valid_bucket():
         "target_clock_gate_status": "selected_invalid",
         "target_clock_gate_reason": "unit_test_invalid_calendar",
         "candidate_decision_count": 1,
+        "canonical_universe_decision_count": 1,
+        "canonical_universe_decision_set_sha256": m.hashlib.sha256("2026-01-05T21:00:00Z".encode("utf-8")).hexdigest(),
         "universe_gate_selected_invalid_count": 1,
         "universe_gate_unavailable_coverage_count": 0,
     }])
@@ -2372,3 +2383,112 @@ def test_v116_oos_requires_identity_artifact_and_blocks_locally_without_changing
     assert b0["bucket_universe_identity_mismatch_count"] == 1
     assert b0["reconciliation_gap"] == 0
     assert b1["bucket_universe_identity_mismatch_count"] == 0
+
+
+def test_v117_gate_fingerprint_is_order_invariant_for_valid_keys_and_includes_invalid_keys():
+    raw = pd.DataFrame([
+        {"target_market": "QQQ", "decision_timestamp_utc": "2026-01-05T21:00:00Z", "model_clock": "EOD"},
+        {"target_market": "QQQ", "decision_timestamp_utc": "2026-01-06T21:00:00Z", "model_clock": "EOD"},
+    ])
+    canonical_a, _ = m.canonicalize_market_level_decision_universe(
+        m.ensure_columns(raw, m.MARKET_LEVEL_EOD_DECISION_UNIVERSE_COLUMNS),
+        model_clock="EOD",
+        required_columns=m.MARKET_LEVEL_EOD_DECISION_UNIVERSE_COLUMNS,
+    )
+    canonical_b, _ = m.canonicalize_market_level_decision_universe(
+        m.ensure_columns(raw.iloc[::-1].reset_index(drop=True), m.MARKET_LEVEL_EOD_DECISION_UNIVERSE_COLUMNS),
+        model_clock="EOD",
+        required_columns=m.MARKET_LEVEL_EOD_DECISION_UNIVERSE_COLUMNS,
+    )
+    count_a, hash_a = m.canonical_universe_decision_set_fingerprint(canonical_a, target_market="QQQ", model_clock="EOD")
+    count_b, hash_b = m.canonical_universe_decision_set_fingerprint(canonical_b, target_market="QQQ", model_clock="EOD")
+    assert count_a == 2
+    assert count_b == 2
+    assert hash_a != m.hashlib.sha256(b"").hexdigest()
+    assert hash_a == hash_b
+
+    with_invalid, _ = m.canonicalize_market_level_decision_universe(
+        m.ensure_columns(pd.concat([raw, pd.DataFrame([{"target_market": "QQQ", "decision_timestamp_utc": "", "model_clock": "EOD"}])], ignore_index=True), m.MARKET_LEVEL_EOD_DECISION_UNIVERSE_COLUMNS),
+        model_clock="EOD",
+        required_columns=m.MARKET_LEVEL_EOD_DECISION_UNIVERSE_COLUMNS,
+    )
+    invalid_count, invalid_hash = m.canonical_universe_decision_set_fingerprint(with_invalid, target_market="QQQ", model_clock="EOD")
+    assert invalid_count == 3
+    assert invalid_hash != hash_a
+
+
+def test_v117_gate_expected_count_blocks_missing_bucket_identity_and_coverage():
+    decision = "2026-01-05T21:00:00Z"
+    gate = pd.DataFrame([{
+        "target_market": "QQQ",
+        "model_clock": "EOD",
+        "model_scope": "B1",
+        "outcome": "next_session_return",
+        "target_clock_gate_status": "valid",
+        "target_clock_gate_reason": "",
+        "candidate_decision_count": 1,
+        "canonical_universe_decision_count": 1,
+        "canonical_universe_decision_set_sha256": m.hashlib.sha256(decision.encode("utf-8")).hexdigest(),
+        "universe_gate_selected_invalid_count": 0,
+        "universe_gate_unavailable_coverage_count": 0,
+    }])
+    _, _, _, metrics, _, _, _ = m.run_market_level_oos_backtest(
+        _v119_base_market_panel("EOD", "QQQ").iloc[0:0].copy(),
+        pd.DataFrame(columns=m.MARKET_LEVEL_DECISION_BUCKET_COLUMNS),
+        gate,
+        pd.DataFrame(columns=m.MARKET_LEVEL_UNIVERSE_BUCKET_IDENTITY_COLUMNS),
+        pd.DataFrame(columns=m.MARKET_LEVEL_UNIVERSE_COVERAGE_RECONCILIATION_COLUMNS),
+        {},
+        {"daily": [], "intraday": []},
+    )
+    row = metrics[(metrics["target_market"].eq("QQQ")) & (metrics["model_scope"].eq("B1")) & (metrics["outcome"].eq("next_session_return"))].iloc[0]
+    assert row["candidate_decision_count"] == 1
+    assert row["bucket_artifact_candidate_decision_count"] == 0
+    assert row["identity_artifact_completeness_status"] == "mismatch"
+    assert "required_bucket_identity_audit_row_missing" in row["identity_artifact_completeness_reason"]
+    assert row["coverage_artifact_completeness_status"] == "mismatch"
+    assert "required_universe_coverage_reconciliation_row_missing" in row["coverage_artifact_completeness_reason"]
+    assert row["reconciliation_gap"] == 0
+    assert row["result_status"] == "data_quality_blocked"
+
+
+def test_v117_identity_completeness_mismatch_is_local_and_bucket_arithmetic_separate():
+    panel = _v119_base_market_panel("EOD", "QQQ")
+    panel["prior_return_1d"] = 0.0
+    integrity = pd.DataFrame([
+        {"target_market": "QQQ", "decision_timestamp_utc": "2026-01-05T21:00:00Z", "model_clock": "EOD", "model_scope": "B0", "required_component": "baseline", "scope_integrity_status": "valid"},
+        {"target_market": "QQQ", "decision_timestamp_utc": "2026-01-05T21:00:00Z", "model_clock": "EOD", "model_scope": "B1", "required_component": "baseline", "scope_integrity_status": "valid"},
+    ])
+    buckets = _bucket_for_panel(panel, integrity, {"daily": ["prior_return_1d"], "intraday": []})
+    gate = _target_clock_gate_for_buckets(buckets)
+    identity = _identity_for_buckets(buckets)
+    identity = identity[~(
+        identity["target_market"].eq("QQQ")
+        & identity["model_clock"].eq("EOD")
+        & identity["model_scope"].eq("B1")
+        & identity["outcome"].eq("next_session_return")
+    )].copy()
+    coverage = _coverage_for_buckets(buckets)
+    _, _, _, metrics, _, _, _ = m.run_market_level_oos_backtest(panel, buckets, gate, identity, coverage, {}, {"daily": ["prior_return_1d"], "intraday": []})
+    b1 = metrics[(metrics["target_market"].eq("QQQ")) & (metrics["model_scope"].eq("B1")) & (metrics["outcome"].eq("next_session_return"))].iloc[0]
+    b0 = metrics[(metrics["target_market"].eq("QQQ")) & (metrics["model_scope"].eq("B0")) & (metrics["outcome"].eq("next_session_return"))].iloc[0]
+    b1_other = metrics[(metrics["target_market"].eq("QQQ")) & (metrics["model_scope"].eq("B1")) & (metrics["outcome"].eq("forward_return_3d"))].iloc[0]
+    assert b1["result_status"] == "data_quality_blocked"
+    assert b1["identity_artifact_completeness_status"] == "mismatch"
+    assert b1["reconciliation_gap"] == 0
+    assert b0["identity_artifact_completeness_status"] == "matched"
+    assert b1_other["identity_artifact_completeness_status"] == "matched"
+
+
+def test_v117_gate_candidate_count_contract_mismatch_blocks_locally():
+    panel = _v119_base_market_panel("EOD", "QQQ")
+    buckets = _bucket_for_panel(panel, pd.DataFrame([{"target_market": "QQQ", "decision_timestamp_utc": "2026-01-05T21:00:00Z", "model_clock": "EOD", "model_scope": "B0", "required_component": "baseline", "scope_integrity_status": "valid"}]), {"daily": [], "intraday": []})
+    gate = _target_clock_gate_for_buckets(buckets)
+    mask = gate["target_market"].eq("QQQ") & gate["model_clock"].eq("EOD") & gate["model_scope"].eq("B0") & gate["outcome"].eq("next_session_return")
+    gate.loc[mask, "candidate_decision_count"] = 2
+    _, _, _, metrics, _, _, _ = m.run_market_level_oos_backtest(panel, buckets, gate, _identity_for_buckets(buckets), _coverage_for_buckets(buckets), {}, {"daily": [], "intraday": []})
+    row = metrics[(metrics["target_market"].eq("QQQ")) & (metrics["model_scope"].eq("B0")) & (metrics["outcome"].eq("next_session_return"))].iloc[0]
+    other = metrics[(metrics["target_market"].eq("QQQ")) & (metrics["model_scope"].eq("B0")) & (metrics["outcome"].eq("forward_return_3d"))].iloc[0]
+    assert row["result_status"] == "data_quality_blocked"
+    assert "canonical_universe_candidate_count_contract_mismatch" in row["target_clock_gate_reason"]
+    assert "canonical_universe_candidate_count_contract_mismatch" not in str(other["target_clock_gate_reason"])

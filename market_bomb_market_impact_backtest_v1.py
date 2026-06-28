@@ -44,27 +44,29 @@ OUTPUT_ROOT = Path("market_bomb_market_impact")
 CTA_VOL_QUALITY_CONTRACT_REVISION = "cta_vol_quality_contract_v1_1_8"
 CTA_VOL_SELECTION_POLICY_REVISION = "latest_clean_feature_selector_v1_1_8"
 LEVERAGED_BUNDLE_POLICY_REVISION = "leveraged_etf_input_bundle_v1_1_8"
-MARKET_LEVEL_INTEGRITY_REVISION = "market_level_decision_scope_integrity_v1_1_16"
+MARKET_LEVEL_INTEGRITY_REVISION = "market_level_decision_scope_integrity_v1_1_17"
 DEALER_GAMMA_SIGN_POLICY_REVISION = "dealer_gamma_negative_sign_policy_v1_1_8"
-DEALER_GAMMA_SOURCE_CONTRACT_REVISION = "dealer_gamma_source_contract_v1_1_16"
-DEALER_GAMMA_SELECTION_POLICY_REVISION = "latest_clean_dealer_gamma_selector_v1_1_16"
+DEALER_GAMMA_SOURCE_CONTRACT_REVISION = "dealer_gamma_source_contract_v1_1_17"
+DEALER_GAMMA_SELECTION_POLICY_REVISION = "latest_clean_dealer_gamma_selector_v1_1_17"
 MARKET_LEVEL_EOD_UNIVERSE_POLICY = "daily_outcomes_full_eod_decision_universe_v1_1_11"
-MARKET_LEVEL_INTRADAY_UNIVERSE_POLICY = "canonical_explicit_intraday_universe_v1_1_16"
-MARKET_LEVEL_OOS_BUCKET_POLICY = "strict_artifact_only_single_classifier_v1_1_16"
-EOD_ACTUAL_FEATURE_LINEAGE_POLICY = "actual_lineage_schema_only_v1_1_16"
-INTRADAY_INPUT_AUDIT_UNIVERSE_POLICY = "full_intraday_decision_universe_no_fallback_v1_1_16"
-MARKET_LEVEL_BUCKET_CANDIDATE_SOURCE_POLICY = "explicit_eod_and_intraday_universe_only_v1_1_16"
-TARGET_CLOCK_GATE_MISSING_POLICY = "fail_closed_audit_missing_v1_1_16"
-LEVERAGED_CLOSE_1600_ROLE = "outcome_only_not_primary_input_v1_1_16"
-MARKET_LEVEL_DECISION_UNIVERSE_POLICY = "canonical_explicit_universe_only_v1_1_16"
-UNIVERSE_DUPLICATE_KEY_POLICY = "canonicalize_once_and_selected_invalid_v1_1_16"
-MARKET_LEVEL_COVERAGE_RECONCILIATION_GRANULARITY = "target_clock_decision_scope_outcome_v1_1_16"
-COVERAGE_MISMATCH_POLICY = "local_fail_closed_data_quality_blocked_v1_1_16"
-DECISION_TIMESTAMP_CANONICALIZATION_POLICY = "timezone_aware_utc_iso8601_only_v1_1_16"
-NAIVE_TIMESTAMP_POLICY = "selected_invalid_timezone_missing_v1_1_16"
-INVALID_TIMESTAMP_ROW_POLICY = "retain_as_invalid_audit_key_no_silent_collapse_v1_1_16"
-UNIVERSE_BUCKET_IDENTITY_POLICY = "strict_expected_grid_exactly_one_bucket_v1_1_16"
-UNEXPECTED_BUCKET_ROW_POLICY = "local_fail_closed_or_structural_unmapped_warning_v1_1_16"
+MARKET_LEVEL_INTRADAY_UNIVERSE_POLICY = "canonical_explicit_intraday_universe_v1_1_17"
+MARKET_LEVEL_OOS_BUCKET_POLICY = "strict_artifact_only_single_classifier_v1_1_17"
+EOD_ACTUAL_FEATURE_LINEAGE_POLICY = "actual_lineage_schema_only_v1_1_17"
+INTRADAY_INPUT_AUDIT_UNIVERSE_POLICY = "full_intraday_decision_universe_no_fallback_v1_1_17"
+MARKET_LEVEL_BUCKET_CANDIDATE_SOURCE_POLICY = "explicit_eod_and_intraday_universe_only_v1_1_17"
+TARGET_CLOCK_GATE_MISSING_POLICY = "fail_closed_audit_missing_v1_1_17"
+LEVERAGED_CLOSE_1600_ROLE = "outcome_only_not_primary_input_v1_1_17"
+MARKET_LEVEL_DECISION_UNIVERSE_POLICY = "canonical_explicit_universe_only_v1_1_17"
+UNIVERSE_DUPLICATE_KEY_POLICY = "canonicalize_once_and_selected_invalid_v1_1_17"
+MARKET_LEVEL_COVERAGE_RECONCILIATION_GRANULARITY = "target_clock_decision_scope_outcome_v1_1_17"
+COVERAGE_MISMATCH_POLICY = "local_fail_closed_data_quality_blocked_v1_1_17"
+DECISION_TIMESTAMP_CANONICALIZATION_POLICY = "timezone_aware_utc_iso8601_only_v1_1_17"
+NAIVE_TIMESTAMP_POLICY = "selected_invalid_timezone_missing_v1_1_17"
+INVALID_TIMESTAMP_ROW_POLICY = "retain_as_invalid_audit_key_no_silent_collapse_v1_1_17"
+UNIVERSE_BUCKET_IDENTITY_POLICY = "strict_expected_grid_exactly_one_bucket_v1_1_17"
+UNEXPECTED_BUCKET_ROW_POLICY = "local_fail_closed_or_structural_unmapped_warning_v1_1_17"
+CANONICAL_UNIVERSE_GATE_FINGERPRINT_POLICY = "sorted_unique_decision_timestamp_sha256_v1_1_17"
+OOS_EXPECTED_CANDIDATE_SOURCE = "target_clock_gate_canonical_universe_v1_1_17"
 DEALER_GAMMA_ALLOWED_DATA_TYPES = {"reconstructed_from_raw_chain", "raw_chain_reconstructed_proxy"}
 
 FEATURE_AUDIT_COLUMNS = [
@@ -230,6 +232,8 @@ MARKET_LEVEL_TARGET_CLOCK_GATE_COLUMNS = [
     "target_clock_gate_status",
     "target_clock_gate_reason",
     "candidate_decision_count",
+    "canonical_universe_decision_count",
+    "canonical_universe_decision_set_sha256",
     "universe_gate_selected_invalid_count",
     "universe_gate_unavailable_coverage_count",
 ]
@@ -6295,6 +6299,26 @@ def _invalid_market_level_decision_key(target: str, clock: str, raw_timestamp: s
     return "INVALID::" + hashlib.sha256(payload.encode("utf-8")).hexdigest()[:16]
 
 
+def canonical_universe_decision_set_fingerprint(
+    universe: pd.DataFrame,
+    *,
+    target_market: str,
+    model_clock: str,
+) -> tuple[int, str]:
+    if universe is None or universe.empty or "decision_timestamp_utc" not in universe.columns:
+        values: list[str] = []
+    else:
+        work = universe.copy()
+        values = sorted(set(
+            work[
+                work.get("target_market", pd.Series(dtype=str)).astype(str).eq(str(target_market))
+                & work.get("model_clock", pd.Series(dtype=str)).astype(str).eq(str(model_clock))
+            ].get("decision_timestamp_utc", pd.Series(dtype=str)).astype(str).tolist()
+        ))
+    payload = "\n".join(values).encode("utf-8")
+    return len(values), hashlib.sha256(payload).hexdigest()
+
+
 def canonicalize_market_level_decision_universe(universe: pd.DataFrame, *, model_clock: str, required_columns: list[str]) -> tuple[pd.DataFrame, pd.DataFrame]:
     canonical_columns = list(dict.fromkeys(required_columns + MARKET_LEVEL_DECISION_UNIVERSE_INTEGRITY_COLUMNS))
     if universe is None:
@@ -6429,7 +6453,7 @@ def build_market_level_target_clock_gate_audit(
         "INTRADAY": ["intraday_return_1530_to_close", "intraday_absolute_return_1530_to_close", "intraday_range_1530_to_close"],
     }
     for target in spec["targets"]:
-        eod_count = int(eod_decision_universe.get("target_market", pd.Series(dtype=str)).astype(str).eq(target).sum()) if not eod_decision_universe.empty else 0
+        eod_count, eod_hash = canonical_universe_decision_set_fingerprint(eod_decision_universe, target_market=target, model_clock="EOD")
         for model_scope in spec["eod_models"].keys():
             for outcome in outcome_map["EOD"]:
                 rows.append({
@@ -6440,13 +6464,15 @@ def build_market_level_target_clock_gate_audit(
                     "target_clock_gate_status": "valid" if eod_count else "unavailable_coverage",
                     "target_clock_gate_reason": "" if eod_count else "eod_decision_universe_empty",
                     "candidate_decision_count": eod_count,
+                    "canonical_universe_decision_count": eod_count,
+                    "canonical_universe_decision_set_sha256": eod_hash,
                     "universe_gate_selected_invalid_count": 0,
                     "universe_gate_unavailable_coverage_count": 0 if eod_count else 1,
                 })
         gate = intraday_universe_gate_audit[
             intraday_universe_gate_audit.get("target_market", pd.Series(dtype=str)).astype(str).eq(target)
         ] if intraday_universe_gate_audit is not None and not intraday_universe_gate_audit.empty else pd.DataFrame()
-        canonical_intraday_count = int(intraday_decision_universe.get("target_market", pd.Series(dtype=str)).astype(str).eq(target).sum()) if intraday_decision_universe is not None and not intraday_decision_universe.empty else 0
+        canonical_intraday_count, canonical_intraday_hash = canonical_universe_decision_set_fingerprint(intraday_decision_universe, target_market=target, model_clock="INTRADAY")
         if gate.empty:
             gate_status = "unavailable_coverage"
             gate_reason = "intraday_universe_gate_missing"
@@ -6470,6 +6496,8 @@ def build_market_level_target_clock_gate_audit(
                     "target_clock_gate_status": gate_status,
                     "target_clock_gate_reason": gate_reason,
                     "candidate_decision_count": candidate_count,
+                    "canonical_universe_decision_count": canonical_intraday_count,
+                    "canonical_universe_decision_set_sha256": canonical_intraday_hash,
                     "universe_gate_selected_invalid_count": selected_invalid_count,
                     "universe_gate_unavailable_coverage_count": unavailable_count,
                 })
@@ -6519,7 +6547,8 @@ def run_market_level_oos_backtest(
         [
             "target_market", "model_clock", "model_scope", "outcome", "target_clock_gate_status",
             "target_clock_gate_reason", "candidate_decision_count", "universe_gate_selected_invalid_count",
-            "universe_gate_unavailable_coverage_count",
+            "universe_gate_unavailable_coverage_count", "canonical_universe_decision_count",
+            "canonical_universe_decision_set_sha256",
         ],
         "target clock gate artifact required",
     )
@@ -6527,6 +6556,7 @@ def run_market_level_oos_backtest(
         universe_bucket_identity_audit,
         [
             "target_market", "model_clock", "decision_timestamp_utc", "model_scope", "outcome",
+            "identity_origin", "expected_universe_row_count", "actual_bucket_row_count",
             "bucket_universe_identity_status", "bucket_universe_identity_reason",
         ],
         "universe bucket identity audit artifact required",
@@ -6553,6 +6583,12 @@ def run_market_level_oos_backtest(
     min_folds = int(spec["minimum_non_empty_oos_folds"])
     work = panel.copy()
     model_lookup = {**spec["eod_models"], **spec["intraday_models"]}
+    empty_decision_set_hash = hashlib.sha256(b"").hexdigest()
+
+    def decision_set_hash(values: list[str] | set[str]) -> tuple[int, str]:
+        clean = sorted(set(str(v) for v in values if str(v)))
+        return len(clean), hashlib.sha256("\n".join(clean).encode("utf-8")).hexdigest()
+
     for clock, models, outcomes, baseline_cols, policy in [
         ("EOD", spec["eod_models"], eod_outcomes, base_cfg.get("daily", []), "eod_regular_close_v1"),
         ("INTRADAY", spec["intraday_models"], intraday_outcomes, base_cfg.get("intraday", []), "intraday_1530_et_v1"),
@@ -6576,12 +6612,33 @@ def run_market_level_oos_backtest(
                         universe_gate_unavailable_coverage_count = 0
                         target_clock_gate_status = "audit_missing"
                         target_clock_gate_reason = "required_target_clock_gate_row_missing"
+                        expected_canonical_universe_decision_count = 0
+                        expected_canonical_universe_decision_set_sha256 = empty_decision_set_hash
                     else:
                         gate_row = gate_match.iloc[-1]
                         universe_gate_selected_invalid_count = int(safe_float(gate_row.get("universe_gate_selected_invalid_count", 0), 0))
                         universe_gate_unavailable_coverage_count = int(safe_float(gate_row.get("universe_gate_unavailable_coverage_count", 0), 0))
                         target_clock_gate_status = str(gate_row.get("target_clock_gate_status", "audit_missing"))
                         target_clock_gate_reason = str(gate_row.get("target_clock_gate_reason", ""))
+                        gate_reasons: list[str] = []
+                        raw_expected_count = gate_row.get("canonical_universe_decision_count", np.nan)
+                        raw_expected_hash = str(gate_row.get("canonical_universe_decision_set_sha256", ""))
+                        if pd.isna(raw_expected_count) or raw_expected_hash in {"", "nan", "None"}:
+                            expected_canonical_universe_decision_count = 0
+                            expected_canonical_universe_decision_set_sha256 = raw_expected_hash
+                            gate_reasons.append("required_canonical_universe_fingerprint_missing")
+                        else:
+                            expected_canonical_universe_decision_count = int(safe_float(raw_expected_count, -1))
+                            expected_canonical_universe_decision_set_sha256 = raw_expected_hash
+                            if expected_canonical_universe_decision_count < 0 or re.fullmatch(r"[0-9a-f]{64}", raw_expected_hash) is None:
+                                gate_reasons.append("canonical_universe_fingerprint_invalid")
+                        gate_candidate_count = int(safe_float(gate_row.get("candidate_decision_count", -1), -1))
+                        if gate_candidate_count != expected_canonical_universe_decision_count:
+                            gate_reasons.append("canonical_universe_candidate_count_contract_mismatch")
+                        if gate_reasons:
+                            universe_gate_selected_invalid_count = max(universe_gate_selected_invalid_count, 1)
+                            target_clock_gate_status = "selected_invalid" if target_clock_gate_status == "valid" else target_clock_gate_status
+                            target_clock_gate_reason = ";".join(dict.fromkeys([r for r in [target_clock_gate_reason, *gate_reasons] if r]))
 
                     bucket_rows = decision_bucket_audit[
                         decision_bucket_audit.get("target_market", pd.Series(dtype=str)).astype(str).eq(target)
@@ -6590,7 +6647,8 @@ def run_market_level_oos_backtest(
                         & decision_bucket_audit.get("outcome", pd.Series(dtype=str)).astype(str).eq(outcome)
                     ].copy()
                     candidate_decisions = set(bucket_rows.get("decision_timestamp_utc", pd.Series(dtype=str)).astype(str).tolist())
-                    candidate_count = len(candidate_decisions)
+                    bucket_artifact_candidate_count = len(candidate_decisions)
+                    candidate_count = expected_canonical_universe_decision_count
                     invalid_decisions = set(bucket_rows[bucket_rows.get("bucket", pd.Series(dtype=str)).astype(str).eq("selected_invalid")]["decision_timestamp_utc"].astype(str).tolist()) if not bucket_rows.empty else set()
                     unavailable_decisions = set(bucket_rows[bucket_rows.get("bucket", pd.Series(dtype=str)).astype(str).eq("scope_unavailable_coverage")]["decision_timestamp_utc"].astype(str).tolist()) if not bucket_rows.empty else set()
                     outcome_unavailable_decisions = set(bucket_rows[bucket_rows.get("bucket", pd.Series(dtype=str)).astype(str).eq("outcome_unavailable")]["decision_timestamp_utc"].astype(str).tolist()) if not bucket_rows.empty else set()
@@ -6605,34 +6663,71 @@ def run_market_level_oos_backtest(
                         & universe_bucket_identity_audit.get("model_clock", pd.Series(dtype=str)).astype(str).eq(clock)
                         & universe_bucket_identity_audit.get("outcome", pd.Series(dtype=str)).astype(str).eq(outcome)
                     ].copy()
-                    if identity_rows.empty and candidate_count:
-                        identity_mismatch_decisions = {"__identity_row_missing__"}
-                        identity_mismatch_count = 1
-                        identity_mismatch_reasons = "required_bucket_identity_audit_row_missing"
+                    identity_expected = identity_rows[
+                        identity_rows.get("identity_origin", pd.Series(dtype=str)).astype(str).eq("expected_grid")
+                    ].copy() if not identity_rows.empty else pd.DataFrame()
+                    identity_expected_grid_row_count = len(identity_expected)
+                    identity_expected_grid_unique_decision_count, identity_expected_grid_decision_set_sha256 = decision_set_hash(identity_expected.get("decision_timestamp_utc", pd.Series(dtype=str)).astype(str).tolist() if not identity_expected.empty else [])
+                    identity_completeness_reasons: list[str] = []
+                    if candidate_count > 0 and identity_expected.empty:
+                        identity_completeness_reasons.append("required_bucket_identity_audit_row_missing")
+                    if identity_expected_grid_row_count != candidate_count:
+                        identity_completeness_reasons.append("identity_expected_grid_row_count_mismatch")
+                    if identity_expected_grid_unique_decision_count != candidate_count:
+                        identity_completeness_reasons.append("duplicate_identity_expected_grid_decision")
+                    if identity_expected_grid_decision_set_sha256 != expected_canonical_universe_decision_set_sha256:
+                        identity_completeness_reasons.append("identity_expected_grid_decision_set_mismatch")
+                    if not identity_expected.empty and not pd.to_numeric(identity_expected.get("expected_universe_row_count", pd.Series(dtype=float)), errors="coerce").eq(1).all():
+                        identity_completeness_reasons.append("identity_expected_grid_expected_universe_row_count_not_one")
+                    identity_artifact_completeness_status = "matched" if not identity_completeness_reasons else "mismatch"
+                    identity_artifact_completeness_reason = ";".join(dict.fromkeys(identity_completeness_reasons))
+                    if identity_rows.empty and bucket_artifact_candidate_count:
+                        row_identity_mismatch_decisions = {"__identity_row_missing__"}
+                        row_identity_mismatch_reasons = "required_bucket_identity_audit_row_missing"
                     else:
                         identity_bad = identity_rows[
                             ~identity_rows.get("bucket_universe_identity_status", pd.Series(dtype=str)).astype(str).eq("matched")
                         ].copy() if not identity_rows.empty else pd.DataFrame()
-                        identity_mismatch_decisions = set(identity_bad.get("decision_timestamp_utc", pd.Series(dtype=str)).astype(str).tolist()) if not identity_bad.empty else set()
-                        identity_mismatch_count = len(identity_mismatch_decisions)
-                        identity_mismatch_reasons = ";".join(sorted(set(identity_bad.get("bucket_universe_identity_reason", pd.Series(dtype=str)).astype(str).tolist()))) if not identity_bad.empty else ""
+                        row_identity_mismatch_decisions = set(identity_bad.get("decision_timestamp_utc", pd.Series(dtype=str)).astype(str).tolist()) if not identity_bad.empty else set()
+                        row_identity_mismatch_reasons = ";".join(sorted(set(identity_bad.get("bucket_universe_identity_reason", pd.Series(dtype=str)).astype(str).tolist()))) if not identity_bad.empty else ""
+                    identity_mismatch_decisions = set(row_identity_mismatch_decisions)
+                    if identity_artifact_completeness_status != "matched":
+                        identity_mismatch_decisions.add("__identity_expected_grid_incomplete__")
+                    identity_mismatch_count = len(identity_mismatch_decisions)
+                    identity_mismatch_reasons = ";".join(dict.fromkeys([r for r in [row_identity_mismatch_reasons, identity_artifact_completeness_reason] if r]))
                     coverage_rows = universe_coverage_reconciliation[
                         universe_coverage_reconciliation.get("target_market", pd.Series(dtype=str)).astype(str).eq(target)
                         & universe_coverage_reconciliation.get("model_scope", pd.Series(dtype=str)).astype(str).eq(model_name)
                         & universe_coverage_reconciliation.get("model_clock", pd.Series(dtype=str)).astype(str).eq(clock)
                         & universe_coverage_reconciliation.get("outcome", pd.Series(dtype=str)).astype(str).eq(outcome)
                     ].copy()
-                    if coverage_rows.empty and candidate_count:
-                        coverage_mismatch_decisions = {"__coverage_row_missing__"}
-                        coverage_mismatch_count = 1
-                        coverage_reconciliation_mismatch_reasons = "required_universe_coverage_reconciliation_row_missing"
+                    coverage_artifact_row_count = len(coverage_rows)
+                    coverage_artifact_unique_decision_count, coverage_artifact_decision_set_sha256 = decision_set_hash(coverage_rows.get("decision_timestamp_utc", pd.Series(dtype=str)).astype(str).tolist() if not coverage_rows.empty else [])
+                    coverage_completeness_reasons: list[str] = []
+                    if candidate_count > 0 and coverage_rows.empty:
+                        coverage_completeness_reasons.append("required_universe_coverage_reconciliation_row_missing")
+                    if coverage_artifact_row_count != candidate_count:
+                        coverage_completeness_reasons.append("coverage_artifact_row_count_mismatch")
+                    if coverage_artifact_unique_decision_count != candidate_count:
+                        coverage_completeness_reasons.append("duplicate_coverage_artifact_decision")
+                    if coverage_artifact_decision_set_sha256 != expected_canonical_universe_decision_set_sha256:
+                        coverage_completeness_reasons.append("coverage_artifact_decision_set_mismatch")
+                    coverage_artifact_completeness_status = "matched" if not coverage_completeness_reasons else "mismatch"
+                    coverage_artifact_completeness_reason = ";".join(dict.fromkeys(coverage_completeness_reasons))
+                    if coverage_rows.empty and bucket_artifact_candidate_count:
+                        row_coverage_mismatch_decisions = {"__coverage_row_missing__"}
+                        row_coverage_mismatch_reasons = "required_universe_coverage_reconciliation_row_missing"
                     else:
                         mismatch_rows = coverage_rows[
                             ~coverage_rows.get("coverage_reconciliation_status", pd.Series(dtype=str)).astype(str).eq("matched")
                         ].copy() if not coverage_rows.empty else pd.DataFrame()
-                        coverage_mismatch_decisions = set(mismatch_rows.get("decision_timestamp_utc", pd.Series(dtype=str)).astype(str).tolist()) if not mismatch_rows.empty else set()
-                        coverage_mismatch_count = len(coverage_mismatch_decisions)
-                        coverage_reconciliation_mismatch_reasons = ";".join(sorted(set(mismatch_rows.get("coverage_reconciliation_reason", pd.Series(dtype=str)).astype(str).tolist()))) if not mismatch_rows.empty else ""
+                        row_coverage_mismatch_decisions = set(mismatch_rows.get("decision_timestamp_utc", pd.Series(dtype=str)).astype(str).tolist()) if not mismatch_rows.empty else set()
+                        row_coverage_mismatch_reasons = ";".join(sorted(set(mismatch_rows.get("coverage_reconciliation_reason", pd.Series(dtype=str)).astype(str).tolist()))) if not mismatch_rows.empty else ""
+                    coverage_mismatch_decisions = set(row_coverage_mismatch_decisions)
+                    if coverage_artifact_completeness_status != "matched":
+                        coverage_mismatch_decisions.add("__coverage_artifact_incomplete__")
+                    coverage_mismatch_count = len(coverage_mismatch_decisions)
+                    coverage_reconciliation_mismatch_reasons = ";".join(dict.fromkeys([r for r in [row_coverage_mismatch_reasons, coverage_artifact_completeness_reason] if r]))
                     reconciliation_total = (
                         len(invalid_decisions)
                         + len(unavailable_decisions)
@@ -6640,7 +6735,7 @@ def run_market_level_oos_backtest(
                         + len(feature_numeric_unavailable_decisions)
                         + len(valid_included_decisions)
                     )
-                    reconciliation_gap = candidate_count - reconciliation_total
+                    reconciliation_gap = bucket_artifact_candidate_count - reconciliation_total
                     reconciliation_status = "matched" if reconciliation_gap == 0 else "mismatch"
                     result_status = "data_quality_blocked" if invalid_decisions or universe_gate_selected_invalid_count or missing_valid_panel_decisions or identity_mismatch_count or coverage_mismatch_count else "insufficient_data"
                     tested_folds = 0
@@ -6702,6 +6797,9 @@ def run_market_level_oos_backtest(
                         "model_scope": model_name,
                         "model_clock": clock,
                         "candidate_decision_count": candidate_count,
+                        "expected_canonical_universe_decision_count": expected_canonical_universe_decision_count,
+                        "expected_canonical_universe_decision_set_sha256": expected_canonical_universe_decision_set_sha256,
+                        "bucket_artifact_candidate_decision_count": bucket_artifact_candidate_count,
                         "valid_included_decision_count": len(valid_included_decisions),
                         "valid_oos_observation_count": oos_n,
                         "unavailable_coverage_exclusion_count": len(unavailable_decisions),
@@ -6713,9 +6811,19 @@ def run_market_level_oos_backtest(
                         "universe_gate_unavailable_coverage_count": universe_gate_unavailable_coverage_count,
                         "target_clock_gate_status": target_clock_gate_status,
                         "target_clock_gate_reason": target_clock_gate_reason,
+                        "identity_expected_grid_row_count": identity_expected_grid_row_count,
+                        "identity_expected_grid_unique_decision_count": identity_expected_grid_unique_decision_count,
+                        "identity_expected_grid_decision_set_sha256": identity_expected_grid_decision_set_sha256,
+                        "identity_artifact_completeness_status": identity_artifact_completeness_status,
+                        "identity_artifact_completeness_reason": identity_artifact_completeness_reason,
                         "bucket_universe_identity_mismatch_count": identity_mismatch_count,
                         "bucket_universe_identity_mismatch_decision_timestamps": ";".join(sorted(identity_mismatch_decisions)[:50]),
                         "bucket_universe_identity_mismatch_reasons": identity_mismatch_reasons,
+                        "coverage_artifact_row_count": coverage_artifact_row_count,
+                        "coverage_artifact_unique_decision_count": coverage_artifact_unique_decision_count,
+                        "coverage_artifact_decision_set_sha256": coverage_artifact_decision_set_sha256,
+                        "coverage_artifact_completeness_status": coverage_artifact_completeness_status,
+                        "coverage_artifact_completeness_reason": coverage_artifact_completeness_reason,
                         "coverage_reconciliation_mismatch_count": coverage_mismatch_count,
                         "coverage_reconciliation_mismatch_decision_timestamps": ";".join(sorted(coverage_mismatch_decisions)[:50]),
                         "coverage_reconciliation_mismatch_reasons": coverage_reconciliation_mismatch_reasons,
@@ -6748,6 +6856,8 @@ def run_market_level_oos_backtest(
                         "model_scope": model_name,
                         "outcome": outcome,
                         "candidate_decision_count": candidate_count,
+                        "expected_canonical_universe_decision_count": expected_canonical_universe_decision_count,
+                        "bucket_artifact_candidate_decision_count": bucket_artifact_candidate_count,
                         "valid_included_decision_count": len(valid_included_decisions),
                         "unavailable_coverage_exclusion_count": len(unavailable_decisions),
                         "scope_unavailable_coverage_exclusion_count": len(unavailable_decisions),
@@ -6758,9 +6868,13 @@ def run_market_level_oos_backtest(
                         "universe_gate_unavailable_coverage_count": universe_gate_unavailable_coverage_count,
                         "target_clock_gate_status": target_clock_gate_status,
                         "target_clock_gate_reason": target_clock_gate_reason,
+                        "identity_artifact_completeness_status": identity_artifact_completeness_status,
+                        "identity_artifact_completeness_reason": identity_artifact_completeness_reason,
                         "bucket_universe_identity_mismatch_count": identity_mismatch_count,
                         "bucket_universe_identity_mismatch_decision_timestamps": ";".join(sorted(identity_mismatch_decisions)[:50]),
                         "bucket_universe_identity_mismatch_reasons": identity_mismatch_reasons,
+                        "coverage_artifact_completeness_status": coverage_artifact_completeness_status,
+                        "coverage_artifact_completeness_reason": coverage_artifact_completeness_reason,
                         "coverage_reconciliation_mismatch_count": coverage_mismatch_count,
                         "coverage_reconciliation_mismatch_decision_timestamps": ";".join(sorted(coverage_mismatch_decisions)[:50]),
                         "coverage_reconciliation_mismatch_reasons": coverage_reconciliation_mismatch_reasons,
@@ -6790,10 +6904,10 @@ def run_market_level_oos_backtest(
     pred_cols = ["target_market", "model_scope", "parent_model_scope", "outcome", "model_clock", "row_index", "decision_timestamp_utc", "test_month", "y_true", "parent_pred", "augmented_pred", "historical_mean_pred"]
     coef_cols = ["target_market", "model_scope", "parent_model_scope", "model_clock", "outcome", "test_month", "feature_name", "standardized_coefficient", "coefficient_sign", "sample_count_train", "sample_count_oos", "fold_status"]
     fold_cols = ["target_market", "model_scope", "parent_model_scope", "outcome", "model_clock", "test_month", "sample_count_train", "sample_count_oos", "unseen_category_count", "fold_status"]
-    metric_cols = ["result_status", "target_market", "outcome", "model_scope", "model_clock", "candidate_decision_count", "valid_included_decision_count", "valid_oos_observation_count", "unavailable_coverage_exclusion_count", "scope_unavailable_coverage_exclusion_count", "outcome_unavailable_exclusion_count", "feature_numeric_unavailable_exclusion_count", "selected_invalid_exclusion_count", "universe_gate_selected_invalid_count", "universe_gate_unavailable_coverage_count", "target_clock_gate_status", "target_clock_gate_reason", "bucket_universe_identity_mismatch_count", "bucket_universe_identity_mismatch_decision_timestamps", "bucket_universe_identity_mismatch_reasons", "coverage_reconciliation_mismatch_count", "coverage_reconciliation_mismatch_decision_timestamps", "coverage_reconciliation_mismatch_reasons", "reconciliation_total", "reconciliation_gap", "reconciliation_status", "affected_decision_timestamps", "oos_fold_count", "oos_r_squared_vs_historical_mean", "parent_oos_r_squared_vs_historical_mean", "incremental_oos_r_squared_vs_parent", "oos_mse", "parent_oos_mse", "delta_oos_mse_vs_parent", "oos_mae", "parent_oos_mae", "delta_oos_mae_vs_parent", "directional_hit_rate", "coefficient_median_across_folds", "coefficient_sign_consistency", "coefficient_fold_dispersion", "coefficient_dispersion_method", "interaction_coefficient_summary", "feature_availability_rate", "decision_time_policy", "source_provenance_policy_revision"]
+    metric_cols = ["result_status", "target_market", "outcome", "model_scope", "model_clock", "candidate_decision_count", "expected_canonical_universe_decision_count", "expected_canonical_universe_decision_set_sha256", "bucket_artifact_candidate_decision_count", "valid_included_decision_count", "valid_oos_observation_count", "unavailable_coverage_exclusion_count", "scope_unavailable_coverage_exclusion_count", "outcome_unavailable_exclusion_count", "feature_numeric_unavailable_exclusion_count", "selected_invalid_exclusion_count", "universe_gate_selected_invalid_count", "universe_gate_unavailable_coverage_count", "target_clock_gate_status", "target_clock_gate_reason", "identity_expected_grid_row_count", "identity_expected_grid_unique_decision_count", "identity_expected_grid_decision_set_sha256", "identity_artifact_completeness_status", "identity_artifact_completeness_reason", "bucket_universe_identity_mismatch_count", "bucket_universe_identity_mismatch_decision_timestamps", "bucket_universe_identity_mismatch_reasons", "coverage_artifact_row_count", "coverage_artifact_unique_decision_count", "coverage_artifact_decision_set_sha256", "coverage_artifact_completeness_status", "coverage_artifact_completeness_reason", "coverage_reconciliation_mismatch_count", "coverage_reconciliation_mismatch_decision_timestamps", "coverage_reconciliation_mismatch_reasons", "reconciliation_total", "reconciliation_gap", "reconciliation_status", "affected_decision_timestamps", "oos_fold_count", "oos_r_squared_vs_historical_mean", "parent_oos_r_squared_vs_historical_mean", "incremental_oos_r_squared_vs_parent", "oos_mse", "parent_oos_mse", "delta_oos_mse_vs_parent", "oos_mae", "parent_oos_mae", "delta_oos_mae_vs_parent", "directional_hit_rate", "coefficient_median_across_folds", "coefficient_sign_consistency", "coefficient_fold_dispersion", "coefficient_dispersion_method", "interaction_coefficient_summary", "feature_availability_rate", "decision_time_policy", "source_provenance_policy_revision"]
     comp_cols = ["target_market", "outcome", "model_scope", "parent_model_scope", "result_status", "incremental_oos_r_squared_vs_parent", "delta_oos_mse_vs_parent", "delta_oos_mae_vs_parent", "feature_availability_difference", "interpretation_caveat"]
     regime_cols = ["regime_partition", "status", "threshold_policy"]
-    quality_cols = ["target_market", "model_scope", "outcome", "candidate_decision_count", "valid_included_decision_count", "unavailable_coverage_exclusion_count", "scope_unavailable_coverage_exclusion_count", "outcome_unavailable_exclusion_count", "feature_numeric_unavailable_exclusion_count", "selected_invalid_exclusion_count", "universe_gate_selected_invalid_count", "universe_gate_unavailable_coverage_count", "target_clock_gate_status", "target_clock_gate_reason", "bucket_universe_identity_mismatch_count", "bucket_universe_identity_mismatch_decision_timestamps", "bucket_universe_identity_mismatch_reasons", "coverage_reconciliation_mismatch_count", "coverage_reconciliation_mismatch_decision_timestamps", "coverage_reconciliation_mismatch_reasons", "reconciliation_total", "reconciliation_gap", "reconciliation_status", "result_status"]
+    quality_cols = ["target_market", "model_scope", "outcome", "candidate_decision_count", "expected_canonical_universe_decision_count", "bucket_artifact_candidate_decision_count", "valid_included_decision_count", "unavailable_coverage_exclusion_count", "scope_unavailable_coverage_exclusion_count", "outcome_unavailable_exclusion_count", "feature_numeric_unavailable_exclusion_count", "selected_invalid_exclusion_count", "universe_gate_selected_invalid_count", "universe_gate_unavailable_coverage_count", "target_clock_gate_status", "target_clock_gate_reason", "identity_artifact_completeness_status", "identity_artifact_completeness_reason", "bucket_universe_identity_mismatch_count", "bucket_universe_identity_mismatch_decision_timestamps", "bucket_universe_identity_mismatch_reasons", "coverage_artifact_completeness_status", "coverage_artifact_completeness_reason", "coverage_reconciliation_mismatch_count", "coverage_reconciliation_mismatch_decision_timestamps", "coverage_reconciliation_mismatch_reasons", "reconciliation_total", "reconciliation_gap", "reconciliation_status", "result_status"]
     return (
         pd.DataFrame(pred_rows, columns=pred_cols),
         pd.DataFrame(coef_rows_all, columns=coef_cols),
@@ -7259,6 +7373,8 @@ def market_level_report_text(metrics: pd.DataFrame, quality: pd.DataFrame) -> st
         "Universe coverage reconciliation is target x clock x decision x scope x outcome. It is distinct from decision bucket reconciliation: bucket reconciliation explains candidate inclusion/exclusion, while coverage reconciliation verifies required provenance and scope-integrity artifacts for that exact group.\n\n"
         "The bucket artifact is independently reconciled against the canonical-universe expected grid. A bucket row outside the canonical universe is an identity mismatch, not an eligible candidate.\n\n"
         "Universe-bucket identity mismatch and coverage mismatch are separate fail-closed audits.\n\n"
+        "OOS expected candidate counts and decision sets are derived from the canonical-universe target-clock gate, not from the bucket artifact. Identity expected-grid and coverage artifacts must match the gate's canonical decision-set fingerprint.\n\n"
+        "A missing bucket, identity, or coverage artifact cannot become benign merely because bucket-derived candidate count is zero. Bucket classification arithmetic is reported separately from identity and coverage completeness.\n\n"
         "Coverage mismatch is a local data-quality block for the affected target/clock/scope/outcome group, not a global block for unrelated groups.\n\n"
         "Any data-quality block is local to the affected target / clock / scope / outcome unless an unmapped structural artifact violation prevents research interpretation.\n\n"
         "Actual lineage means an actual feature panel row or actual panel component row, not only a selection audit row. EOD Gamma matched parity accepts actual-lineage records only. Matched source parity requires direct actual-vs-fresh equality. Eligible primary inputs are not treated as matched parity without actual component proof.\n\n"
@@ -7739,6 +7855,11 @@ def run(
             "actionization_gate": False,
             "decision_universe_policy": MARKET_LEVEL_DECISION_UNIVERSE_POLICY,
             "decision_timestamp_canonicalization_policy": DECISION_TIMESTAMP_CANONICALIZATION_POLICY,
+            "canonical_universe_gate_fingerprint_policy": CANONICAL_UNIVERSE_GATE_FINGERPRINT_POLICY,
+            "oos_expected_candidate_source": OOS_EXPECTED_CANDIDATE_SOURCE,
+            "oos_requires_identity_expected_grid_completeness": True,
+            "oos_requires_coverage_artifact_completeness": True,
+            "bucket_reconciliation_arithmetic_is_separate": True,
             "naive_timestamp_policy": NAIVE_TIMESTAMP_POLICY,
             "invalid_timestamp_row_policy": INVALID_TIMESTAMP_ROW_POLICY,
             "universe_bucket_identity_policy": UNIVERSE_BUCKET_IDENTITY_POLICY,
@@ -7769,6 +7890,9 @@ def run(
             "universe_bucket_identity_mismatch_count": int(market_level_universe_bucket_identity_audit.get("bucket_universe_identity_status", pd.Series(dtype=str)).astype(str).ne("matched").sum()) if not market_level_universe_bucket_identity_audit.empty else 0,
             "unexpected_bucket_row_count": int(market_level_universe_bucket_identity_audit.get("identity_origin", pd.Series(dtype=str)).astype(str).eq("unexpected_bucket_row").sum()) if not market_level_universe_bucket_identity_audit.empty else 0,
             "structural_unmapped_bucket_identity_mismatch_count": int(market_level_universe_bucket_identity_audit.get("bucket_universe_identity_reason", pd.Series(dtype=str)).astype(str).str.contains("structural_unmapped_bucket_identity_mismatch", regex=False).sum()) if not market_level_universe_bucket_identity_audit.empty else 0,
+            "canonical_universe_gate_contract_mismatch_count": int(market_level_metrics.get("target_clock_gate_reason", pd.Series(dtype=str)).astype(str).str.contains("canonical_universe_candidate_count_contract_mismatch", regex=False).sum()) if not market_level_metrics.empty else 0,
+            "identity_expected_grid_completeness_mismatch_count": int(market_level_metrics.get("identity_artifact_completeness_status", pd.Series(dtype=str)).astype(str).eq("mismatch").sum()) if not market_level_metrics.empty else 0,
+            "coverage_artifact_completeness_mismatch_count": int(market_level_metrics.get("coverage_artifact_completeness_status", pd.Series(dtype=str)).astype(str).eq("mismatch").sum()) if not market_level_metrics.empty else 0,
             "coverage_reconciliation_mismatch_count": int(market_level_universe_coverage_reconciliation.get("coverage_reconciliation_status", pd.Series(dtype=str)).astype(str).ne("matched").sum()) if not market_level_universe_coverage_reconciliation.empty else 0,
             "coverage_reconciliation_mismatch_groups": ";".join(
                 market_level_universe_coverage_reconciliation.loc[
