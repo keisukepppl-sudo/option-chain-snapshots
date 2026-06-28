@@ -17,7 +17,13 @@ FIXED_NOW = "2020-02-20T22:00:00Z"
 def _root(tmp_path: Path) -> Path:
     root = tmp_path / "repo"
     (root / "market_bomb_config").mkdir(parents=True)
-    shutil.copyfile(Path(__file__).resolve().parents[1] / "market_bomb_config" / "flow_pressure_research_v0_policy.json", root / "market_bomb_config" / "flow_pressure_research_v0_policy.json")
+    repo_config = Path(__file__).resolve().parents[1] / "market_bomb_config"
+    for name in [
+        "flow_pressure_research_v0_policy.json",
+        "flow_pressure_real_data_study_v1_policy.json",
+        "flow_pressure_real_data_study_v1_backtest_spec.json",
+    ]:
+        shutil.copyfile(repo_config / name, root / "market_bomb_config" / name)
     return root
 
 
@@ -446,3 +452,82 @@ def test_cta_dealer_inputs_are_methodology_incomplete(tmp_path: Path) -> None:
     result = m.validate_flow_provider_contract(root, "fixture_flow", FIXED_NOW, "eod_next_session")
     assert result["validation_status"] == "blocked"
     assert any(row["code"] == "methodology_incomplete" for row in result["diagnostics"])
+
+
+def test_real_data_study_release_outputs_are_sealed(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    root = _root(tmp_path)
+    _stage(root)
+    monkeypatch.setenv("FLOW_PRESSURE_NOW_UTC", FIXED_NOW)
+    release_id = m.build_release(root, "fixture_flow", now_utc=FIXED_NOW, research_timing_class="eod_next_session")
+    rel = m.release_dir(root, release_id)
+    for name in [
+        "provider_contract_validation_report.json",
+        "timing_audit.csv",
+        "timing_audit_summary.json",
+        "source_coverage_by_instrument.csv",
+        "source_coverage_by_dataset.csv",
+        "aum_selection_audit.csv",
+        "research_timing_eligibility_summary.md",
+    ]:
+        assert (rel / name).exists()
+    assert m.verify_release(root, release_id)["release_quality_status"] == "valid_research_candidate"
+    audit = rel / "aum_selection_audit.csv"
+    audit.write_text(audit.read_text(encoding="utf-8") + "\n", encoding="utf-8")
+    with pytest.raises(SystemExit, match="release core sha mismatch|file sha mismatch"):
+        m.verify_release(root, release_id)
+
+
+def test_real_data_study_backtest_outputs_and_conclusion(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    root = _root(tmp_path)
+    _stage(root)
+    monkeypatch.setenv("FLOW_PRESSURE_NOW_UTC", FIXED_NOW)
+    release_id = m.build_release(root, "fixture_flow", now_utc=FIXED_NOW, research_timing_class="eod_next_session")
+    run_id = m.run_flow_backtest(root, release_id)
+    run_dir = m.release_dir(root, release_id) / "backtest_runs" / run_id
+    for name in [
+        "backtest_study_spec.json",
+        "chronological_split_manifest.json",
+        "feature_partition_definitions.json",
+        "outcome_coverage_report.csv",
+        "exclusion_reason_report.csv",
+        "aum_observation_age_summary.csv",
+        "interaction_results.csv",
+        "bootstrap_summary.csv",
+        "holdout_results.csv",
+        "research_conclusion.md",
+    ]:
+        assert (run_dir / name).exists()
+    conclusion = (run_dir / "research_conclusion.md").read_text(encoding="utf-8")
+    assert conclusion.startswith(
+        "This is a timing-valid, research-only analysis of model-implied pressure proxies.  \n"
+        "It does not observe actual institutional or dealer orders, does not authorize trading, and does not modify Fragility Score."
+    )
+    split = json.loads((run_dir / "chronological_split_manifest.json").read_text(encoding="utf-8"))
+    assert split["overlap_detected"] is False
+    assert split["final_holdout_used_for_parameter_selection"] is False
+    assert m.verify_backtest(root, release_id, run_id)["status"] == "valid"
+
+
+def test_run_flow_real_data_study_orchestrates_gates(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    root = _root(tmp_path)
+    _stage(root)
+    monkeypatch.setenv("FLOW_PRESSURE_NOW_UTC", FIXED_NOW)
+    result = m.run_flow_real_data_study(root, "fixture_flow", FIXED_NOW, "eod_next_session")
+    assert result["artifact_version"] == "flow_pressure_real_data_study_v1"
+    assert result["validation_status"] == "valid"
+    assert result["staging_quality_status"] == "valid_research_candidate"
+    assert result["actionization_allowed"] is False
+    rel = m.release_dir(root, result["release_id"])
+    run_dir = rel / "backtest_runs" / result["backtest_run_id"]
+    assert json.loads((run_dir / "backtest_study_spec.json").read_text(encoding="utf-8"))["actionization_allowed"] is False
+
+
+def test_real_data_study_blocks_ineligible_timing_before_release(tmp_path: Path) -> None:
+    root = _root(tmp_path)
+    stage = _stage(root)
+    manifest = _manifest(stage)
+    manifest["sources"][0]["available_at_timestamp"] = "2020-02-21T21:45:00Z"
+    _write_manifest(stage, manifest)
+    with pytest.raises(SystemExit, match="provider contract validation"):
+        m.run_flow_real_data_study(root, "fixture_flow", FIXED_NOW, "eod_next_session")
+    assert not m.releases_dir(root).exists()

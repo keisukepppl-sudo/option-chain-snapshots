@@ -1,0 +1,34 @@
+{
+  "artifact_version": "flow_pressure_real_data_study_v1",
+  "backtest_spec_version": "flow_pressure_real_data_study_v1_backtest_spec",
+  "actionization_allowed": false,
+  "chronological_split": {
+    "train": 0.6,
+    "validation": 0.2,
+    "final_holdout": 0.2
+  },
+  "feature_partitions": [
+    "positive_vs_negative_pressure",
+    "absolute_pressure_high_vs_low"
+  ],
+  "outcomes": [
+    "next_session_close_to_close_return",
+    "three_session_close_to_close_return",
+    "downside_tail_indicator",
+    "maximum_adverse_excursion",
+    "maximum_favorable_excursion"
+  ],
+  "comparisons": [
+    "unconditional_baseline",
+    "leveraged_etf_pressure_only",
+    "vol_control_pressure_only",
+    "fragility_placeholder_only",
+    "fragility_x_leveraged_etf_pressure_placeholder",
+    "fragility_x_vol_control_pressure_placeholder"
+  ],
+  "bootstrap": {
+    "method": "deterministic_block_bootstrap_placeholder",
+    "block_length": 5,
+    "iterations": 100
+  }
+}

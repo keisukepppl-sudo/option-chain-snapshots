@@ -1,0 +1,40 @@
+{
+  "artifact_version": "flow_pressure_real_data_study_v1",
+  "actionization_allowed": false,
+  "source_contract_version": "flow_provider_contract_v1",
+  "allowed_research_timing_class": "eod_next_session",
+  "minimum_valid_sessions_after_warmup": 250,
+  "minimum_years_target": 3,
+  "primary_underlying_universe": [
+    "QQQ",
+    "SOXX",
+    "SPY"
+  ],
+  "leveraged_etf_pairs": [
+    {
+      "underlying": "QQQ",
+      "long_etf": "TQQQ",
+      "inverse_etf": "SQQQ",
+      "priority": 1
+    },
+    {
+      "underlying": "SOXX",
+      "long_etf": "SOXL",
+      "inverse_etf": "SOXS",
+      "priority": 1
+    },
+    {
+      "underlying": "SPY",
+      "long_etf": "UPRO",
+      "inverse_etf": "SPXU",
+      "priority": 2
+    }
+  ],
+  "fragility_interaction_placeholder": true,
+  "evidence_status_labels": [
+    "exploratory",
+    "insufficient_sample",
+    "not_statistically_stable",
+    "timing_valid_research_result"
+  ]
+}

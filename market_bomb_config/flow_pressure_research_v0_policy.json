@@ -1,6 +1,7 @@
 {
   "artifact_version": "flow_pressure_research_v0_0_1",
   "source_contract_version": "flow_provider_contract_v1",
+  "real_data_study_version": "flow_pressure_real_data_study_v1",
   "default_research_timing_class": "eod_next_session",
   "actionization_allowed": false,
   "implemented_modules": [

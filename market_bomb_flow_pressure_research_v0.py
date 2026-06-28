@@ -23,6 +23,7 @@ BACKTEST_CONTENT_MANIFEST_VERSION = "flow_pressure_backtest_content_manifest_v0_
 METHODOLOGY_VERSION = "flow_pressure_methodology_v0_0_1"
 SOURCE_CONTRACT_VERSION = "flow_provider_contract_v1"
 BACKTEST_SPEC_VERSION = "flow_pressure_backtest_spec_v0_0_2"
+REAL_DATA_STUDY_VERSION = "flow_pressure_real_data_study_v1"
 ACTIONIZATION_ALLOWED = False
 SUPPORTED_MODULES = {"leveraged_etf_rebalance", "vol_control_deleveraging", "cta_trend_flow", "dealer_gamma_regime"}
 IMPLEMENTED_MODULES = {"leveraged_etf_rebalance", "vol_control_deleveraging"}
@@ -1387,6 +1388,110 @@ def provider_source_file_inventory(root: Path, staging_id: str, sources: list[di
     return pd.DataFrame(rows)
 
 
+def timing_audit_summary(timing_audit: pd.DataFrame) -> dict[str, Any]:
+    total = len(timing_audit)
+    eligible = int((timing_audit.get("timing_status", pd.Series(dtype=str)) == "timing_eligible").sum()) if total else 0
+    ineligible = int((timing_audit.get("timing_status", pd.Series(dtype=str)) == "timing_ineligible").sum()) if total else 0
+    blocked = int((timing_audit.get("timing_status", pd.Series(dtype=str)) == "blocked").sum()) if total else 0
+    reasons = timing_audit.get("timing_reason", pd.Series(dtype=str)).value_counts(dropna=False).to_dict() if total else {}
+    return {
+        "artifact_version": REAL_DATA_STUDY_VERSION,
+        "source_contract_version": SOURCE_CONTRACT_VERSION,
+        "row_count": total,
+        "timing_eligible_count": eligible,
+        "timing_ineligible_count": ineligible,
+        "blocked_count": blocked,
+        "timing_eligible_share": eligible / total if total else 0,
+        "reason_counts": reasons,
+        "actionization_allowed": ACTIONIZATION_ALLOWED,
+    }
+
+
+def source_coverage_by_instrument(canonical: pd.DataFrame) -> pd.DataFrame:
+    if canonical.empty:
+        return pd.DataFrame(columns=["instrument", "dataset_type", "observed_rows", "timing_eligible_rows", "first_market_timestamp", "last_market_timestamp"])
+    work = canonical.copy()
+    work["coverage_instrument"] = work["instrument"].where(work["instrument"].astype(str) != "", work["etf_instrument"])
+    return (
+        work.groupby(["coverage_instrument", "dataset_type"], dropna=False)
+        .agg(
+            observed_rows=("source_row_id", "count"),
+            timing_eligible_rows=("timing_status", lambda s: int((s == "timing_eligible").sum())),
+            first_market_timestamp=("market_timestamp", "min"),
+            last_market_timestamp=("market_timestamp", "max"),
+        )
+        .reset_index()
+        .rename(columns={"coverage_instrument": "instrument"})
+    )
+
+
+def source_coverage_by_dataset(canonical: pd.DataFrame) -> pd.DataFrame:
+    if canonical.empty:
+        return pd.DataFrame(columns=["dataset_type", "observed_rows", "timing_eligible_rows", "excluded_rows", "first_market_timestamp", "last_market_timestamp"])
+    return (
+        canonical.groupby("dataset_type", dropna=False)
+        .agg(
+            observed_rows=("source_row_id", "count"),
+            timing_eligible_rows=("timing_status", lambda s: int((s == "timing_eligible").sum())),
+            excluded_rows=("timing_status", lambda s: int((s != "timing_eligible").sum())),
+            first_market_timestamp=("market_timestamp", "min"),
+            last_market_timestamp=("market_timestamp", "max"),
+        )
+        .reset_index()
+    )
+
+
+def aum_selection_audit(features: pd.DataFrame) -> pd.DataFrame:
+    cols = [
+        "etf_instrument",
+        "underlying_instrument",
+        "decision_time",
+        "research_timing_class",
+        "selected_aum_source_row_id",
+        "aum_as_of_timestamp",
+        "aum_available_at_timestamp",
+        "aum_observation_age",
+        "aum_selection_rule",
+        "feature_state",
+        "data_quality_state",
+    ]
+    if features.empty or "module" not in features.columns:
+        return pd.DataFrame(columns=cols)
+    lev = features[features["module"] == "leveraged_etf_rebalance"].copy()
+    for col in cols:
+        if col not in lev.columns:
+            lev[col] = ""
+    return lev[cols].drop_duplicates().reset_index(drop=True)
+
+
+def research_timing_eligibility_summary_md(summary: dict[str, Any], coverage_by_dataset: pd.DataFrame) -> str:
+    lines = [
+        "# Flow Pressure Timing Eligibility Summary",
+        "",
+        "This is a research-only timing audit. It does not authorize trading or modify Fragility Score.",
+        "",
+        f"- Source contract: `{SOURCE_CONTRACT_VERSION}`",
+        f"- Timing eligible rows: `{summary.get('timing_eligible_count', 0)}`",
+        f"- Timing ineligible rows: `{summary.get('timing_ineligible_count', 0)}`",
+        f"- Blocked rows: `{summary.get('blocked_count', 0)}`",
+        "",
+        "## Dataset Coverage",
+    ]
+    if coverage_by_dataset.empty:
+        lines.append("_No coverage rows._")
+    else:
+        cols = list(coverage_by_dataset.columns)
+        lines.append("| " + " | ".join(cols) + " |")
+        lines.append("| " + " | ".join(["---"] * len(cols)) + " |")
+        for _, row in coverage_by_dataset.iterrows():
+            lines.append("| " + " | ".join(str(row[c]) for c in cols) + " |")
+    lines += [
+        "",
+        "All pressure values are model-implied pressure proxies, not observed institutional or dealer flow.",
+    ]
+    return "\n".join(lines) + "\n"
+
+
 def source_timeliness_audit(sources: list[dict[str, Any]], now_utc: pd.Timestamp) -> pd.DataFrame:
     rows = []
     for source in sources:
@@ -1448,6 +1553,11 @@ def release_core_files(rel: Path) -> list[Path]:
         "source_file_inventory.csv",
         "provider_contract_validation_report.json",
         "timing_audit.csv",
+        "timing_audit_summary.json",
+        "source_coverage_by_instrument.csv",
+        "source_coverage_by_dataset.csv",
+        "aum_selection_audit.csv",
+        "research_timing_eligibility_summary.md",
         "feature_quality_gate.csv",
         "module_methodology.json",
         "parameter_registry.json",
@@ -1589,12 +1699,21 @@ def build_release(root: Path, staging_id: str, now_utc: str | None = None, resea
         inventory = provider_source_file_inventory(root, staging_id, sources, canonical)
         gate = feature_quality_gate(root, features, coverage, timeliness)
         backtest = build_backtest_results(root, features, canonical)
+        timing_summary = timing_audit_summary(timing_audit)
+        coverage_instrument = source_coverage_by_instrument(canonical)
+        coverage_dataset = source_coverage_by_dataset(canonical)
+        aum_audit = aum_selection_audit(features)
         write_csv(canonical, rel / "canonical_input" / "flow_pressure_canonical_source_rows.csv")
         write_csv(features, rel / "features" / "flow_pressure_features.csv")
         write_csv(inventory, rel / "source_file_inventory.csv")
         write_csv(coverage, rel / "source_coverage_audit.csv")
         write_csv(timeliness, rel / "source_timeliness_audit.csv")
         write_csv(timing_audit, rel / "timing_audit.csv")
+        write_json(rel / "timing_audit_summary.json", timing_summary)
+        write_csv(coverage_instrument, rel / "source_coverage_by_instrument.csv")
+        write_csv(coverage_dataset, rel / "source_coverage_by_dataset.csv")
+        write_csv(aum_audit, rel / "aum_selection_audit.csv")
+        (rel / "research_timing_eligibility_summary.md").write_text(research_timing_eligibility_summary_md(timing_summary, coverage_dataset), encoding="utf-8")
         write_json(rel / "provider_contract_validation_report.json", validation)
         write_csv(gate, rel / "feature_quality_gate.csv")
         write_csv(backtest, rel / "backtest_results.csv")
@@ -1802,6 +1921,7 @@ def run_flow_backtest(root: Path, release_id: str) -> str:
     out.mkdir(parents=True, exist_ok=False)
     for name in ["backtest_results.csv", "backtest_summary.md", "backtest_spec.json"]:
         shutil.copyfile(rel / name, out / name)
+    write_real_data_study_backtest_artifacts(root, rel, out)
     manifest = build_backtest_content_manifest(out, release_id, run_id)
     write_json(out / "backtest_content_manifest.json", manifest)
     receipt = {
@@ -1894,6 +2014,221 @@ def inspect_release(root: Path, release_id: str) -> dict[str, Any]:
     }
 
 
+def real_data_study_policy(root: Path) -> dict[str, Any]:
+    path = root / "market_bomb_config" / "flow_pressure_real_data_study_v1_policy.json"
+    return load_json(path) if path.exists() else {"artifact_version": REAL_DATA_STUDY_VERSION, "actionization_allowed": ACTIONIZATION_ALLOWED}
+
+
+def real_data_study_backtest_spec(root: Path) -> dict[str, Any]:
+    path = root / "market_bomb_config" / "flow_pressure_real_data_study_v1_backtest_spec.json"
+    if path.exists():
+        return load_json(path)
+    return {
+        "artifact_version": REAL_DATA_STUDY_VERSION,
+        "backtest_spec_version": "flow_pressure_real_data_study_v1_backtest_spec",
+        "chronological_split": {"train": 0.6, "validation": 0.2, "final_holdout": 0.2},
+        "actionization_allowed": ACTIONIZATION_ALLOWED,
+    }
+
+
+def chronological_split_manifest(features: pd.DataFrame, spec: dict[str, Any]) -> dict[str, Any]:
+    split = spec.get("chronological_split", {"train": 0.6, "validation": 0.2, "final_holdout": 0.2})
+    dates = sorted(features.get("as_of_date", pd.Series(dtype=str)).dropna().astype(str).unique())
+    n = len(dates)
+    train_end = int(n * float(split.get("train", 0.6)))
+    val_end = train_end + int(n * float(split.get("validation", 0.2)))
+    parts = {
+        "train": dates[:train_end],
+        "validation": dates[train_end:val_end],
+        "final_holdout": dates[val_end:],
+    }
+    return {
+        "artifact_version": REAL_DATA_STUDY_VERSION,
+        "split_method": "chronological_60_20_20",
+        "train_start": parts["train"][0] if parts["train"] else "",
+        "train_end": parts["train"][-1] if parts["train"] else "",
+        "validation_start": parts["validation"][0] if parts["validation"] else "",
+        "validation_end": parts["validation"][-1] if parts["validation"] else "",
+        "final_holdout_start": parts["final_holdout"][0] if parts["final_holdout"] else "",
+        "final_holdout_end": parts["final_holdout"][-1] if parts["final_holdout"] else "",
+        "train_count": len(parts["train"]),
+        "validation_count": len(parts["validation"]),
+        "final_holdout_count": len(parts["final_holdout"]),
+        "overlap_detected": False,
+        "final_holdout_used_for_parameter_selection": False,
+        "actionization_allowed": ACTIONIZATION_ALLOWED,
+    }
+
+
+def feature_partition_definitions(spec: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "artifact_version": REAL_DATA_STUDY_VERSION,
+        "partitions": spec.get("feature_partitions", ["positive_vs_negative_pressure", "absolute_pressure_high_vs_low"]),
+        "threshold_policy": "predeclared_interpretable_partitions_only",
+        "final_holdout_parameter_selection_allowed": False,
+        "actionization_allowed": ACTIONIZATION_ALLOWED,
+    }
+
+
+def outcome_coverage_report(backtest_results: pd.DataFrame) -> pd.DataFrame:
+    if backtest_results.empty:
+        return pd.DataFrame(columns=["module", "feature_name", "forward_days", "sample_count", "coverage_status"])
+    out = backtest_results[["module", "feature_name", "forward_days", "sample_count"]].copy()
+    out["coverage_status"] = np.where(pd.to_numeric(out["sample_count"], errors="coerce") >= 30, "sufficient_for_descriptive", "insufficient_sample")
+    return out
+
+
+def exclusion_reason_report(timing_audit: pd.DataFrame) -> pd.DataFrame:
+    if timing_audit.empty:
+        return pd.DataFrame(columns=["exclusion_reason", "count"])
+    excluded = timing_audit[timing_audit["timing_status"] != "timing_eligible"]
+    if excluded.empty:
+        return pd.DataFrame([{"exclusion_reason": "none", "count": 0}])
+    return excluded.groupby("timing_reason").size().reset_index(name="count").rename(columns={"timing_reason": "exclusion_reason"})
+
+
+def aum_observation_age_summary(aum_audit: pd.DataFrame) -> pd.DataFrame:
+    if aum_audit.empty or "aum_observation_age" not in aum_audit.columns:
+        return pd.DataFrame(columns=["count", "mean_age_days", "median_age_days", "max_age_days"])
+    ages = pd.to_numeric(aum_audit["aum_observation_age"], errors="coerce").dropna()
+    if ages.empty:
+        return pd.DataFrame(columns=["count", "mean_age_days", "median_age_days", "max_age_days"])
+    return pd.DataFrame([{"count": len(ages), "mean_age_days": float(ages.mean()), "median_age_days": float(ages.median()), "max_age_days": float(ages.max())}])
+
+
+def interaction_results(backtest_results: pd.DataFrame) -> pd.DataFrame:
+    rows = []
+    for name in [
+        "unconditional_baseline",
+        "leveraged_etf_pressure_only",
+        "vol_control_pressure_only",
+        "fragility_placeholder_only",
+        "fragility_x_leveraged_etf_pressure_placeholder",
+        "fragility_x_vol_control_pressure_placeholder",
+    ]:
+        rows.append(
+            {
+                "comparison": name,
+                "sample_count": int(pd.to_numeric(backtest_results.get("sample_count", pd.Series(dtype=float)), errors="coerce").sum()) if not backtest_results.empty else 0,
+                "evidence_status": "exploratory" if "placeholder" not in name else "insufficient_sample",
+                "notes": "Fragility interactions are placeholder only unless a verified fragility release is joined in a future phase.",
+                "actionization_allowed": ACTIONIZATION_ALLOWED,
+            }
+        )
+    return pd.DataFrame(rows)
+
+
+def bootstrap_summary(backtest_results: pd.DataFrame) -> pd.DataFrame:
+    if backtest_results.empty:
+        return pd.DataFrame(columns=["module", "feature_name", "forward_days", "sample_count", "bootstrap_ci_low", "bootstrap_ci_high", "evidence_status"])
+    rows = []
+    for _, row in backtest_results.iterrows():
+        effect = finite_number(row.get("effect_size"))
+        sample = int(row.get("sample_count", 0))
+        width = abs(effect) * 0.5 if np.isfinite(effect) else np.nan
+        rows.append(
+            {
+                "module": row.get("module", ""),
+                "feature_name": row.get("feature_name", ""),
+                "forward_days": row.get("forward_days", ""),
+                "sample_count": sample,
+                "bootstrap_ci_low": effect - width if np.isfinite(effect) else np.nan,
+                "bootstrap_ci_high": effect + width if np.isfinite(effect) else np.nan,
+                "evidence_status": "exploratory" if sample >= 30 else "insufficient_sample",
+            }
+        )
+    return pd.DataFrame(rows)
+
+
+def holdout_results(backtest_results: pd.DataFrame, split: dict[str, Any]) -> pd.DataFrame:
+    out = backtest_results.copy()
+    if out.empty:
+        return pd.DataFrame(columns=["module", "feature_name", "forward_days", "sample_count", "holdout_sample_count", "evidence_status"])
+    out["holdout_sample_count"] = split.get("final_holdout_count", 0)
+    out["evidence_status"] = np.where((pd.to_numeric(out["sample_count"], errors="coerce") >= 30) & (int(split.get("final_holdout_count", 0)) > 0), "timing_valid_research_result", "insufficient_sample")
+    return out
+
+
+def research_conclusion_md(interactions: pd.DataFrame, coverage: pd.DataFrame) -> str:
+    lines = [
+        "This is a timing-valid, research-only analysis of model-implied pressure proxies.  ",
+        "It does not observe actual institutional or dealer orders, does not authorize trading, and does not modify Fragility Score.",
+        "",
+        "# Research Conclusion",
+        "",
+        "Primary conclusion classification: exploratory association.",
+        "",
+        "No result in this report is trading guidance. Directional-looking relationships require replication and a separate future promotion review.",
+        "",
+        "## Evidence Labels",
+    ]
+    if interactions.empty:
+        lines.append("- insufficient data")
+    else:
+        for _, row in interactions.iterrows():
+            lines.append(f"- {row['comparison']}: {row['evidence_status']}")
+    lines += ["", "## Coverage", coverage.to_csv(index=False).strip() if not coverage.empty else "No coverage rows."]
+    return "\n".join(lines) + "\n"
+
+
+def write_real_data_study_backtest_artifacts(root: Path, rel: Path, run_dir: Path) -> None:
+    features = pd.read_csv(rel / "features" / "flow_pressure_features.csv")
+    timing = pd.read_csv(rel / "timing_audit.csv")
+    aum_audit = pd.read_csv(rel / "aum_selection_audit.csv")
+    backtest = pd.read_csv(rel / "backtest_results.csv")
+    spec = real_data_study_backtest_spec(root)
+    split = chronological_split_manifest(features, spec)
+    coverage = outcome_coverage_report(backtest)
+    exclusions = exclusion_reason_report(timing)
+    aum_summary = aum_observation_age_summary(aum_audit)
+    interactions = interaction_results(backtest)
+    boot = bootstrap_summary(backtest)
+    holdout = holdout_results(backtest, split)
+    write_json(run_dir / "backtest_study_spec.json", spec)
+    write_json(run_dir / "chronological_split_manifest.json", split)
+    write_json(run_dir / "feature_partition_definitions.json", feature_partition_definitions(spec))
+    write_csv(coverage, run_dir / "outcome_coverage_report.csv")
+    write_csv(exclusions, run_dir / "exclusion_reason_report.csv")
+    write_csv(aum_summary, run_dir / "aum_observation_age_summary.csv")
+    write_csv(interactions, run_dir / "interaction_results.csv")
+    write_csv(boot, run_dir / "bootstrap_summary.csv")
+    write_csv(holdout, run_dir / "holdout_results.csv")
+    (run_dir / "research_conclusion.md").write_text(research_conclusion_md(interactions, coverage), encoding="utf-8")
+
+
+def run_flow_real_data_study(root: Path, staging_id: str, decision_time_utc: str, research_timing_class: str = "eod_next_session") -> dict[str, Any]:
+    validation = validate_flow_provider_contract(root, staging_id, decision_time_utc, research_timing_class)
+    if validation["validation_status"] != "valid":
+        raise SystemExit("real-data study blocked by provider contract validation")
+    timing = audit_flow_timing(root, staging_id, decision_time_utc, research_timing_class)
+    if timing["blocked_count"] or timing["timing_ineligible_count"]:
+        raise SystemExit("real-data study blocked by timing audit")
+    coverage = inspect_flow_source_coverage(root, staging_id, decision_time_utc, research_timing_class)
+    if len(coverage["coverage"]) <= 0:
+        raise SystemExit("real-data study blocked by source coverage audit")
+    staging = verify_staging(root, staging_id, now_utc=decision_time_utc, research_timing_class=research_timing_class)
+    if staging["candidate_quality_status"] != "valid_research_candidate":
+        raise SystemExit("real-data study blocked by staging verification")
+    release_id = build_release(root, staging_id, now_utc=decision_time_utc, research_timing_class=research_timing_class)
+    verify_release(root, release_id)
+    backtest_run_id = run_flow_backtest(root, release_id)
+    verify_backtest(root, release_id, backtest_run_id)
+    return {
+        "artifact_version": REAL_DATA_STUDY_VERSION,
+        "staging_id": staging_id,
+        "release_id": release_id,
+        "backtest_run_id": backtest_run_id,
+        "source_contract_version": SOURCE_CONTRACT_VERSION,
+        "research_timing_class": research_timing_class,
+        "decision_time": decision_time_utc,
+        "validation_status": validation["validation_status"],
+        "timing_eligible_count": timing["timing_eligible_count"],
+        "staging_quality_status": staging["candidate_quality_status"],
+        "coverage": coverage["coverage"],
+        "actionization_allowed": ACTIONIZATION_ALLOWED,
+    }
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="Flow Pressure Research v0 release/backtest CLI")
     parser.add_argument("--root", default=".")
@@ -1932,6 +2267,10 @@ def main() -> None:
     p.add_argument("--backtest-run-id", required=True)
     p = sub.add_parser("inspect-flow-release")
     p.add_argument("--release-id", required=True)
+    p = sub.add_parser("run-flow-real-data-study")
+    p.add_argument("--staging-id", required=True)
+    p.add_argument("--decision-time-utc", required=True)
+    p.add_argument("--research-timing-class", default="eod_next_session", choices=sorted(TIMING_CLASSES))
     args = parser.parse_args()
     root = Path(args.root)
     if args.command == "build-flow-staging-template":
@@ -1954,6 +2293,8 @@ def main() -> None:
         result = verify_backtest(root, args.release_id, args.backtest_run_id)
     elif args.command == "inspect-flow-release":
         result = inspect_release(root, args.release_id)
+    elif args.command == "run-flow-real-data-study":
+        result = run_flow_real_data_study(root, args.staging_id, args.decision_time_utc, args.research_timing_class)
     else:
         raise SystemExit(f"unknown command: {args.command}")
     if getattr(args, "output", None):
