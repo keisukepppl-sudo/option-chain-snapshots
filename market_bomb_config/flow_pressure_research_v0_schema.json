@@ -1,0 +1,46 @@
+{
+  "artifact_version": "flow_pressure_research_v0_0_1",
+  "required_source_manifest_fields": [
+    "source_id",
+    "source_name",
+    "source_file",
+    "source_as_of_timestamp",
+    "available_at_timestamp",
+    "market_timestamp",
+    "instrument",
+    "asset_class",
+    "relative_path",
+    "coverage_start_date",
+    "coverage_end_date",
+    "dataset_version"
+  ],
+  "required_feature_fields": [
+    "feature_state",
+    "data_quality_state",
+    "methodology_version",
+    "source_coverage",
+    "source_as_of",
+    "available_at",
+    "as_of_date",
+    "confidence",
+    "coverage_tier",
+    "explicit_limitations",
+    "is_observed_flow",
+    "is_model_estimate",
+    "actionization_allowed"
+  ],
+  "release_core_files": [
+    "release_core_metadata.json",
+    "release_content_manifest.json",
+    "release_receipt.json",
+    "source_coverage_audit.csv",
+    "source_timeliness_audit.csv",
+    "feature_quality_gate.csv",
+    "module_methodology.json",
+    "parameter_registry.json",
+    "backtest_spec.json",
+    "backtest_results.csv",
+    "backtest_summary.md",
+    "explicit_limitations.md"
+  ]
+}

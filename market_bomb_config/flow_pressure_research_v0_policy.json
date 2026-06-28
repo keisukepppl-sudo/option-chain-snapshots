@@ -1,0 +1,51 @@
+{
+  "artifact_version": "flow_pressure_research_v0_0_1",
+  "actionization_allowed": false,
+  "implemented_modules": [
+    "leveraged_etf_rebalance",
+    "vol_control_deleveraging"
+  ],
+  "placeholder_modules": [
+    "cta_trend_flow",
+    "dealer_gamma_regime"
+  ],
+  "min_rows_per_implemented_module": 5,
+  "max_source_staleness_days": 7,
+  "vol_control_windows": [
+    5,
+    10,
+    20
+  ],
+  "vol_control_target_vols": [
+    0.1,
+    0.12
+  ],
+  "vol_control_max_exposure": 1.0,
+  "backtest_forward_days": [
+    1,
+    3,
+    5
+  ],
+  "leveraged_etf_universe": [
+    {
+      "ticker": "TQQQ",
+      "target": "QQQ",
+      "leverage": 3.0
+    },
+    {
+      "ticker": "SQQQ",
+      "target": "QQQ",
+      "leverage": -3.0
+    },
+    {
+      "ticker": "SOXL",
+      "target": "SOXX",
+      "leverage": 3.0
+    },
+    {
+      "ticker": "SOXS",
+      "target": "SOXX",
+      "leverage": -3.0
+    }
+  ]
+}
