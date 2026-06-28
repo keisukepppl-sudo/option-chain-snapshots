@@ -43,18 +43,22 @@ OUTPUT_ROOT = Path("market_bomb_market_impact")
 CTA_VOL_QUALITY_CONTRACT_REVISION = "cta_vol_quality_contract_v1_1_8"
 CTA_VOL_SELECTION_POLICY_REVISION = "latest_clean_feature_selector_v1_1_8"
 LEVERAGED_BUNDLE_POLICY_REVISION = "leveraged_etf_input_bundle_v1_1_8"
-MARKET_LEVEL_INTEGRITY_REVISION = "market_level_decision_scope_integrity_v1_1_14"
+MARKET_LEVEL_INTEGRITY_REVISION = "market_level_decision_scope_integrity_v1_1_15"
 DEALER_GAMMA_SIGN_POLICY_REVISION = "dealer_gamma_negative_sign_policy_v1_1_8"
-DEALER_GAMMA_SOURCE_CONTRACT_REVISION = "dealer_gamma_source_contract_v1_1_14"
-DEALER_GAMMA_SELECTION_POLICY_REVISION = "latest_clean_dealer_gamma_selector_v1_1_14"
+DEALER_GAMMA_SOURCE_CONTRACT_REVISION = "dealer_gamma_source_contract_v1_1_15"
+DEALER_GAMMA_SELECTION_POLICY_REVISION = "latest_clean_dealer_gamma_selector_v1_1_15"
 MARKET_LEVEL_EOD_UNIVERSE_POLICY = "daily_outcomes_full_eod_decision_universe_v1_1_11"
-MARKET_LEVEL_INTRADAY_UNIVERSE_POLICY = "first_to_last_observed_intraday_source_date_v1_1_14"
-MARKET_LEVEL_OOS_BUCKET_POLICY = "strict_artifact_only_single_classifier_v1_1_14"
-EOD_ACTUAL_FEATURE_LINEAGE_POLICY = "actual_lineage_schema_only_v1_1_14"
-INTRADAY_INPUT_AUDIT_UNIVERSE_POLICY = "full_intraday_decision_universe_no_fallback_v1_1_14"
-MARKET_LEVEL_BUCKET_CANDIDATE_SOURCE_POLICY = "explicit_eod_and_intraday_universe_only_v1_1_14"
-TARGET_CLOCK_GATE_MISSING_POLICY = "fail_closed_audit_missing_v1_1_14"
-LEVERAGED_CLOSE_1600_ROLE = "outcome_only_not_primary_input_v1_1_14"
+MARKET_LEVEL_INTRADAY_UNIVERSE_POLICY = "canonical_explicit_intraday_universe_v1_1_15"
+MARKET_LEVEL_OOS_BUCKET_POLICY = "strict_artifact_only_single_classifier_v1_1_15"
+EOD_ACTUAL_FEATURE_LINEAGE_POLICY = "actual_lineage_schema_only_v1_1_15"
+INTRADAY_INPUT_AUDIT_UNIVERSE_POLICY = "full_intraday_decision_universe_no_fallback_v1_1_15"
+MARKET_LEVEL_BUCKET_CANDIDATE_SOURCE_POLICY = "explicit_eod_and_intraday_universe_only_v1_1_15"
+TARGET_CLOCK_GATE_MISSING_POLICY = "fail_closed_audit_missing_v1_1_15"
+LEVERAGED_CLOSE_1600_ROLE = "outcome_only_not_primary_input_v1_1_15"
+MARKET_LEVEL_DECISION_UNIVERSE_POLICY = "canonical_explicit_universe_only_v1_1_15"
+UNIVERSE_DUPLICATE_KEY_POLICY = "canonicalize_once_and_selected_invalid_v1_1_15"
+MARKET_LEVEL_COVERAGE_RECONCILIATION_GRANULARITY = "target_clock_decision_scope_outcome_v1_1_15"
+COVERAGE_MISMATCH_POLICY = "local_fail_closed_data_quality_blocked_v1_1_15"
 DEALER_GAMMA_ALLOWED_DATA_TYPES = {"reconstructed_from_raw_chain", "raw_chain_reconstructed_proxy"}
 
 FEATURE_AUDIT_COLUMNS = [
@@ -240,19 +244,50 @@ MARKET_LEVEL_DECISION_BUCKET_COLUMNS = [
     "panel_row_present",
     "panel_row_count",
     "panel_row_absence_reason",
+    "universe_key_integrity_status",
+    "universe_key_integrity_reason",
+    "duplicate_universe_key_detected",
     "oos_bucket_policy",
+]
+
+MARKET_LEVEL_DECISION_UNIVERSE_INTEGRITY_COLUMNS = [
+    "target_market",
+    "model_clock",
+    "decision_timestamp_utc",
+    "raw_universe_row_count",
+    "canonical_universe_row_count",
+    "duplicate_detected",
+    "duplicate_metadata_conflict_detected",
+    "universe_key_integrity_status",
+    "universe_key_integrity_reason",
 ]
 
 MARKET_LEVEL_UNIVERSE_COVERAGE_RECONCILIATION_COLUMNS = [
     "target_market",
     "model_clock",
     "decision_timestamp_utc",
-    "in_decision_universe",
-    "in_market_level_panel",
-    "in_component_provenance",
-    "in_scope_integrity",
-    "in_decision_bucket_audit",
-    "missing_stage",
+    "model_scope",
+    "outcome",
+    "in_canonical_decision_universe",
+    "universe_key_integrity_status",
+    "universe_key_integrity_reason",
+    "expected_required_components",
+    "expected_required_component_count",
+    "actual_provenance_components",
+    "actual_provenance_component_count",
+    "missing_provenance_components",
+    "duplicate_provenance_components",
+    "expected_scope_integrity_components",
+    "actual_scope_integrity_components",
+    "missing_scope_integrity_components",
+    "duplicate_scope_integrity_components",
+    "market_level_panel_row_count",
+    "panel_row_present",
+    "panel_row_status",
+    "expected_bucket_row_count",
+    "actual_bucket_row_count",
+    "bucket_row_status",
+    "actual_bucket_value",
     "coverage_reconciliation_status",
     "coverage_reconciliation_reason",
 ]
@@ -5797,22 +5832,28 @@ def market_level_model_spec() -> dict[str, Any]:
 
 
 def build_market_level_feature_panel(
-    daily_outcomes: pd.DataFrame,
+    *,
+    eod_decision_universe: pd.DataFrame,
+    intraday_decision_universe: pd.DataFrame,
     daily_baseline: pd.DataFrame,
     cta_panel: pd.DataFrame,
     dealer_panel: pd.DataFrame,
     lev_panel: pd.DataFrame,
     dealer_intraday_selection: pd.DataFrame | None = None,
     dealer_eod_selection_audit: pd.DataFrame | None = None,
-    intraday_decision_universe: pd.DataFrame | None = None,
 ) -> pd.DataFrame:
+    if eod_decision_universe is None:
+        raise ValueError("eod_decision_universe is required")
+    if intraday_decision_universe is None:
+        raise ValueError("intraday_decision_universe is required")
+
     def numeric_col(df: pd.DataFrame, col: str, default: float = np.nan) -> pd.Series:
         if col not in df.columns:
             return pd.Series([default] * len(df), index=df.index, dtype=float)
         return pd.to_numeric(df[col], errors="coerce")
 
     targets = ["SPY", "QQQ", "SOXX"]
-    eod = daily_outcomes[daily_outcomes.get("target_market", pd.Series(dtype=str)).astype(str).isin(targets)].copy() if not daily_outcomes.empty else pd.DataFrame()
+    eod = eod_decision_universe[eod_decision_universe.get("target_market", pd.Series(dtype=str)).astype(str).isin(targets)].copy() if not eod_decision_universe.empty else pd.DataFrame()
     if not eod.empty:
         eod = eod.merge(daily_baseline.drop(columns=["decision_timestamp_utc"], errors="ignore"), on=["target_market", "decision_date"], how="left", suffixes=("", "_baseline"))
         eod["decision_time_policy"] = "eod_regular_close_v1"
@@ -5852,13 +5893,13 @@ def build_market_level_feature_panel(
             eod["negative_gamma_proxy_indicator"] = np.nan
         eod["systematic_sell_pressure_proxy"] = -(cta_num + vol_num)
         eod["systematic_sell_pressure_x_negative_gamma"] = eod["systematic_sell_pressure_proxy"] * eod["negative_gamma_proxy_indicator"]
-    if intraday_decision_universe is not None and not intraday_decision_universe.empty:
+    if not intraday_decision_universe.empty:
         intraday = intraday_decision_universe[intraday_decision_universe.get("target_market", pd.Series(dtype=str)).astype(str).isin(targets)].copy()
         lev_join_cols = [c for c in lev_panel.columns if c not in {"decision_date", "model_clock", "decision_time_policy"}]
         if not lev_panel.empty:
             intraday = intraday.merge(lev_panel[lev_join_cols], on=["target_market", "decision_timestamp_utc"], how="left", suffixes=("", "_leveraged"))
     else:
-        intraday = lev_panel[lev_panel.get("target_market", pd.Series(dtype=str)).astype(str).isin(targets)].copy() if not lev_panel.empty else pd.DataFrame()
+        intraday = pd.DataFrame()
     if not intraday.empty:
         intraday["decision_time_policy"] = "intraday_1530_et_v1"
         intraday["model_clock"] = "INTRADAY"
@@ -6113,18 +6154,7 @@ def build_market_level_model_scope_integrity(panel_or_provenance: pd.DataFrame, 
             dealer_intraday_selection=pd.DataFrame(),
             dealer_gamma_source_parity=pd.DataFrame(),
         )
-    dependencies = {
-        "B0": ["baseline"],
-        "B1": ["baseline", "CTA"],
-        "B2": ["baseline", "VolControl"],
-        "B3": ["baseline", "CTA", "VolControl"],
-        "B4": ["baseline", "CTA", "VolControl", "DealerGammaEOD", "DealerGammaSignEOD"],
-        "B5": ["baseline", "CTA", "VolControl", "DealerGammaEOD", "DealerGammaSignEOD"],
-        "C0": ["baseline"],
-        "C1": ["baseline", "LeveragedETF"],
-        "C2": ["baseline", "LeveragedETF", "DealerGammaIntraday", "DealerGammaSignIntraday"],
-        "C3": ["baseline", "LeveragedETF", "DealerGammaIntraday", "DealerGammaSignIntraday"],
-    }
+    dependencies = market_level_required_components_by_scope()
 
     rows: list[dict[str, Any]] = []
     if provenance.empty:
@@ -6169,6 +6199,94 @@ def build_market_level_model_scope_integrity(panel_or_provenance: pd.DataFrame, 
     return pd.DataFrame(rows, columns=MARKET_LEVEL_SCOPE_INTEGRITY_COLUMNS)
 
 
+def market_level_required_components_by_scope() -> dict[str, list[str]]:
+    return {
+        "B0": ["baseline"],
+        "B1": ["baseline", "CTA"],
+        "B2": ["baseline", "VolControl"],
+        "B3": ["baseline", "CTA", "VolControl"],
+        "B4": ["baseline", "CTA", "VolControl", "DealerGammaEOD", "DealerGammaSignEOD"],
+        "B5": ["baseline", "CTA", "VolControl", "DealerGammaEOD", "DealerGammaSignEOD"],
+        "C0": ["baseline"],
+        "C1": ["baseline", "LeveragedETF"],
+        "C2": ["baseline", "LeveragedETF", "DealerGammaIntraday", "DealerGammaSignIntraday"],
+        "C3": ["baseline", "LeveragedETF", "DealerGammaIntraday", "DealerGammaSignIntraday"],
+    }
+
+def canonicalize_market_level_decision_universe(universe: pd.DataFrame, *, model_clock: str, required_columns: list[str]) -> tuple[pd.DataFrame, pd.DataFrame]:
+    canonical_columns = list(dict.fromkeys(required_columns + MARKET_LEVEL_DECISION_UNIVERSE_INTEGRITY_COLUMNS))
+    if universe is None:
+        raise ValueError("explicit decision universe is required")
+    if universe.empty:
+        return (
+            ensure_columns(pd.DataFrame(), canonical_columns),
+            pd.DataFrame(columns=MARKET_LEVEL_DECISION_UNIVERSE_INTEGRITY_COLUMNS),
+        )
+    work = ensure_columns(universe.copy(), required_columns)
+    work["model_clock"] = model_clock
+    work["_target_key"] = work.get("target_market", pd.Series(dtype=str)).astype(str)
+    work["_clock_key"] = work.get("model_clock", pd.Series(dtype=str)).astype(str)
+    work["_decision_key"] = work.get("decision_timestamp_utc", pd.Series(dtype=str)).astype(str)
+    invalid_mask = (
+        work["_target_key"].str.strip().eq("")
+        | work["_clock_key"].str.strip().eq("")
+        | work["_decision_key"].str.strip().eq("")
+        | pd.to_datetime(work["_decision_key"], utc=True, errors="coerce").isna()
+    )
+    rows: list[dict[str, Any]] = []
+    canonical_rows: list[dict[str, Any]] = []
+    for key, group in work.groupby(["_target_key", "_clock_key", "_decision_key"], dropna=False):
+        target, clock, decision = key
+        raw_count = len(group)
+        duplicate = raw_count > 1
+        invalid_key = bool(invalid_mask.loc[group.index].any())
+        compare_cols = [
+            c for c in [
+                "decision_date",
+                "intraday_outcome_availability_status",
+                "intraday_outcome_availability_reason",
+                "next_session_return",
+                "forward_return_3d",
+                "forward_return_5d",
+                "forward_realized_vol_5d",
+                "intraday_return_1530_to_close",
+                "intraday_absolute_return_1530_to_close",
+                "intraday_range_1530_to_close",
+            ] if c in group.columns
+        ]
+        conflict = False
+        if duplicate and compare_cols:
+            conflict = len(group[compare_cols].astype(str).drop_duplicates()) > 1
+        status = "valid"
+        reasons = []
+        if invalid_key:
+            status = "selected_invalid"
+            reasons.append("invalid_decision_universe_key")
+        if duplicate:
+            status = "selected_invalid"
+            reasons.append("duplicate_decision_universe_key")
+            if conflict:
+                reasons.append("duplicate_metadata_conflict")
+        audit_row = {
+            "target_market": target,
+            "model_clock": clock,
+            "decision_timestamp_utc": decision,
+            "raw_universe_row_count": raw_count,
+            "canonical_universe_row_count": 1,
+            "duplicate_detected": duplicate,
+            "duplicate_metadata_conflict_detected": conflict,
+            "universe_key_integrity_status": status,
+            "universe_key_integrity_reason": ";".join(reasons),
+        }
+        rows.append(audit_row)
+        canonical = group.iloc[0].drop(labels=[c for c in group.columns if str(c).startswith("_")], errors="ignore").to_dict()
+        canonical.update(audit_row)
+        canonical_rows.append(canonical)
+    canonical_df = ensure_columns(pd.DataFrame(canonical_rows), canonical_columns)
+    audit_df = pd.DataFrame(rows, columns=MARKET_LEVEL_DECISION_UNIVERSE_INTEGRITY_COLUMNS)
+    return canonical_df, audit_df
+
+
 def build_market_level_target_clock_gate_audit(
     eod_decision_universe: pd.DataFrame,
     intraday_decision_universe: pd.DataFrame,
@@ -6198,19 +6316,20 @@ def build_market_level_target_clock_gate_audit(
         gate = intraday_universe_gate_audit[
             intraday_universe_gate_audit.get("target_market", pd.Series(dtype=str)).astype(str).eq(target)
         ] if intraday_universe_gate_audit is not None and not intraday_universe_gate_audit.empty else pd.DataFrame()
+        canonical_intraday_count = int(intraday_decision_universe.get("target_market", pd.Series(dtype=str)).astype(str).eq(target).sum()) if intraday_decision_universe is not None and not intraday_decision_universe.empty else 0
         if gate.empty:
             gate_status = "unavailable_coverage"
             gate_reason = "intraday_universe_gate_missing"
             selected_invalid_count = 0
             unavailable_count = 1
-            candidate_count = 0
+            candidate_count = canonical_intraday_count
         else:
             grow = gate.iloc[-1]
             gate_status = str(grow.get("target_clock_gate_integrity_status", "unavailable_coverage"))
             gate_reason = str(grow.get("target_clock_gate_reason", grow.get("universe_generation_reason", "")))
             selected_invalid_count = int(gate_status == "selected_invalid")
             unavailable_count = int(gate_status == "unavailable_coverage")
-            candidate_count = int(safe_float(grow.get("candidate_decision_count", 0), 0))
+            candidate_count = canonical_intraday_count
         for model_scope in spec["intraday_models"].keys():
             for outcome in outcome_map["INTRADAY"]:
                 rows.append({
@@ -6229,8 +6348,9 @@ def build_market_level_target_clock_gate_audit(
 
 def classify_market_level_decision_buckets(
     *,
-    eod_decision_universe: pd.DataFrame,
-    intraday_decision_universe: pd.DataFrame,
+    canonical_eod_decision_universe: pd.DataFrame,
+    canonical_intraday_decision_universe: pd.DataFrame,
+    universe_integrity_audit: pd.DataFrame,
     intraday_universe_gate_audit: pd.DataFrame,
     market_level_panel: pd.DataFrame,
     market_level_scope_integrity: pd.DataFrame,
@@ -6238,14 +6358,15 @@ def classify_market_level_decision_buckets(
     base_cfg: dict[str, Any],
 ) -> tuple[pd.DataFrame, pd.DataFrame]:
     buckets = build_market_level_decision_bucket_audit(
-        eod_decision_universe=eod_decision_universe,
-        intraday_decision_universe=intraday_decision_universe,
+        canonical_eod_decision_universe=canonical_eod_decision_universe,
+        canonical_intraday_decision_universe=canonical_intraday_decision_universe,
+        universe_integrity_audit=universe_integrity_audit,
         market_level_panel=market_level_panel,
         market_level_scope_integrity=market_level_scope_integrity,
         model_spec=model_spec,
         base_cfg=base_cfg,
     )
-    gates = build_market_level_target_clock_gate_audit(eod_decision_universe, intraday_decision_universe, intraday_universe_gate_audit)
+    gates = build_market_level_target_clock_gate_audit(canonical_eod_decision_universe, canonical_intraday_decision_universe, intraday_universe_gate_audit)
     return buckets, gates
 
 
@@ -6253,6 +6374,7 @@ def run_market_level_oos_backtest(
     panel: pd.DataFrame,
     decision_bucket_audit: pd.DataFrame,
     target_clock_gate_audit: pd.DataFrame,
+    universe_coverage_reconciliation: pd.DataFrame,
     cfg: dict[str, Any],
     base_cfg: dict[str, Any],
 ) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame, pd.DataFrame, pd.DataFrame, pd.DataFrame, pd.DataFrame]:
@@ -6269,6 +6391,14 @@ def run_market_level_oos_backtest(
             "universe_gate_unavailable_coverage_count",
         ],
         "target clock gate artifact required",
+    )
+    _require_columns(
+        universe_coverage_reconciliation,
+        [
+            "target_market", "model_clock", "decision_timestamp_utc", "model_scope", "outcome",
+            "coverage_reconciliation_status", "coverage_reconciliation_reason",
+        ],
+        "universe coverage reconciliation artifact required",
     )
     spec = market_level_model_spec()
     metric_rows: list[dict[str, Any]] = []
@@ -6330,6 +6460,23 @@ def run_market_level_oos_backtest(
                     valid_frame = target_panel[target_panel.get("decision_timestamp_utc", pd.Series(dtype=str)).astype(str).isin(valid_included_decisions)].copy() if not target_panel.empty else pd.DataFrame()
                     valid_frame_decisions = set(valid_frame.get("decision_timestamp_utc", pd.Series(dtype=str)).astype(str).tolist()) if not valid_frame.empty else set()
                     missing_valid_panel_decisions = valid_included_decisions - valid_frame_decisions
+                    coverage_rows = universe_coverage_reconciliation[
+                        universe_coverage_reconciliation.get("target_market", pd.Series(dtype=str)).astype(str).eq(target)
+                        & universe_coverage_reconciliation.get("model_scope", pd.Series(dtype=str)).astype(str).eq(model_name)
+                        & universe_coverage_reconciliation.get("model_clock", pd.Series(dtype=str)).astype(str).eq(clock)
+                        & universe_coverage_reconciliation.get("outcome", pd.Series(dtype=str)).astype(str).eq(outcome)
+                    ].copy()
+                    if coverage_rows.empty and candidate_count:
+                        coverage_mismatch_decisions = {"__coverage_row_missing__"}
+                        coverage_mismatch_count = 1
+                        coverage_reconciliation_mismatch_reasons = "required_universe_coverage_reconciliation_row_missing"
+                    else:
+                        mismatch_rows = coverage_rows[
+                            ~coverage_rows.get("coverage_reconciliation_status", pd.Series(dtype=str)).astype(str).eq("matched")
+                        ].copy() if not coverage_rows.empty else pd.DataFrame()
+                        coverage_mismatch_decisions = set(mismatch_rows.get("decision_timestamp_utc", pd.Series(dtype=str)).astype(str).tolist()) if not mismatch_rows.empty else set()
+                        coverage_mismatch_count = len(coverage_mismatch_decisions)
+                        coverage_reconciliation_mismatch_reasons = ";".join(sorted(set(mismatch_rows.get("coverage_reconciliation_reason", pd.Series(dtype=str)).astype(str).tolist()))) if not mismatch_rows.empty else ""
                     reconciliation_total = (
                         len(invalid_decisions)
                         + len(unavailable_decisions)
@@ -6339,7 +6486,7 @@ def run_market_level_oos_backtest(
                     )
                     reconciliation_gap = candidate_count - reconciliation_total
                     reconciliation_status = "matched" if reconciliation_gap == 0 else "mismatch"
-                    result_status = "data_quality_blocked" if invalid_decisions or universe_gate_selected_invalid_count or missing_valid_panel_decisions else "insufficient_data"
+                    result_status = "data_quality_blocked" if invalid_decisions or universe_gate_selected_invalid_count or missing_valid_panel_decisions or coverage_mismatch_count else "insufficient_data"
                     tested_folds = 0
                     oos_n = 0
                     oos_r2 = np.nan
@@ -6355,7 +6502,7 @@ def run_market_level_oos_backtest(
                     sign_consistency = np.nan
                     coef_dispersion = np.nan
                     interaction_summary = ""
-                    if not invalid_decisions and not missing_valid_panel_decisions and universe_gate_selected_invalid_count == 0 and len(valid_frame) >= min_oos:
+                    if not invalid_decisions and not missing_valid_panel_decisions and coverage_mismatch_count == 0 and universe_gate_selected_invalid_count == 0 and len(valid_frame) >= min_oos:
                         preds, folds, coefs = market_level_paired_walk_forward(valid_frame, outcome, parent_name, model_name, clock, baseline_cols, parent_features, features, cfg)
                         tested_folds = int(folds.get("fold_status", pd.Series(dtype=str)).astype(str).eq("tested").sum()) if not folds.empty else 0
                         oos_n = len(preds)
@@ -6410,10 +6557,13 @@ def run_market_level_oos_backtest(
                         "universe_gate_unavailable_coverage_count": universe_gate_unavailable_coverage_count,
                         "target_clock_gate_status": target_clock_gate_status,
                         "target_clock_gate_reason": target_clock_gate_reason,
+                        "coverage_reconciliation_mismatch_count": coverage_mismatch_count,
+                        "coverage_reconciliation_mismatch_decision_timestamps": ";".join(sorted(coverage_mismatch_decisions)[:50]),
+                        "coverage_reconciliation_mismatch_reasons": coverage_reconciliation_mismatch_reasons,
                         "reconciliation_total": reconciliation_total,
                         "reconciliation_gap": reconciliation_gap,
                         "reconciliation_status": reconciliation_status,
-                        "affected_decision_timestamps": ";".join(sorted(invalid_decisions | missing_valid_panel_decisions)[:50]),
+                        "affected_decision_timestamps": ";".join(sorted(invalid_decisions | missing_valid_panel_decisions | coverage_mismatch_decisions)[:50]),
                         "oos_fold_count": tested_folds,
                         "oos_r_squared_vs_historical_mean": oos_r2,
                         "parent_oos_r_squared_vs_historical_mean": parent_oos_r2,
@@ -6449,6 +6599,9 @@ def run_market_level_oos_backtest(
                         "universe_gate_unavailable_coverage_count": universe_gate_unavailable_coverage_count,
                         "target_clock_gate_status": target_clock_gate_status,
                         "target_clock_gate_reason": target_clock_gate_reason,
+                        "coverage_reconciliation_mismatch_count": coverage_mismatch_count,
+                        "coverage_reconciliation_mismatch_decision_timestamps": ";".join(sorted(coverage_mismatch_decisions)[:50]),
+                        "coverage_reconciliation_mismatch_reasons": coverage_reconciliation_mismatch_reasons,
                         "reconciliation_total": reconciliation_total,
                         "reconciliation_gap": reconciliation_gap,
                         "reconciliation_status": reconciliation_status,
@@ -6475,10 +6628,10 @@ def run_market_level_oos_backtest(
     pred_cols = ["target_market", "model_scope", "parent_model_scope", "outcome", "model_clock", "row_index", "decision_timestamp_utc", "test_month", "y_true", "parent_pred", "augmented_pred", "historical_mean_pred"]
     coef_cols = ["target_market", "model_scope", "parent_model_scope", "model_clock", "outcome", "test_month", "feature_name", "standardized_coefficient", "coefficient_sign", "sample_count_train", "sample_count_oos", "fold_status"]
     fold_cols = ["target_market", "model_scope", "parent_model_scope", "outcome", "model_clock", "test_month", "sample_count_train", "sample_count_oos", "unseen_category_count", "fold_status"]
-    metric_cols = ["result_status", "target_market", "outcome", "model_scope", "model_clock", "candidate_decision_count", "valid_included_decision_count", "valid_oos_observation_count", "unavailable_coverage_exclusion_count", "scope_unavailable_coverage_exclusion_count", "outcome_unavailable_exclusion_count", "feature_numeric_unavailable_exclusion_count", "selected_invalid_exclusion_count", "universe_gate_selected_invalid_count", "universe_gate_unavailable_coverage_count", "target_clock_gate_status", "target_clock_gate_reason", "reconciliation_total", "reconciliation_gap", "reconciliation_status", "affected_decision_timestamps", "oos_fold_count", "oos_r_squared_vs_historical_mean", "parent_oos_r_squared_vs_historical_mean", "incremental_oos_r_squared_vs_parent", "oos_mse", "parent_oos_mse", "delta_oos_mse_vs_parent", "oos_mae", "parent_oos_mae", "delta_oos_mae_vs_parent", "directional_hit_rate", "coefficient_median_across_folds", "coefficient_sign_consistency", "coefficient_fold_dispersion", "coefficient_dispersion_method", "interaction_coefficient_summary", "feature_availability_rate", "decision_time_policy", "source_provenance_policy_revision"]
+    metric_cols = ["result_status", "target_market", "outcome", "model_scope", "model_clock", "candidate_decision_count", "valid_included_decision_count", "valid_oos_observation_count", "unavailable_coverage_exclusion_count", "scope_unavailable_coverage_exclusion_count", "outcome_unavailable_exclusion_count", "feature_numeric_unavailable_exclusion_count", "selected_invalid_exclusion_count", "universe_gate_selected_invalid_count", "universe_gate_unavailable_coverage_count", "target_clock_gate_status", "target_clock_gate_reason", "coverage_reconciliation_mismatch_count", "coverage_reconciliation_mismatch_decision_timestamps", "coverage_reconciliation_mismatch_reasons", "reconciliation_total", "reconciliation_gap", "reconciliation_status", "affected_decision_timestamps", "oos_fold_count", "oos_r_squared_vs_historical_mean", "parent_oos_r_squared_vs_historical_mean", "incremental_oos_r_squared_vs_parent", "oos_mse", "parent_oos_mse", "delta_oos_mse_vs_parent", "oos_mae", "parent_oos_mae", "delta_oos_mae_vs_parent", "directional_hit_rate", "coefficient_median_across_folds", "coefficient_sign_consistency", "coefficient_fold_dispersion", "coefficient_dispersion_method", "interaction_coefficient_summary", "feature_availability_rate", "decision_time_policy", "source_provenance_policy_revision"]
     comp_cols = ["target_market", "outcome", "model_scope", "parent_model_scope", "result_status", "incremental_oos_r_squared_vs_parent", "delta_oos_mse_vs_parent", "delta_oos_mae_vs_parent", "feature_availability_difference", "interpretation_caveat"]
     regime_cols = ["regime_partition", "status", "threshold_policy"]
-    quality_cols = ["target_market", "model_scope", "outcome", "candidate_decision_count", "valid_included_decision_count", "unavailable_coverage_exclusion_count", "scope_unavailable_coverage_exclusion_count", "outcome_unavailable_exclusion_count", "feature_numeric_unavailable_exclusion_count", "selected_invalid_exclusion_count", "universe_gate_selected_invalid_count", "universe_gate_unavailable_coverage_count", "target_clock_gate_status", "target_clock_gate_reason", "reconciliation_total", "reconciliation_gap", "reconciliation_status", "result_status"]
+    quality_cols = ["target_market", "model_scope", "outcome", "candidate_decision_count", "valid_included_decision_count", "unavailable_coverage_exclusion_count", "scope_unavailable_coverage_exclusion_count", "outcome_unavailable_exclusion_count", "feature_numeric_unavailable_exclusion_count", "selected_invalid_exclusion_count", "universe_gate_selected_invalid_count", "universe_gate_unavailable_coverage_count", "target_clock_gate_status", "target_clock_gate_reason", "coverage_reconciliation_mismatch_count", "coverage_reconciliation_mismatch_decision_timestamps", "coverage_reconciliation_mismatch_reasons", "reconciliation_total", "reconciliation_gap", "reconciliation_status", "result_status"]
     return (
         pd.DataFrame(pred_rows, columns=pred_cols),
         pd.DataFrame(coef_rows_all, columns=coef_cols),
@@ -6492,8 +6645,9 @@ def run_market_level_oos_backtest(
 
 def build_market_level_decision_bucket_audit(
     *,
-    eod_decision_universe: pd.DataFrame,
-    intraday_decision_universe: pd.DataFrame,
+    canonical_eod_decision_universe: pd.DataFrame,
+    canonical_intraday_decision_universe: pd.DataFrame,
+    universe_integrity_audit: pd.DataFrame,
     market_level_panel: pd.DataFrame,
     market_level_scope_integrity: pd.DataFrame,
     model_spec: dict[str, Any] | None = None,
@@ -6502,8 +6656,8 @@ def build_market_level_decision_bucket_audit(
     spec = model_spec or market_level_model_spec()
     rows: list[dict[str, Any]] = []
     configs = [
-        ("EOD", eod_decision_universe, spec["eod_models"], ["next_session_return", "forward_return_3d", "forward_return_5d", "forward_realized_vol_5d"], base_cfg.get("daily", [])),
-        ("INTRADAY", intraday_decision_universe, spec["intraday_models"], ["intraday_return_1530_to_close", "intraday_absolute_return_1530_to_close", "intraday_range_1530_to_close"], base_cfg.get("intraday", [])),
+        ("EOD", canonical_eod_decision_universe, spec["eod_models"], ["next_session_return", "forward_return_3d", "forward_return_5d", "forward_realized_vol_5d"], base_cfg.get("daily", [])),
+        ("INTRADAY", canonical_intraday_decision_universe, spec["intraday_models"], ["intraday_return_1530_to_close", "intraday_absolute_return_1530_to_close", "intraday_range_1530_to_close"], base_cfg.get("intraday", [])),
     ]
     for clock, universe, models, outcomes, baseline_cols in configs:
         if universe is None or universe.empty:
@@ -6550,6 +6704,9 @@ def build_market_level_decision_bucket_audit(
                     required_features = list(dict.fromkeys(baseline_cols + features))
                     for _, urow in target_universe.iterrows():
                         decision = str(urow.get("_decision_key", ""))
+                        universe_status = str(urow.get("universe_key_integrity_status", "valid"))
+                        universe_reason = str(urow.get("universe_key_integrity_reason", ""))
+                        duplicate_universe = bool(urow.get("duplicate_detected", False))
                         row_match = target_panel[target_panel.get("_decision_key", pd.Series(dtype=str)).astype(str).eq(decision)] if not target_panel.empty else pd.DataFrame()
                         panel_row_count = len(row_match)
                         panel_row_present = panel_row_count > 0
@@ -6568,7 +6725,10 @@ def build_market_level_decision_bucket_audit(
                             if pd.isna(pd.to_numeric(pd.Series([panel_row.get(col, np.nan)]), errors="coerce").iloc[0])
                         ]
                         panel_absence_reason = "" if panel_row_present else "panel_row_missing_after_universe_join"
-                        if panel_row_count > 1:
+                        if universe_status == "selected_invalid":
+                            bucket = "selected_invalid"
+                            reason = universe_reason or "invalid_decision_universe_key"
+                        elif panel_row_count > 1:
                             bucket = "selected_invalid"
                             reason = "duplicate_market_level_panel_rows"
                         elif scope_absent:
@@ -6608,70 +6768,159 @@ def build_market_level_decision_bucket_audit(
                             "panel_row_present": bool(panel_row_present),
                             "panel_row_count": panel_row_count,
                             "panel_row_absence_reason": panel_absence_reason,
+                            "universe_key_integrity_status": universe_status,
+                            "universe_key_integrity_reason": universe_reason,
+                            "duplicate_universe_key_detected": duplicate_universe,
                             "oos_bucket_policy": MARKET_LEVEL_OOS_BUCKET_POLICY,
                         })
     return pd.DataFrame(rows, columns=MARKET_LEVEL_DECISION_BUCKET_COLUMNS)
 
 
 def build_market_level_universe_coverage_reconciliation(
-    eod_decision_universe: pd.DataFrame,
-    intraday_decision_universe: pd.DataFrame,
+    canonical_eod_decision_universe: pd.DataFrame,
+    canonical_intraday_decision_universe: pd.DataFrame,
+    universe_integrity_audit: pd.DataFrame,
     market_level_panel: pd.DataFrame,
     market_level_component_provenance: pd.DataFrame,
     market_level_scope_integrity: pd.DataFrame,
     market_level_decision_bucket_audit: pd.DataFrame,
+    model_spec: dict[str, Any] | None = None,
 ) -> pd.DataFrame:
+    spec = model_spec or market_level_model_spec()
+    required_by_scope = market_level_required_components_by_scope()
     universe_parts = []
-    if eod_decision_universe is not None and not eod_decision_universe.empty:
-        eod = eod_decision_universe.copy()
+    if canonical_eod_decision_universe is not None and not canonical_eod_decision_universe.empty:
+        eod = canonical_eod_decision_universe.copy()
         eod["model_clock"] = "EOD"
         universe_parts.append(eod)
-    if intraday_decision_universe is not None and not intraday_decision_universe.empty:
-        intraday = intraday_decision_universe.copy()
+    if canonical_intraday_decision_universe is not None and not canonical_intraday_decision_universe.empty:
+        intraday = canonical_intraday_decision_universe.copy()
         intraday["model_clock"] = "INTRADAY"
         universe_parts.append(intraday)
     if not universe_parts:
         return pd.DataFrame(columns=MARKET_LEVEL_UNIVERSE_COVERAGE_RECONCILIATION_COLUMNS)
     universe = pd.concat(universe_parts, ignore_index=True, sort=False)
-    universe = universe[["target_market", "model_clock", "decision_timestamp_utc"]].drop_duplicates().copy()
+    universe = ensure_columns(universe, [
+        "target_market", "model_clock", "decision_timestamp_utc",
+        "universe_key_integrity_status", "universe_key_integrity_reason",
+    ]).copy()
 
-    def key_set(df: pd.DataFrame) -> set[tuple[str, str, str]]:
-        if df is None or df.empty:
-            return set()
-        if not {"target_market", "model_clock", "decision_timestamp_utc"}.issubset(df.columns):
-            return set()
-        return {
-            (str(r.get("target_market", "")), str(r.get("model_clock", "")), str(r.get("decision_timestamp_utc", "")))
-            for _, r in df.iterrows()
-        }
+    if universe_integrity_audit is not None and not universe_integrity_audit.empty:
+        audit_cols = [
+            "target_market", "model_clock", "decision_timestamp_utc",
+            "universe_key_integrity_status", "universe_key_integrity_reason",
+        ]
+        audit = ensure_columns(universe_integrity_audit, audit_cols)[audit_cols].copy()
+        audit = audit.drop_duplicates(["target_market", "model_clock", "decision_timestamp_utc"], keep="last")
+        universe = universe.drop(columns=["universe_key_integrity_status", "universe_key_integrity_reason"], errors="ignore").merge(
+            audit,
+            on=["target_market", "model_clock", "decision_timestamp_utc"],
+            how="left",
+        )
+    universe["universe_key_integrity_status"] = universe.get("universe_key_integrity_status", pd.Series(dtype=str)).replace("", np.nan).fillna("valid")
+    universe["universe_key_integrity_reason"] = universe.get("universe_key_integrity_reason", pd.Series(dtype=str)).fillna("")
 
-    panel_keys = key_set(market_level_panel)
-    provenance_keys = key_set(market_level_component_provenance)
-    scope_keys = key_set(market_level_scope_integrity)
-    bucket_keys = key_set(market_level_decision_bucket_audit)
+    configs = {
+        "EOD": (spec["eod_models"], ["next_session_return", "forward_return_3d", "forward_return_5d", "forward_realized_vol_5d"]),
+        "INTRADAY": (spec["intraday_models"], ["intraday_return_1530_to_close", "intraday_absolute_return_1530_to_close", "intraday_range_1530_to_close"]),
+    }
+    def grouped_component_counts(df: pd.DataFrame) -> dict[tuple[str, str, str, str, str], int]:
+        needed = ["target_market", "model_clock", "decision_timestamp_utc", "model_scope", "required_component"]
+        if df is None or df.empty or not set(needed).issubset(df.columns):
+            return {}
+        work = df[needed].copy()
+        for col in needed:
+            work[col] = work[col].astype(str)
+        return work.groupby(needed, dropna=False).size().astype(int).to_dict()
+
+    panel_counts: dict[tuple[str, str, str], int] = {}
+    if market_level_panel is not None and not market_level_panel.empty and {"target_market", "model_clock", "decision_timestamp_utc"}.issubset(market_level_panel.columns):
+        pwork = market_level_panel[["target_market", "model_clock", "decision_timestamp_utc"]].copy()
+        for col in pwork.columns:
+            pwork[col] = pwork[col].astype(str)
+        panel_counts = pwork.groupby(["target_market", "model_clock", "decision_timestamp_utc"], dropna=False).size().astype(int).to_dict()
+
+    provenance_counts = grouped_component_counts(market_level_component_provenance)
+    scope_counts = grouped_component_counts(market_level_scope_integrity)
+    bucket_counts: dict[tuple[str, str, str, str, str], int] = {}
+    bucket_values: dict[tuple[str, str, str, str, str], str] = {}
+    bucket_needed = ["target_market", "model_clock", "decision_timestamp_utc", "model_scope", "outcome"]
+    if market_level_decision_bucket_audit is not None and not market_level_decision_bucket_audit.empty and set(bucket_needed).issubset(market_level_decision_bucket_audit.columns):
+        bwork = market_level_decision_bucket_audit[bucket_needed + [c for c in ["bucket"] if c in market_level_decision_bucket_audit.columns]].copy()
+        for col in bucket_needed:
+            bwork[col] = bwork[col].astype(str)
+        bucket_counts = bwork.groupby(bucket_needed, dropna=False).size().astype(int).to_dict()
+        for key, group in bwork.groupby(bucket_needed, dropna=False):
+            if len(group) == 1:
+                bucket_values[tuple(str(v) for v in key)] = str(group.iloc[0].get("bucket", ""))
+
     rows = []
     for _, row in universe.iterrows():
-        key = (str(row.get("target_market", "")), str(row.get("model_clock", "")), str(row.get("decision_timestamp_utc", "")))
-        checks = {
-            "market_level_panel": key in panel_keys,
-            "component_provenance": key in provenance_keys,
-            "scope_integrity": key in scope_keys,
-            "decision_bucket_audit": key in bucket_keys,
-        }
-        missing = [name for name, ok in checks.items() if not ok]
-        rows.append({
-            "target_market": key[0],
-            "model_clock": key[1],
-            "decision_timestamp_utc": key[2],
-            "in_decision_universe": True,
-            "in_market_level_panel": checks["market_level_panel"],
-            "in_component_provenance": checks["component_provenance"],
-            "in_scope_integrity": checks["scope_integrity"],
-            "in_decision_bucket_audit": checks["decision_bucket_audit"],
-            "missing_stage": ";".join(missing),
-            "coverage_reconciliation_status": "matched" if not missing else "mismatch",
-            "coverage_reconciliation_reason": "" if not missing else "missing_" + ";missing_".join(missing),
-        })
+        target = str(row.get("target_market", ""))
+        clock = str(row.get("model_clock", ""))
+        decision = str(row.get("decision_timestamp_utc", ""))
+        universe_status = str(row.get("universe_key_integrity_status", "valid") or "valid")
+        universe_reason = str(row.get("universe_key_integrity_reason", "") or "")
+        if clock not in configs:
+            continue
+        models, outcomes = configs[clock]
+        panel_count = int(panel_counts.get((target, clock, decision), 0))
+        for model_scope in models.keys():
+            expected_components = required_by_scope.get(model_scope, ["baseline"])
+            prov_component_counts = {component: int(provenance_counts.get((target, clock, decision, model_scope, component), 0)) for component in expected_components}
+            scope_component_counts = {component: int(scope_counts.get((target, clock, decision, model_scope, component), 0)) for component in expected_components}
+            missing_prov = [component for component, count in prov_component_counts.items() if count == 0]
+            dup_prov = [component for component, count in prov_component_counts.items() if count > 1]
+            missing_scope = [component for component, count in scope_component_counts.items() if count == 0]
+            dup_scope = [component for component, count in scope_component_counts.items() if count > 1]
+            for outcome in outcomes:
+                bucket_key = (target, clock, decision, model_scope, outcome)
+                bucket_count = int(bucket_counts.get(bucket_key, 0))
+                reasons: list[str] = []
+                if universe_status != "valid":
+                    reasons.append(universe_reason or "duplicate_decision_universe_key")
+                if panel_count == 0:
+                    reasons.append("panel_row_missing_after_universe_join")
+                elif panel_count > 1:
+                    reasons.append("duplicate_market_level_panel_rows")
+                reasons.extend([f"missing_component_provenance:{component}" for component in missing_prov])
+                reasons.extend([f"duplicate_component_provenance:{component}" for component in dup_prov])
+                reasons.extend([f"missing_scope_integrity:{component}" for component in missing_scope])
+                reasons.extend([f"duplicate_scope_integrity:{component}" for component in dup_scope])
+                if bucket_count == 0:
+                    reasons.append("missing_decision_bucket_row")
+                elif bucket_count > 1:
+                    reasons.append("duplicate_decision_bucket_row")
+                status = "matched" if not reasons else "mismatch"
+                rows.append({
+                    "target_market": target,
+                    "model_clock": clock,
+                    "decision_timestamp_utc": decision,
+                    "model_scope": model_scope,
+                    "outcome": outcome,
+                    "in_canonical_decision_universe": True,
+                    "universe_key_integrity_status": universe_status,
+                    "universe_key_integrity_reason": universe_reason,
+                    "expected_required_components": ",".join(expected_components),
+                    "expected_required_component_count": len(expected_components),
+                    "actual_provenance_components": ",".join([component for component in expected_components for _ in range(prov_component_counts.get(component, 0))]),
+                    "actual_provenance_component_count": int(sum(prov_component_counts.values())),
+                    "missing_provenance_components": ",".join(missing_prov),
+                    "duplicate_provenance_components": ",".join(dup_prov),
+                    "expected_scope_integrity_components": ",".join(expected_components),
+                    "actual_scope_integrity_components": ",".join([component for component in expected_components for _ in range(scope_component_counts.get(component, 0))]),
+                    "missing_scope_integrity_components": ",".join(missing_scope),
+                    "duplicate_scope_integrity_components": ",".join(dup_scope),
+                    "market_level_panel_row_count": panel_count,
+                    "panel_row_present": panel_count > 0,
+                    "panel_row_status": "matched" if panel_count == 1 else ("missing" if panel_count == 0 else "duplicate"),
+                    "expected_bucket_row_count": 1,
+                    "actual_bucket_row_count": bucket_count,
+                    "bucket_row_status": "matched" if bucket_count == 1 else ("missing" if bucket_count == 0 else "duplicate"),
+                    "actual_bucket_value": bucket_values.get(bucket_key, "") if bucket_count == 1 else "",
+                    "coverage_reconciliation_status": status,
+                    "coverage_reconciliation_reason": ";".join(dict.fromkeys([r for r in reasons if r])),
+                })
     return pd.DataFrame(rows, columns=MARKET_LEVEL_UNIVERSE_COVERAGE_RECONCILIATION_COLUMNS)
 
 
@@ -6700,12 +6949,15 @@ def market_level_report_text(metrics: pd.DataFrame, quality: pd.DataFrame) -> st
         "actionization_gate=false\n\n"
         "This is research-only. It does not change live scanner, notification, sizing, broker, or execution behavior.\n\n"
         "CTA and VolControl are rule-based proxies, not observed fund flows. Leveraged ETF pressure is an estimated rebalance proxy, not confirmed execution. Dealer Gamma is reconstructed from option-chain assumptions, not observed dealer inventory or hedge flow. Results are associations, not causal attribution.\n\n"
-        "Decision universe policy: EOD uses all daily outcome decisions; intraday uses every regular non-early-close NYSE session inside each target's observed intraday-bar coverage window. Intraday universe generation has no business-day fallback when the NYSE calendar is missing or invalid.\n\n"
+        "Decision universe policy: EOD and intraday MarketLevel panels are built from explicit canonical decision universes only. Intraday universe generation has no business-day fallback when the NYSE calendar is missing or invalid, and an empty intraday universe does not fall back to lev_panel or raw bar rows.\n\n"
         "Decision buckets are enumerated from explicit decision universes, not from panel rows. Panel join misses remain visible in the bucket artifact and cannot silently drop candidates.\n\n"
+        "Duplicate target/clock/decision universe keys are canonicalized once for auditability and marked `selected_invalid`; they are not silently deduped into valid candidates.\n\n"
+        "Universe coverage reconciliation is target x clock x decision x scope x outcome. It is distinct from decision bucket reconciliation: bucket reconciliation explains candidate inclusion/exclusion, while coverage reconciliation verifies required provenance and scope-integrity artifacts for that exact group.\n\n"
+        "Coverage mismatch is a local data-quality block for the affected target/clock/scope/outcome group, not a global block for unrelated groups.\n\n"
         "Actual lineage means an actual feature panel row or actual panel component row, not only a selection audit row. EOD Gamma matched parity accepts actual-lineage records only. Matched source parity requires direct actual-vs-fresh equality. Eligible primary inputs are not treated as matched parity without actual component proof.\n\n"
         "Target-clock calendar gate status is separate from decision buckets and missing target-clock gate evidence is fail-closed. Target/date/scope data-quality failures do not globally block unrelated targets, clocks, or scopes.\n\n"
         "The 16:00 close bar is an outcome requirement, not a Leveraged ETF primary input.\n\n"
-        "No coefficient or R-squared interpretation should be made when OOS sufficiency is not met.\n\n"
+        "No coefficient or R-squared interpretation should be made when OOS sufficiency or coverage integrity is not met.\n\n"
         f"OOS bucket policy: `{MARKET_LEVEL_OOS_BUCKET_POLICY}`\n\n"
         f"Valid metric rows: `{valid}`\n\n"
         "## Reconciliation Summary\n\n"
@@ -6849,7 +7101,14 @@ def run(
         lev_panel_component_manifest = lev_panel.attrs.get("component_manifest", pd.DataFrame(columns=LEVERAGED_ETF_COMPONENT_MANIFEST_COLUMNS))
         lev_panel.attrs.clear()
     market_level_intraday_universe, market_level_intraday_universe_gate = build_market_level_intraday_universe_with_gate(root, cfg)
-    lev_input_audit, lev_input_summary, lev_universe_input_audit, lev_selection_parity = build_leveraged_etf_input_candidate_audits(root, cfg, market_level_intraday_universe, lev_panel_component_manifest)
+    raw_market_level_intraday_universe = ensure_columns(market_level_intraday_universe.copy(), MARKET_LEVEL_INTRADAY_DECISION_UNIVERSE_COLUMNS)
+    canonical_market_level_intraday_universe, intraday_universe_integrity_audit = canonicalize_market_level_decision_universe(
+        raw_market_level_intraday_universe,
+        model_clock="INTRADAY",
+        required_columns=MARKET_LEVEL_INTRADAY_DECISION_UNIVERSE_COLUMNS,
+    )
+    market_level_intraday_universe = canonical_market_level_intraday_universe
+    lev_input_audit, lev_input_summary, lev_universe_input_audit, lev_selection_parity = build_leveraged_etf_input_candidate_audits(root, cfg, canonical_market_level_intraday_universe, lev_panel_component_manifest)
     lev_primary_input_integrity, lev_primary_input_gate_summary, lev_aum_selector_parity, lev_bar_semantics_gate = build_leveraged_etf_primary_input_integrity_outputs(lev_input_audit, lev_universe_input_audit, lev_selection_parity)
     dealer_panel, dealer_audit = (pd.DataFrame(), pd.DataFrame())
     dealer_gamma_eod_selection_audit = pd.DataFrame(columns=["decision_date", *DEALER_GAMMA_SELECTION_COLUMNS])
@@ -6860,15 +7119,25 @@ def run(
         dealer_panel, dealer_audit, dealer_gamma_eod_actual_feature_lineage, dealer_gamma_eod_feature_hydration_audit = build_dealer_gamma_panel_with_actual_lineage(root, daily_outcomes, cfg, dealer_gamma_eod_selection_audit)
         dealer_panel = attach_daily_baseline(dealer_panel, daily_baseline)
     dealer_state_panel, dealer_distance_panel, dealer_sample_audit = split_dealer_gamma_state_distance(dealer_panel)
-    market_level_eod_universe = daily_outcomes[daily_outcomes.get("target_market", pd.Series(dtype=str)).astype(str).isin(["SPY", "QQQ", "SOXX"])].copy() if not daily_outcomes.empty else pd.DataFrame()
-    if not market_level_eod_universe.empty:
-        market_level_eod_universe["model_clock"] = "EOD"
-        market_level_eod_universe["decision_time_policy"] = "eod_regular_close_v1"
-        market_level_eod_universe["decision_universe_policy"] = MARKET_LEVEL_EOD_UNIVERSE_POLICY
-    market_level_eod_universe = ensure_columns(market_level_eod_universe, MARKET_LEVEL_EOD_DECISION_UNIVERSE_COLUMNS)
-    market_level_intraday_universe = ensure_columns(market_level_intraday_universe, MARKET_LEVEL_INTRADAY_DECISION_UNIVERSE_COLUMNS)
+    raw_market_level_eod_universe = daily_outcomes[daily_outcomes.get("target_market", pd.Series(dtype=str)).astype(str).isin(["SPY", "QQQ", "SOXX"])].copy() if not daily_outcomes.empty else pd.DataFrame()
+    if not raw_market_level_eod_universe.empty:
+        raw_market_level_eod_universe["model_clock"] = "EOD"
+        raw_market_level_eod_universe["decision_time_policy"] = "eod_regular_close_v1"
+        raw_market_level_eod_universe["decision_universe_policy"] = MARKET_LEVEL_EOD_UNIVERSE_POLICY
+    raw_market_level_eod_universe = ensure_columns(raw_market_level_eod_universe, MARKET_LEVEL_EOD_DECISION_UNIVERSE_COLUMNS)
+    canonical_market_level_eod_universe, eod_universe_integrity_audit = canonicalize_market_level_decision_universe(
+        raw_market_level_eod_universe,
+        model_clock="EOD",
+        required_columns=MARKET_LEVEL_EOD_DECISION_UNIVERSE_COLUMNS,
+    )
+    market_level_eod_universe = canonical_market_level_eod_universe
+    market_level_intraday_universe = canonical_market_level_intraday_universe
+    market_level_decision_universe_integrity_audit = ensure_columns(
+        pd.concat([eod_universe_integrity_audit, intraday_universe_integrity_audit], ignore_index=True, sort=False),
+        MARKET_LEVEL_DECISION_UNIVERSE_INTEGRITY_COLUMNS,
+    )
     market_level_intraday_universe_gate = ensure_columns(market_level_intraday_universe_gate, MARKET_LEVEL_INTRADAY_UNIVERSE_GATE_COLUMNS)
-    dealer_gamma_intraday_selection_audit = build_dealer_gamma_intraday_selection_audit(root, market_level_intraday_universe, cfg)
+    dealer_gamma_intraday_selection_audit = build_dealer_gamma_intraday_selection_audit(root, canonical_market_level_intraday_universe, cfg)
     dealer_gamma_source_parity = build_dealer_gamma_source_selection_parity_audit(root, dealer_gamma_eod_actual_feature_lineage, dealer_gamma_intraday_selection_audit, cfg)
     expiry_calendar_panel, expiry_conditioned_panel, expiry_post_panel, expiry_audit, expiry_outcome_audit, calendar_availability_audit = build_dealer_gamma_expiry_event_panel(root, daily_outcomes, cfg)
     expiry_calendar_panel = attach_daily_baseline(expiry_calendar_panel, open_baseline)
@@ -7038,7 +7307,16 @@ def run(
     selection_parity_audit = pd.concat([cta_vol_selector_parity, selection_parity_audit, lev_selection_parity, dealer_gamma_source_parity], ignore_index=True)
     selector_result_audit = build_selector_result_audit(source_candidate_audit, lev_input_audit)
     scope_integrity_gate_audit = build_scope_integrity_gate_audit(selection_parity_audit, lev_primary_input_integrity, expiry_classification_integrity_gate)
-    market_level_panel = build_market_level_feature_panel(daily_outcomes, daily_baseline, cta_panel, dealer_panel, lev_panel, dealer_gamma_intraday_selection_audit, dealer_gamma_eod_selection_audit, market_level_intraday_universe)
+    market_level_panel = build_market_level_feature_panel(
+        eod_decision_universe=canonical_market_level_eod_universe,
+        intraday_decision_universe=canonical_market_level_intraday_universe,
+        daily_baseline=daily_baseline,
+        cta_panel=cta_panel,
+        dealer_panel=dealer_panel,
+        lev_panel=lev_panel,
+        dealer_intraday_selection=dealer_gamma_intraday_selection_audit,
+        dealer_eod_selection_audit=dealer_gamma_eod_selection_audit,
+    )
     market_level_component_provenance = build_market_level_component_provenance_status(
         market_level_panel=market_level_panel,
         cta_vol_selector_parity=cta_vol_selector_parity,
@@ -7051,8 +7329,9 @@ def run(
     )
     market_level_integrity = build_market_level_model_scope_integrity(market_level_panel, market_level_component_provenance)
     market_level_decision_bucket_audit, market_level_target_clock_gate_audit = classify_market_level_decision_buckets(
-        eod_decision_universe=market_level_eod_universe,
-        intraday_decision_universe=market_level_intraday_universe,
+        canonical_eod_decision_universe=canonical_market_level_eod_universe,
+        canonical_intraday_decision_universe=canonical_market_level_intraday_universe,
+        universe_integrity_audit=market_level_decision_universe_integrity_audit,
         intraday_universe_gate_audit=market_level_intraday_universe_gate,
         market_level_panel=market_level_panel,
         market_level_scope_integrity=market_level_integrity,
@@ -7060,8 +7339,9 @@ def run(
         base_cfg=base_cfg,
     )
     market_level_universe_coverage_reconciliation = build_market_level_universe_coverage_reconciliation(
-        market_level_eod_universe,
-        market_level_intraday_universe,
+        canonical_market_level_eod_universe,
+        canonical_market_level_intraday_universe,
+        market_level_decision_universe_integrity_audit,
         market_level_panel,
         market_level_component_provenance,
         market_level_integrity,
@@ -7071,6 +7351,7 @@ def run(
         market_level_panel,
         market_level_decision_bucket_audit,
         market_level_target_clock_gate_audit,
+        market_level_universe_coverage_reconciliation,
         cfg,
         base_cfg,
     )
@@ -7141,16 +7422,34 @@ def run(
         "market_level_oos": {
             "artifact_version": "market_level_v1",
             "actionization_gate": False,
+            "decision_universe_policy": MARKET_LEVEL_DECISION_UNIVERSE_POLICY,
             "dealer_gamma_source_contract_revision": DEALER_GAMMA_SOURCE_CONTRACT_REVISION,
             "dealer_gamma_selection_policy_revision": DEALER_GAMMA_SELECTION_POLICY_REVISION,
             "market_level_integrity_revision": MARKET_LEVEL_INTEGRITY_REVISION,
             "decision_bucket_candidate_source": MARKET_LEVEL_BUCKET_CANDIDATE_SOURCE_POLICY,
             "eod_decision_universe_policy": MARKET_LEVEL_EOD_UNIVERSE_POLICY,
             "intraday_decision_universe_policy": MARKET_LEVEL_INTRADAY_UNIVERSE_POLICY,
+            "intraday_panel_fallback_allowed": False,
+            "universe_duplicate_key_policy": UNIVERSE_DUPLICATE_KEY_POLICY,
+            "universe_coverage_reconciliation_granularity": MARKET_LEVEL_COVERAGE_RECONCILIATION_GRANULARITY,
+            "coverage_mismatch_policy": COVERAGE_MISMATCH_POLICY,
+            "oos_requires_universe_coverage_reconciliation": True,
             "oos_bucket_policy": MARKET_LEVEL_OOS_BUCKET_POLICY,
             "target_clock_gate_missing_policy": TARGET_CLOCK_GATE_MISSING_POLICY,
             "eod_gamma_parity_input_policy": EOD_ACTUAL_FEATURE_LINEAGE_POLICY,
             "leveraged_close_1600_role": LEVERAGED_CLOSE_1600_ROLE,
+            "raw_eod_universe_row_count": int(len(raw_market_level_eod_universe)),
+            "canonical_eod_universe_row_count": int(len(canonical_market_level_eod_universe)),
+            "raw_intraday_universe_row_count": int(len(raw_market_level_intraday_universe)),
+            "canonical_intraday_universe_row_count": int(len(canonical_market_level_intraday_universe)),
+            "duplicate_universe_key_count": int(pd.to_numeric(market_level_decision_universe_integrity_audit.get("duplicate_detected", pd.Series(dtype=int)), errors="coerce").fillna(0).sum()) if not market_level_decision_universe_integrity_audit.empty else 0,
+            "coverage_reconciliation_mismatch_count": int(market_level_universe_coverage_reconciliation.get("coverage_reconciliation_status", pd.Series(dtype=str)).astype(str).ne("matched").sum()) if not market_level_universe_coverage_reconciliation.empty else 0,
+            "coverage_reconciliation_mismatch_groups": ";".join(
+                market_level_universe_coverage_reconciliation.loc[
+                    market_level_universe_coverage_reconciliation.get("coverage_reconciliation_status", pd.Series(dtype=str)).astype(str).ne("matched"),
+                    ["target_market", "model_clock", "model_scope", "outcome"],
+                ].astype(str).drop_duplicates().agg("|".join, axis=1).head(50).tolist()
+            ) if not market_level_universe_coverage_reconciliation.empty else "",
             "matched_requires_actual_vs_fresh": True,
             "eod_actual_feature_lineage_policy": EOD_ACTUAL_FEATURE_LINEAGE_POLICY,
             "intraday_input_audit_universe_policy": INTRADAY_INPUT_AUDIT_UNIVERSE_POLICY,
@@ -7158,7 +7457,7 @@ def run(
             "leveraged_self_match_allowed": False,
             "legacy_global_blocks_used_anywhere_in_run": False,
             "legacy_global_blocks_used_for_market_level": False,
-            "market_level_gate_source": "decision_bucket_and_target_clock_gate_v1_1_14",
+            "market_level_gate_source": "decision_bucket_target_clock_and_coverage_v1_1_15",
         },
     }
 
@@ -7247,6 +7546,7 @@ def run(
     write_table(market_level_panel, out / "market_level_feature_panel_v1.csv")
     write_table(market_level_eod_universe, out / "market_level_eod_decision_universe_v1.csv")
     write_table(market_level_intraday_universe, out / "market_level_intraday_decision_universe_v1.csv")
+    write_table(market_level_decision_universe_integrity_audit, out / "market_level_decision_universe_integrity_audit_v1.csv")
     write_table(market_level_intraday_universe_gate, out / "market_level_intraday_universe_gate_audit_v1.csv")
     write_table(market_level_component_provenance, out / "market_level_component_provenance_status_v1.csv")
     write_table(market_level_integrity, out / "market_level_model_scope_integrity_v1.csv")
@@ -7332,6 +7632,7 @@ def run(
         "market_level_feature_panel_v1": out / "market_level_feature_panel_v1.csv",
         "market_level_eod_decision_universe_v1": out / "market_level_eod_decision_universe_v1.csv",
         "market_level_intraday_decision_universe_v1": out / "market_level_intraday_decision_universe_v1.csv",
+        "market_level_decision_universe_integrity_audit_v1": out / "market_level_decision_universe_integrity_audit_v1.csv",
         "market_level_intraday_universe_gate_audit_v1": out / "market_level_intraday_universe_gate_audit_v1.csv",
         "market_level_component_provenance_status_v1": out / "market_level_component_provenance_status_v1.csv",
         "market_level_model_scope_integrity_v1": out / "market_level_model_scope_integrity_v1.csv",
