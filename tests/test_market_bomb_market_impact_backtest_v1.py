@@ -995,7 +995,8 @@ def test_leveraged_etf_input_candidate_audit_has_aum_and_exact_bars(tmp_path: Pa
     ]).to_csv(bars_dir / "QQQ_5m.csv", index=False)
     universe, _ = m.build_market_level_intraday_universe_with_gate(tmp_path, m.rules(tmp_path))
     candidate, _, universe, _ = m.build_leveraged_etf_input_candidate_audits(tmp_path, m.rules(tmp_path), universe)
-    assert {"aum", "decision_bar_1530", "close_bar_1600"}.issubset(set(candidate["input_component"]))
+    assert {"aum", "decision_bar_1530"}.issubset(set(candidate["input_component"]))
+    assert "close_bar_1600" not in set(candidate["input_component"])
     assert "2026-01-16T20:25:00Z" not in set(candidate.get("actual_bar_timestamp_utc", pd.Series(dtype=str)).astype(str))
     assert not universe.empty
 
@@ -1291,6 +1292,46 @@ def _v119_base_market_panel(clock="EOD", target="QQQ"):
     }])
 
 
+def _eod_universe_from_panel(panel: pd.DataFrame) -> pd.DataFrame:
+    cols = ["target_market", "decision_date", "decision_timestamp_utc", "model_clock"]
+    universe = panel[[c for c in cols if c in panel.columns]].copy()
+    universe["model_clock"] = "EOD"
+    universe["decision_time_policy"] = "eod_regular_close_v1"
+    universe["decision_universe_policy"] = m.MARKET_LEVEL_EOD_UNIVERSE_POLICY
+    return m.ensure_columns(universe, m.MARKET_LEVEL_EOD_DECISION_UNIVERSE_COLUMNS)
+
+
+def _target_clock_gate_for_buckets(buckets: pd.DataFrame, status="valid", reason="") -> pd.DataFrame:
+    rows = []
+    if buckets.empty:
+        return pd.DataFrame(columns=m.MARKET_LEVEL_TARGET_CLOCK_GATE_COLUMNS)
+    for keys, group in buckets.groupby(["target_market", "model_clock", "model_scope", "outcome"], dropna=False):
+        target, clock, scope, outcome = keys
+        rows.append({
+            "target_market": target,
+            "model_clock": clock,
+            "model_scope": scope,
+            "outcome": outcome,
+            "target_clock_gate_status": status,
+            "target_clock_gate_reason": reason,
+            "candidate_decision_count": int(group["decision_timestamp_utc"].astype(str).nunique()),
+            "universe_gate_selected_invalid_count": int(status in {"selected_invalid", "audit_missing"}),
+            "universe_gate_unavailable_coverage_count": int(status == "unavailable_coverage"),
+        })
+    return pd.DataFrame(rows, columns=m.MARKET_LEVEL_TARGET_CLOCK_GATE_COLUMNS)
+
+
+def _bucket_for_panel(panel: pd.DataFrame, integrity: pd.DataFrame, base_cfg: dict) -> pd.DataFrame:
+    return m.build_market_level_decision_bucket_audit(
+        eod_decision_universe=_eod_universe_from_panel(panel[panel.get("model_clock", pd.Series(dtype=str)).astype(str).eq("EOD")]),
+        intraday_decision_universe=pd.DataFrame(columns=m.MARKET_LEVEL_INTRADAY_DECISION_UNIVERSE_COLUMNS),
+        market_level_panel=panel,
+        market_level_scope_integrity=integrity,
+        model_spec=m.market_level_model_spec(),
+        base_cfg=base_cfg,
+    )
+
+
 def _matched_cta_vol_parity(targets=("QQQ",), decision="2026-01-05T21:00:00Z"):
     return pd.DataFrame([
         {"target_market": target, "decision_timestamp_utc": decision, "required_source_family": family, "selection_parity_status": "matched"}
@@ -1472,7 +1513,9 @@ def test_v119_oos_counts_one_invalid_decision_once_for_multiple_invalid_componen
         {"target_market": "QQQ", "decision_timestamp_utc": "2026-01-05T21:00:00Z", "model_clock": "EOD", "model_scope": "B3", "required_component": "CTA", "scope_integrity_status": "selected_invalid"},
         {"target_market": "QQQ", "decision_timestamp_utc": "2026-01-05T21:00:00Z", "model_clock": "EOD", "model_scope": "B3", "required_component": "VolControl", "scope_integrity_status": "selected_invalid"},
     ])
-    _, _, _, metrics, _, _, _ = m.run_market_level_oos_backtest(panel, integrity, {"walk_forward": {"minimum_train_observations": 252}}, {"daily": [], "intraday": []})
+    buckets = _bucket_for_panel(panel, integrity, {"daily": [], "intraday": []})
+    gate = _target_clock_gate_for_buckets(buckets)
+    _, _, _, metrics, _, _, _ = m.run_market_level_oos_backtest(panel, buckets, gate, {"walk_forward": {"minimum_train_observations": 252}}, {"daily": [], "intraday": []})
     row = metrics[(metrics["target_market"] == "QQQ") & (metrics["model_scope"] == "B3") & (metrics["outcome"] == "next_session_return")].iloc[0]
     assert row["selected_invalid_exclusion_count"] == 1
 
@@ -1663,7 +1706,9 @@ def test_v110_oos_reconciliation_separates_all_exclusion_buckets():
         {"target_market": "QQQ", "decision_timestamp_utc": "2026-01-07T21:00:00Z", "model_clock": "EOD", "model_scope": "B0", "required_component": "baseline", "scope_integrity_status": "valid"},
         {"target_market": "QQQ", "decision_timestamp_utc": "2026-01-08T21:00:00Z", "model_clock": "EOD", "model_scope": "B0", "required_component": "baseline", "scope_integrity_status": "valid"},
     ])
-    _, _, _, metrics, _, _, _ = m.run_market_level_oos_backtest(panel, integrity, {"walk_forward": {"minimum_train_observations": 252}}, {"daily": ["prior_return_1d"], "intraday": []})
+    buckets = _bucket_for_panel(panel, integrity, {"daily": ["prior_return_1d"], "intraday": []})
+    gate = _target_clock_gate_for_buckets(buckets)
+    _, _, _, metrics, _, _, _ = m.run_market_level_oos_backtest(panel, buckets, gate, {"walk_forward": {"minimum_train_observations": 252}}, {"daily": ["prior_return_1d"], "intraday": []})
     row = metrics[(metrics["target_market"] == "QQQ") & (metrics["model_scope"] == "B0") & (metrics["outcome"] == "next_session_return")].iloc[0]
     assert row["selected_invalid_exclusion_count"] == 1
     assert row["scope_unavailable_coverage_exclusion_count"] == 1
@@ -1858,6 +1903,7 @@ def test_v113_target_clock_gate_blocks_oos_metrics_even_with_valid_bucket():
         "model_clock": "EOD",
         "model_scope": "B0",
         "outcome": "next_session_return",
+        "candidate_in_universe_flag": True,
         "bucket": "valid_included",
     }])
     gate = pd.DataFrame([{
@@ -1873,11 +1919,10 @@ def test_v113_target_clock_gate_blocks_oos_metrics_even_with_valid_bucket():
     }])
     _, _, _, metrics, _, _, _ = m.run_market_level_oos_backtest(
         panel,
-        integrity,
-        {"walk_forward": {"minimum_train_observations": 252}},
-        {"daily": ["prior_return_1d"], "intraday": []},
         bucket,
         gate,
+        {"walk_forward": {"minimum_train_observations": 252}},
+        {"daily": ["prior_return_1d"], "intraday": []},
     )
     row = metrics[(metrics["target_market"] == "QQQ") & (metrics["model_scope"] == "B0") & (metrics["outcome"] == "next_session_return")].iloc[0]
     assert row["result_status"] == "data_quality_blocked"
@@ -1935,6 +1980,107 @@ def test_v113_run_nonempty_actual_lineage_parity_and_bucket_fixture(tmp_path: Pa
     assert manifest["market_level_oos"]["leveraged_self_match_allowed"] is False
 
 
+def test_v114_universe_first_bucket_keeps_panel_missing_decision():
+    panel = _v119_base_market_panel("EOD", "QQQ")
+    panel["prior_return_1d"] = 0.0
+    universe = pd.DataFrame([
+        {"target_market": "QQQ", "decision_date": "2026-01-05", "decision_timestamp_utc": "2026-01-05T21:00:00Z", "model_clock": "EOD"},
+        {"target_market": "QQQ", "decision_date": "2026-01-06", "decision_timestamp_utc": "2026-01-06T21:00:00Z", "model_clock": "EOD"},
+    ])
+    integrity = pd.DataFrame([
+        {"target_market": "QQQ", "decision_timestamp_utc": "2026-01-05T21:00:00Z", "model_clock": "EOD", "model_scope": "B0", "required_component": "baseline", "scope_integrity_status": "valid"},
+        {"target_market": "QQQ", "decision_timestamp_utc": "2026-01-06T21:00:00Z", "model_clock": "EOD", "model_scope": "B0", "required_component": "baseline", "scope_integrity_status": "valid"},
+    ])
+    buckets = m.build_market_level_decision_bucket_audit(
+        eod_decision_universe=m.ensure_columns(universe, m.MARKET_LEVEL_EOD_DECISION_UNIVERSE_COLUMNS),
+        intraday_decision_universe=pd.DataFrame(columns=m.MARKET_LEVEL_INTRADAY_DECISION_UNIVERSE_COLUMNS),
+        market_level_panel=panel,
+        market_level_scope_integrity=integrity,
+        model_spec=m.market_level_model_spec(),
+        base_cfg={"daily": [], "intraday": []},
+    )
+    rows = buckets[(buckets["target_market"].eq("QQQ")) & (buckets["model_scope"].eq("B0")) & (buckets["outcome"].eq("next_session_return"))]
+    assert set(rows["decision_timestamp_utc"]) == {"2026-01-05T21:00:00Z", "2026-01-06T21:00:00Z"}
+    missing = rows[rows["decision_timestamp_utc"].eq("2026-01-06T21:00:00Z")].iloc[0]
+    assert missing["bucket"] == "feature_numeric_unavailable"
+    assert missing["panel_row_present"] is False or missing["panel_row_present"] == False
+
+
+def test_v114_missing_scope_integrity_is_selected_invalid_bucket():
+    panel = _v119_base_market_panel("EOD", "QQQ")
+    buckets = m.build_market_level_decision_bucket_audit(
+        eod_decision_universe=_eod_universe_from_panel(panel),
+        intraday_decision_universe=pd.DataFrame(columns=m.MARKET_LEVEL_INTRADAY_DECISION_UNIVERSE_COLUMNS),
+        market_level_panel=panel,
+        market_level_scope_integrity=pd.DataFrame(),
+        model_spec=m.market_level_model_spec(),
+        base_cfg={"daily": [], "intraday": []},
+    )
+    row = buckets[(buckets["target_market"].eq("QQQ")) & (buckets["model_scope"].eq("B0")) & (buckets["outcome"].eq("next_session_return"))].iloc[0]
+    assert row["bucket"] == "selected_invalid"
+    assert row["bucket_reason"] == "required_scope_integrity_audit_missing"
+
+
+def test_v114_oos_requires_bucket_and_gate_artifacts():
+    panel = _v119_base_market_panel("EOD", "QQQ")
+    gate = pd.DataFrame(columns=m.MARKET_LEVEL_TARGET_CLOCK_GATE_COLUMNS)
+    bucket = pd.DataFrame(columns=m.MARKET_LEVEL_DECISION_BUCKET_COLUMNS)
+    with pytest.raises(ValueError, match="decision bucket artifact required"):
+        m.run_market_level_oos_backtest(panel, None, gate, {}, {"daily": [], "intraday": []})
+    with pytest.raises(ValueError, match="target clock gate artifact required"):
+        m.run_market_level_oos_backtest(panel, bucket, None, {}, {"daily": [], "intraday": []})
+    with pytest.raises(ValueError, match="decision bucket artifact required"):
+        m.run_market_level_oos_backtest(panel, pd.DataFrame({"target_market": ["QQQ"]}), gate, {}, {"daily": [], "intraday": []})
+
+
+def test_v114_missing_target_clock_gate_row_fails_closed():
+    panel = _v119_base_market_panel("EOD", "QQQ")
+    panel["prior_return_1d"] = 0.0
+    integrity = pd.DataFrame([{"target_market": "QQQ", "decision_timestamp_utc": "2026-01-05T21:00:00Z", "model_clock": "EOD", "model_scope": "B0", "required_component": "baseline", "scope_integrity_status": "valid"}])
+    buckets = _bucket_for_panel(panel, integrity, {"daily": ["prior_return_1d"], "intraday": []})
+    gate = _target_clock_gate_for_buckets(buckets)
+    gate = gate[~((gate["target_market"].eq("QQQ")) & (gate["model_clock"].eq("EOD")) & (gate["model_scope"].eq("B0")) & (gate["outcome"].eq("next_session_return")))]
+    _, _, _, metrics, _, _, _ = m.run_market_level_oos_backtest(panel, buckets, gate, {}, {"daily": ["prior_return_1d"], "intraday": []})
+    row = metrics[(metrics["target_market"].eq("QQQ")) & (metrics["model_scope"].eq("B0")) & (metrics["outcome"].eq("next_session_return"))].iloc[0]
+    assert row["target_clock_gate_status"] == "audit_missing"
+    assert row["result_status"] == "data_quality_blocked"
+
+
+def test_v114_eod_parity_rejects_non_lineage_schema(tmp_path: Path):
+    selection_audit = pd.DataFrame([{
+        "target_market": "QQQ",
+        "decision_timestamp_utc": "2026-01-05T21:00:00Z",
+        "selection_status": "selected",
+        "primary_eligible": True,
+    }])
+    with pytest.raises(ValueError, match="eod actual feature lineage schema required"):
+        m.build_dealer_gamma_eod_actual_vs_fresh_parity_audit(tmp_path, selection_audit, m.rules(tmp_path))
+
+
+def test_v114_missing_1600_bar_is_outcome_unavailable_not_leveraged_input():
+    intraday_universe = pd.DataFrame([{
+        "target_market": "QQQ",
+        "decision_date": "2026-01-05",
+        "decision_timestamp_utc": "2026-01-05T20:30:00Z",
+        "model_clock": "INTRADAY",
+        "intraday_outcome_availability_status": "outcome_unavailable",
+        "intraday_outcome_availability_reason": "required_1530_or_1600_bar_missing",
+    }])
+    panel = _v119_base_market_panel("INTRADAY", "QQQ")
+    panel["aggregate_pressure_usd"] = 1.0
+    integrity = pd.DataFrame([{"target_market": "QQQ", "decision_timestamp_utc": "2026-01-05T20:30:00Z", "model_clock": "INTRADAY", "model_scope": "C1", "required_component": "LeveragedETF", "scope_integrity_status": "valid"}])
+    buckets = m.build_market_level_decision_bucket_audit(
+        eod_decision_universe=pd.DataFrame(columns=m.MARKET_LEVEL_EOD_DECISION_UNIVERSE_COLUMNS),
+        intraday_decision_universe=m.ensure_columns(intraday_universe, m.MARKET_LEVEL_INTRADAY_DECISION_UNIVERSE_COLUMNS),
+        market_level_panel=panel,
+        market_level_scope_integrity=integrity,
+        model_spec=m.market_level_model_spec(),
+        base_cfg={"daily": [], "intraday": []},
+    )
+    row = buckets[(buckets["target_market"].eq("QQQ")) & (buckets["model_scope"].eq("C1")) & (buckets["outcome"].eq("intraday_return_1530_to_close"))].iloc[0]
+    assert row["bucket"] == "outcome_unavailable"
+
+
 def test_v112_expiry_gamma_selection_uses_canonical_context():
     raw = _gamma_rows([{"source_row_identifier": "expiry-gamma-1", "net_gex_proxy": -3.0}])
     selected, audit = m.select_strict_gamma_snapshot_for_event(raw, "QQQ", pd.Timestamp("2026-01-05T20:30:00Z", tz="UTC"), m.rules(Path(".")))
@@ -1948,7 +2094,7 @@ def test_v111_decision_bucket_audit_assigns_exactly_one_bucket():
     panel = _v119_base_market_panel("EOD", "QQQ")
     panel["prior_return_1d"] = np.nan
     integrity = pd.DataFrame([{"target_market": "QQQ", "decision_timestamp_utc": "2026-01-05T21:00:00Z", "model_clock": "EOD", "model_scope": "B0", "required_component": "baseline", "scope_integrity_status": "valid"}])
-    buckets = m.build_market_level_decision_bucket_audit(panel, integrity, {"daily": ["prior_return_1d"], "intraday": []})
+    buckets = _bucket_for_panel(panel, integrity, {"daily": ["prior_return_1d"], "intraday": []})
     row = buckets[(buckets["target_market"].eq("QQQ")) & (buckets["model_scope"].eq("B0")) & (buckets["outcome"].eq("next_session_return"))].iloc[0]
     assert row["bucket"] == "feature_numeric_unavailable"
     assert buckets.groupby(["target_market", "decision_timestamp_utc", "model_clock", "model_scope", "outcome"]).size().max() == 1
