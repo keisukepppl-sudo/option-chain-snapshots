@@ -1,0 +1,76 @@
+{
+  "artifact_version": "market_fragility_score_v0_1",
+  "score_policy_revision": "predeclared_fragility_rubric_v0_1",
+  "score_decision_time_policy": "nyse_regular_session_close_plus_15_minutes_v0_1",
+  "component_weights": {
+    "trend_drawdown_stress": 20,
+    "realized_volatility_stress": 25,
+    "cta_deleveraging_proxy": 25,
+    "vol_control_deleveraging_proxy": 20,
+    "vix_term_structure_stress": 10
+  },
+  "core_components": [
+    "trend_drawdown_stress",
+    "realized_volatility_stress",
+    "cta_deleveraging_proxy",
+    "vol_control_deleveraging_proxy"
+  ],
+  "history_requirements": {
+    "ma20": 20,
+    "ma50": 50,
+    "ma200": 200,
+    "drawdown_63": 63,
+    "r20": 20,
+    "r60": 60,
+    "r120": 120,
+    "r252": 252,
+    "rv20_returns": 20,
+    "rv60_returns": 60,
+    "percentile_min": 126,
+    "percentile_max": 252
+  },
+  "trend_drawdown_weights": {
+    "below_ma20": 0.2,
+    "below_ma50": 0.25,
+    "below_ma200": 0.2,
+    "drawdown_63_over_10pct": 0.35
+  },
+  "realized_volatility_weights": {
+    "rv20_percentile_252": 0.7,
+    "rv_acceleration": 0.3
+  },
+  "cta_proxy_weights": {
+    "sell_impulse": 0.7,
+    "risk_off_state": 0.3
+  },
+  "vol_control_proxy_weights": {
+    "sell_impulse": 0.65,
+    "stress_state": 0.35
+  },
+  "vix_term_structure_weights_with_vix9d": {
+    "backwardation": 0.55,
+    "vix_percentile_252": 0.25,
+    "near_term_stress": 0.2
+  },
+  "vix_term_structure_weights_without_vix9d": {
+    "backwardation": 0.7,
+    "vix_percentile_252": 0.3
+  },
+  "market_aggregation_weights": {
+    "SPY": 0.55,
+    "QQQ": 0.45
+  },
+  "risk_state_bands": {
+    "Low": [0, 25],
+    "Moderate": [25, 50],
+    "Elevated": [50, 75],
+    "High": [75, 100.0000001]
+  },
+  "oos": {
+    "mode": "predeclared_walk_forward_descriptive_evaluation_v0_1",
+    "horizons": [5, 10],
+    "minimum_valid_observations_per_target": 100,
+    "minimum_non_empty_folds_per_target": 3,
+    "tail_multiplier": 1.5
+  }
+}

@@ -1,0 +1,27 @@
+{
+  "artifact_version": "market_fragility_score_v0_1_sources",
+  "input_mode": "local_timestamped_csv_only_default",
+  "network_download_default": false,
+  "daily_price_root": "market_bomb_history/fragility_score_v0/raw/daily_prices",
+  "volatility_index_root": "market_bomb_history/fragility_score_v0/raw/volatility_indices",
+  "required_market_tickers": ["SPY", "QQQ"],
+  "optional_tickers": ["SOXX", "VIX", "VIX3M", "VIX9D"],
+  "expected_files": {
+    "SPY": "daily_prices/SPY.csv",
+    "QQQ": "daily_prices/QQQ.csv",
+    "SOXX": "daily_prices/SOXX.csv",
+    "VIX": "volatility_indices/VIX.csv",
+    "VIX3M": "volatility_indices/VIX3M.csv",
+    "VIX9D": "volatility_indices/VIX9D.csv"
+  },
+  "allowed_column_aliases": {
+    "date": "session_date",
+    "adj_close": "close",
+    "adjusted_close": "close"
+  },
+  "score_decision_time_policy": "nyse_regular_session_close_plus_15_minutes_v0_1",
+  "availability_without_effective_timestamp": {
+    "availability_basis": "assumed_official_close_plus_15_minutes",
+    "availability_confidence": "medium"
+  }
+}
