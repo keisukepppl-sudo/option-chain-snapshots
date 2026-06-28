@@ -1,4 +1,4 @@
-# Fragility Data Release v0.2
+# Fragility Data Release v0.2.1
 
 This layer turns locally staged provider exports into an immutable, source-aware
 input release for `market_bomb_fragility_score_v0.py`. It does not change the
@@ -11,7 +11,10 @@ policy.
 - Default network download, scraping, or provider fetch is not allowed.
 - Raw provider exports are kept out of git.
 - A release is immutable once built.
+- `verify-release` validates only the release core manifest and receipt; it does
+  not depend on the staging directory after build.
 - Promotion to `active_release.json` is explicit and separate from build.
+- Runtime score executions are append-only under `executions/<execution_id>/`.
 - `actionization_allowed=false` remains enforced in release and run receipts.
 
 Ignored local paths:
@@ -170,26 +173,48 @@ source_file_inventory.csv
 source_schema_audit.csv
 source_coverage_audit.csv
 source_availability_policy_audit.csv
+source_timeliness_audit.csv
 source_terms_audit.csv
 source_cross_source_audit.csv
 release_quality_gate.csv
+preflight_fragility_outputs/
+release_content_manifest.json
 release_receipt.json
-fragility_outputs/
-fragility_real_history_oos_release_summary.md
+executions/
 ```
 
-`run-score` and `run-active-score` also write:
+`run-score` and `run-active-score` write each runtime run to a unique execution
+directory:
 
 ```text
-fragility_score_execution_receipt_v0.json
+executions/<execution_id>/fragility_outputs/
+executions/<execution_id>/execution_content_manifest.json
+executions/<execution_id>/fragility_score_execution_receipt_v0.json
+executions/<execution_id>/fragility_real_history_oos_release_summary.md
 ```
 
 ## Freshness And Promotion
 
-The release gate requires the latest completed NYSE session to be present for
-all required sources unless an explicit stale override is used. Stale releases
-can still be inspected as historical reconstructions, but they should not be
-presented as current market state.
+The release gate does not relax `minimum_required_start_date` to the first date
+available in the repository calendar. If the calendar contract cannot cover the
+policy start, the release is `data_quality_blocked` for official/current use.
+
+The release gate requires timely source rows. An explicit row timestamp later
+than the NYSE decision timestamp is not accepted into canonical input.
+
+The release gate distinguishes:
+
+```text
+valid_current
+valid_historical_but_stale
+data_quality_blocked
+```
+
+`valid_historical_but_stale` is inspectable historical research output only. It
+is not a current market state. `--allow-stale` is an explicit operator override,
+not an automatic fallback. A stale active release later at runtime is blocked by
+default and may only run with `run-active-score --allow-stale`, which emits a
+`STALE HISTORICAL RELEASE - NOT CURRENT MARKET STATE` warning.
 
 The builder uses the repository NYSE calendar. Historical row availability is
 based on source row timestamps when supplied; otherwise it is reconstructed as
@@ -200,4 +225,4 @@ NYSE regular close plus 15 minutes.
 This release layer is a data provenance and reproducibility gate. It does not
 authorize live trading, alerts, sizing, or scanner integration. Any downstream
 use must continue to treat the score as descriptive until a separate
-actionization review changes that policy.
+actionization review changes that policy. `actionization_allowed=false`.

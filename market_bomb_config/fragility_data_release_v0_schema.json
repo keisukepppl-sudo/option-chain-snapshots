@@ -1,5 +1,5 @@
 {
-  "artifact_version": "fragility_data_release_schema_v0_2",
+  "artifact_version": "fragility_data_release_schema_v0_2_1",
   "source_bundle_manifest_required_fields": [
     "bundle_version",
     "staging_id",
@@ -26,6 +26,20 @@
     "expected_schema_profile"
   ],
   "source_csv_required_columns": ["session_date", "close"],
+  "release_content_manifest_version": "fragility_release_content_manifest_v0_2_1",
+  "immutable_core_outputs": [
+    "canonical_input/**/*.csv",
+    "source_attestations.csv",
+    "source_file_inventory.csv",
+    "source_schema_audit.csv",
+    "source_coverage_audit.csv",
+    "source_availability_policy_audit.csv",
+    "source_timeliness_audit.csv",
+    "source_terms_audit.csv",
+    "source_cross_source_audit.csv",
+    "release_quality_gate.csv",
+    "preflight_fragility_outputs/**/*"
+  ],
   "allowed_column_aliases": {
     "date": "session_date",
     "adj_close": "adjusted_close",
