@@ -1,5 +1,5 @@
 {
-  "artifact_version": "market_fragility_score_v0_1_sources",
+  "artifact_version": "market_fragility_score_v0_1_1_sources",
   "input_mode": "local_timestamped_csv_only_default",
   "network_download_default": false,
   "daily_price_root": "market_bomb_history/fragility_score_v0/raw/daily_prices",

@@ -59,6 +59,12 @@ def _latest(out: Path) -> pd.DataFrame:
     return pd.read_csv(out / "fragility_score_latest_v0.csv")
 
 
+def _copy_fixture(tmp_path: Path, name: str = "raw") -> Path:
+    copied = tmp_path / name
+    shutil.copytree(FIXTURE / "raw", copied)
+    return copied
+
+
 @pytest.fixture(scope="session")
 def fixture_out(tmp_path_factory: pytest.TempPathFactory) -> Path:
     tmp = tmp_path_factory.mktemp("fragility_fixture_run")
@@ -407,3 +413,134 @@ def test_integration_oos_descriptive_only(fixture_out: Path) -> None:
 def test_integration_actionization_allowed_false(fixture_out: Path) -> None:
     manifest = json.loads((fixture_out / "fragility_score_manifest_v0.json").read_text())
     assert manifest["actionization_allowed"] is False
+
+
+def test_v011_new_artifacts_exist(fixture_out: Path) -> None:
+    required = [
+        "fragility_component_input_lineage_v0.csv",
+        "fragility_lookback_completeness_audit_v0.csv",
+        "fragility_as_of_request_audit_v0.csv",
+        "fragility_raw_reconciliation_audit_v0.csv",
+    ]
+    assert all((fixture_out / name).exists() for name in required)
+
+
+def test_v011_vix_lineage_high_and_not_price_timestamp(fixture_out: Path) -> None:
+    lineage = pd.read_csv(fixture_out / "fragility_component_input_lineage_v0.csv")
+    rows = lineage[(lineage["component_name"] == "vix_term_structure_stress") & (lineage["input_family"] == "VIX_REQUIRED") & (lineage["lineage_status"] == "valid")]
+    assert not rows.empty
+    assert set(rows["min_input_source_confidence"]) == {"High"}
+    assert rows["input_tickers"].str.contains("VIX,VIX3M", regex=False).all()
+    assert rows["input_source_path_or_provider_summary"].str.contains("fixture://VIX").all()
+
+
+def test_v011_policy_assumed_vix_blocks_high_total_confidence(tmp_path: Path) -> None:
+    copied = _copy_fixture(tmp_path, "raw_vix_assumed")
+    vix = pd.read_csv(copied / "volatility_indices" / "VIX.csv")
+    vix = vix.drop(columns=["effective_available_at_utc"])
+    vix.to_csv(copied / "volatility_indices" / "VIX.csv", index=False)
+    out = _run(tmp_path, copied)
+    comp = pd.read_csv(out / "fragility_component_scores_v0.csv")
+    vix_comp = comp[(comp["component_name"] == "vix_term_structure_stress") & (comp["component_status"] == "valid")]
+    assert "Medium" in set(vix_comp["source_confidence"])
+    latest = _latest(out)
+    assert "High" not in set(latest["confidence"])
+
+
+def test_v011_late_vix3m_makes_vix_unavailable_but_core_score_exists(tmp_path: Path) -> None:
+    copied = _copy_fixture(tmp_path, "raw_late_vix3m")
+    vix3m = pd.read_csv(copied / "volatility_indices" / "VIX3M.csv")
+    vix3m["effective_available_at_utc"] = "2026-01-01T00:00:00Z"
+    vix3m.to_csv(copied / "volatility_indices" / "VIX3M.csv", index=False)
+    out = _run(tmp_path, copied)
+    comp = pd.read_csv(out / "fragility_component_scores_v0.csv")
+    vix_comp = comp[comp["component_name"] == "vix_term_structure_stress"]
+    assert "unavailable_coverage" in set(vix_comp["component_status"])
+    nl = pd.read_csv(out / "fragility_score_no_lookahead_audit_v0.csv")
+    blocked = nl[(nl["component_name"] == "vix_term_structure_stress") & (nl["no_lookahead_status"] == "data_quality_blocked")]
+    assert not blocked.empty
+    latest = _latest(out)
+    spy = latest[latest["score_target"] == "SPY"].iloc[0]
+    assert spy["score_status"] == "valid"
+    assert spy["data_coverage_pct"] == 90
+
+
+def test_v011_vix9d_absent_base_formula_still_valid(tmp_path: Path) -> None:
+    copied = _copy_fixture(tmp_path, "raw_no_vix9d")
+    (copied / "volatility_indices" / "VIX9D.csv").unlink()
+    out = _run(tmp_path, copied)
+    comp = pd.read_csv(out / "fragility_component_scores_v0.csv")
+    latest_vix = comp[(comp["component_name"] == "vix_term_structure_stress") & (comp["component_status"] == "valid")]
+    assert not latest_vix.empty
+    assert "valid_without_vix9d" in set(latest_vix["component_reason"])
+
+
+def test_v011_exact_as_of_missing_spy_no_stale_fallback(tmp_path: Path) -> None:
+    copied = _copy_fixture(tmp_path, "raw_asof_missing")
+    spy = pd.read_csv(copied / "daily_prices" / "SPY.csv")
+    asof = spy.iloc[-1]["session_date"]
+    spy = spy.iloc[:-1]
+    spy.to_csv(copied / "daily_prices" / "SPY.csv", index=False)
+    out = _run(tmp_path, copied, as_of_date=asof)
+    latest = _latest(out)
+    market = latest[latest["score_target"] == "MARKET"].iloc[0]
+    assert market["session_date"] == asof
+    assert market["score_status"] == "requested_as_of_unavailable"
+    asof_audit = pd.read_csv(out / "fragility_as_of_request_audit_v0.csv")
+    assert "requested_as_of_unavailable" in set(asof_audit["as_of_resolution_status"])
+    blocked = asof_audit[asof_audit["score_target"].isin(["SPY", "MARKET"])]
+    assert not any(blocked["resolved_session_date"].fillna("").astype(str).str.len() > 0)
+
+
+def test_v011_strict_as_of_unavailable_exits_after_artifacts(tmp_path: Path) -> None:
+    copied = _copy_fixture(tmp_path, "raw_strict_asof")
+    spy = pd.read_csv(copied / "daily_prices" / "SPY.csv")
+    asof = spy.iloc[-1]["session_date"]
+    spy.iloc[:-1].to_csv(copied / "daily_prices" / "SPY.csv", index=False)
+    out = tmp_path / "strict_out"
+    with pytest.raises(SystemExit):
+        m.run(ROOT, copied, out, as_of_date=asof, strict=True)
+    assert (out / "fragility_as_of_request_audit_v0.csv").exists()
+    assert (out / "fragility_score_latest_v0.json").exists()
+
+
+def test_v011_missing_session_inside_ma200_blocks_trend(tmp_path: Path) -> None:
+    copied = _copy_fixture(tmp_path, "raw_missing_ma200")
+    spy = pd.read_csv(copied / "daily_prices" / "SPY.csv")
+    missing_date = spy.iloc[300]["session_date"]
+    spy = spy[spy["session_date"] != missing_date]
+    spy.to_csv(copied / "daily_prices" / "SPY.csv", index=False)
+    out = _run(tmp_path, copied)
+    audit = pd.read_csv(out / "fragility_lookback_completeness_audit_v0.csv")
+    blocked = audit[(audit["ticker"] == "SPY") & (audit["lookback_name"] == "ma200") & (audit["missing_calendar_session_dates"].astype(str).str.contains(str(missing_date), regex=False))]
+    assert not blocked.empty
+    assert "incomplete_ma200_window" in set(blocked["window_completeness_reason"])
+
+
+def test_v011_missing_future_session_oos_ineligible(tmp_path: Path) -> None:
+    copied = _copy_fixture(tmp_path, "raw_missing_future")
+    spy = pd.read_csv(copied / "daily_prices" / "SPY.csv")
+    missing_date = spy.iloc[360]["session_date"]
+    spy = spy[spy["session_date"] != missing_date]
+    spy.to_csv(copied / "daily_prices" / "SPY.csv", index=False)
+    out = _run(tmp_path, copied)
+    oos = pd.read_csv(out / "fragility_score_oos_panel_v0.csv")
+    assert oos["oos_reason"].astype(str).str.contains("future_outcome_calendar_session_missing").any()
+
+
+def test_v011_duplicate_reconciliation_invalidates_availability_and_canonical(tmp_path: Path) -> None:
+    cal = _calendar()
+    input_root = tmp_path / "raw_dup"
+    session = cal.iloc[0]["session_date"]
+    decision = cal.iloc[0]["decision_timestamp_utc"]
+    rows = [
+        {"session_date": session, "close": 100, "effective_available_at_utc": decision},
+        {"session_date": session, "close": 101, "effective_available_at_utc": decision},
+    ]
+    _write_csv(input_root / "daily_prices" / "SPY.csv", rows)
+    inventory, audit, availability, canonical = m.ingest_raw_sources(ROOT, input_root, cal)
+    recon = m.build_raw_reconciliation_audit(inventory, audit, availability, canonical)
+    assert canonical.empty
+    assert set(availability[availability["ticker"] == "SPY"]["availability_status"]) == {"selected_invalid"}
+    assert "duplicate_metadata_conflict" in set(audit[audit["ticker"] == "SPY"]["raw_input_reason"])
+    assert recon[recon["ticker"] == "SPY"].iloc[0]["raw_availability_canonical_reconciliation_status"] == "valid"
