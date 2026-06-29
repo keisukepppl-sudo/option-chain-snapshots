@@ -232,6 +232,78 @@ def _write_manifest(stage: Path, manifest: dict[str, object]) -> None:
     (stage / "source_bundle_manifest.json").write_text(json.dumps(manifest, indent=2), encoding="utf-8")
 
 
+def _phase1_aum_contract(start: str, n: int = 900) -> pd.DataFrame:
+    dates = pd.bdate_range(start, periods=n)
+    rows = []
+    for etf, base in [("TQQQ", 1_000_000_000.0), ("SQQQ", 700_000_000.0)]:
+        for i, date in enumerate(dates):
+            as_of = pd.Timestamp(date).tz_localize("UTC") + pd.Timedelta(hours=21)
+            rows.append(
+                {
+                    "source_row_id": f"AUM_{etf}_{i:03d}",
+                    "etf_instrument": etf,
+                    "as_of_timestamp": as_of.isoformat().replace("+00:00", "Z"),
+                    "available_at_timestamp": (as_of + pd.Timedelta(minutes=30)).isoformat().replace("+00:00", "Z"),
+                    "source_as_of_timestamp": as_of.isoformat().replace("+00:00", "Z"),
+                    "aum_usd": base + i * 1_000_000,
+                    "shares_outstanding": "",
+                    "nav_per_share": "",
+                    "currency": "USD",
+                    "publication_status": "published",
+                    "valid_until_timestamp": (as_of + pd.Timedelta(days=30)).isoformat().replace("+00:00", "Z"),
+                    "source_name": "unit_test_local_csv",
+                    "source_file": "leveraged_etf_aum.csv",
+                    "dataset_version": "unit_test_v1",
+                }
+            )
+    return pd.DataFrame(rows)
+
+
+def _stage_phase1(root: Path, staging_id: str = "fixture_phase1") -> tuple[Path, str]:
+    start = "2020-01-02"
+    n = 900
+    dates = pd.bdate_range(start, periods=n)
+    decision_time = (pd.Timestamp(dates[-1]).tz_localize("UTC") + pd.Timedelta(hours=22)).isoformat().replace("+00:00", "Z")
+    stage = m.staging_dir(root, staging_id)
+    (stage / "sources").mkdir(parents=True)
+    prices = pd.concat(
+        [
+            _daily_price_contract("QQQ", start=start, n=n, base=100, step=0.08),
+            _daily_price_contract("TQQQ", start=start, n=n, base=40, step=0.06),
+            _daily_price_contract("SQQQ", start=start, n=n, base=30, step=0.02),
+        ],
+        ignore_index=True,
+    )
+    files = [
+        ("prices_daily", "prices_daily", "sources/prices_daily.csv", "QQQ", "vol_control_deleveraging", prices),
+        ("leveraged_etf_reference", "leveraged_etf_reference", "sources/leveraged_etf_reference.csv", "TQQQ", "leveraged_etf_rebalance", _reference_contract()),
+        ("leveraged_etf_aum", "leveraged_etf_aum", "sources/leveraged_etf_aum.csv", "TQQQ", "leveraged_etf_rebalance", _phase1_aum_contract(start, n=n)),
+        ("vol_control_returns", "vol_control_returns", "sources/vol_control_returns.csv", "QQQ", "vol_control_deleveraging", _vol_returns_contract("QQQ", start=start, n=n)),
+    ]
+    sources = []
+    for source_id, dataset_type, rel, instrument, module, df in files:
+        sha = _write_csv(stage / rel, df)
+        source = _contract_source(source_id, dataset_type, rel, instrument, module, sha)
+        source["coverage_start_date"] = dates[0].strftime("%Y-%m-%d")
+        source["coverage_end_date"] = dates[-1].strftime("%Y-%m-%d")
+        sources.append(source)
+    manifest = {
+        "artifact_version": "flow_pressure_qqq_phase1_fixture",
+        "source_contract_version": "flow_provider_contract_v1",
+        "staging_id": staging_id,
+        "research_timing_class": "eod_next_session",
+        "decision_time_specification": {"type": "explicit_utc_timestamp", "decision_time": decision_time},
+        "operator_attestation": {"personal_research_only": True},
+        "leveraged_etf_universe": [
+            {"ticker": "TQQQ", "target": "QQQ", "leverage": 3.0},
+            {"ticker": "SQQQ", "target": "QQQ", "leverage": -3.0},
+        ],
+        "sources": sources,
+    }
+    (stage / "source_bundle_manifest.json").write_text(json.dumps(manifest, indent=2), encoding="utf-8")
+    return stage, decision_time
+
+
 def test_verify_flow_staging_dry_preflight_no_persistent_release(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     root = _root(tmp_path)
     _stage(root)
@@ -531,3 +603,128 @@ def test_real_data_study_blocks_ineligible_timing_before_release(tmp_path: Path)
     with pytest.raises(SystemExit, match="provider contract validation"):
         m.run_flow_real_data_study(root, "fixture_flow", FIXED_NOW, "eod_next_session")
     assert not m.releases_dir(root).exists()
+
+
+def test_qqq_phase1_readiness_valid_path_outputs_report_and_no_release(tmp_path: Path) -> None:
+    root = _root(tmp_path)
+    _stage_phase1(root)
+    _, decision_time = _stage_phase1(root, "fixture_phase1_valid")
+    result = m.run_qqq_phase1_readiness(root, "fixture_phase1_valid", decision_time, "eod_next_session")
+    out = m.qqq_phase1_readiness_dir(root, "fixture_phase1_valid")
+    assert result["readiness_status"] == "ready_for_eod_next_session_research"
+    for name in [
+        "provider_contract_validation_report.json",
+        "timing_audit.csv",
+        "timing_audit_summary.json",
+        "source_coverage_by_instrument.csv",
+        "source_coverage_by_dataset.csv",
+        "aum_selection_audit.csv",
+        "research_timing_eligibility_summary.md",
+        "real_data_readiness_report.md",
+        "readiness_content_manifest.json",
+    ]:
+        assert (out / name).exists()
+    report = (out / "real_data_readiness_report.md").read_text(encoding="utf-8")
+    assert "This report validates data readiness only." in report
+    assert "does not run a backtest" in report
+    assert m.verify_qqq_phase1_readiness(root, "fixture_phase1_valid")["status"] == "valid"
+    assert not m.releases_dir(root).exists()
+
+
+def test_qqq_phase1_missing_tqqq_mapping_blocks_mapping(tmp_path: Path) -> None:
+    root = _root(tmp_path)
+    stage, decision_time = _stage_phase1(root)
+    ref_source = next(s for s in _manifest(stage)["sources"] if s["dataset_type"] == "leveraged_etf_reference")
+    path = stage / ref_source["relative_path"]
+    refs = pd.read_csv(path)
+    refs = refs[refs["etf_instrument"] != "TQQQ"]
+    refs.to_csv(path, index=False)
+    manifest = _manifest(stage)
+    next(s for s in manifest["sources"] if s["dataset_type"] == "leveraged_etf_reference")["content_sha256"] = m.file_sha256(path)
+    _write_manifest(stage, manifest)
+    result = m.run_qqq_phase1_readiness(root, "fixture_phase1", decision_time, "eod_next_session")
+    assert result["readiness_status"] == "blocked_by_mapping"
+    component = pd.read_csv(m.qqq_phase1_readiness_dir(root, "fixture_phase1") / "qqq_phase1_component_status.csv")
+    assert "blocked_by_mapping" in set(component["Status"])
+    assert not m.releases_dir(root).exists()
+
+
+def test_qqq_phase1_stale_aum_blocks_timing(tmp_path: Path) -> None:
+    root = _root(tmp_path)
+    stage, decision_time = _stage_phase1(root)
+    manifest = _manifest(stage)
+    aum_source = next(s for s in manifest["sources"] if s["dataset_type"] == "leveraged_etf_aum")
+    path = stage / aum_source["relative_path"]
+    aum = pd.read_csv(path)
+    aum["valid_until_timestamp"] = "2020-01-10T21:00:00Z"
+    aum.to_csv(path, index=False)
+    aum_source["content_sha256"] = m.file_sha256(path)
+    _write_manifest(stage, manifest)
+    result = m.run_qqq_phase1_readiness(root, "fixture_phase1", decision_time, "eod_next_session")
+    assert result["readiness_status"] == "blocked_by_timing"
+    aum_summary = pd.read_csv(m.qqq_phase1_readiness_dir(root, "fixture_phase1") / "aum_freshness_summary.csv")
+    assert set(aum_summary["aum_freshness_status"]) == {"blocked"}
+    assert not m.releases_dir(root).exists()
+
+
+def test_qqq_phase1_invalid_ohlc_blocks_data_quality(tmp_path: Path) -> None:
+    root = _root(tmp_path)
+    stage, decision_time = _stage_phase1(root)
+    manifest = _manifest(stage)
+    price_source = next(s for s in manifest["sources"] if s["dataset_type"] == "prices_daily")
+    path = stage / price_source["relative_path"]
+    prices = pd.read_csv(path)
+    prices.loc[0, "high"] = prices.loc[0, "low"] - 1
+    prices.to_csv(path, index=False)
+    price_source["content_sha256"] = m.file_sha256(path)
+    _write_manifest(stage, manifest)
+    result = m.run_qqq_phase1_readiness(root, "fixture_phase1", decision_time, "eod_next_session")
+    assert result["readiness_status"] == "blocked_by_data_quality"
+    validation = json.loads((m.qqq_phase1_readiness_dir(root, "fixture_phase1") / "provider_contract_validation_report.json").read_text(encoding="utf-8"))
+    assert any(row["code"] == "invalid_ohlc_ordering" for row in validation["diagnostics"])
+
+
+def test_qqq_phase1_short_return_history_is_insufficient_coverage(tmp_path: Path) -> None:
+    root = _root(tmp_path)
+    stage, decision_time = _stage_phase1(root)
+    manifest = _manifest(stage)
+    ret_source = next(s for s in manifest["sources"] if s["dataset_type"] == "vol_control_returns")
+    path = stage / ret_source["relative_path"]
+    returns = pd.read_csv(path).iloc[:30]
+    returns.to_csv(path, index=False)
+    ret_source["content_sha256"] = m.file_sha256(path)
+    _write_manifest(stage, manifest)
+    result = m.run_qqq_phase1_readiness(root, "fixture_phase1", decision_time, "eod_next_session")
+    assert result["readiness_status"] == "insufficient_coverage"
+    component = pd.read_csv(m.qqq_phase1_readiness_dir(root, "fixture_phase1") / "qqq_phase1_component_status.csv")
+    row = component[component["Component"].eq("QQQ vol-control returns")].iloc[0]
+    assert row["Status"] == "insufficient_coverage"
+
+
+def test_qqq_phase1_aum_shares_nav_disagreement_is_surfaced(tmp_path: Path) -> None:
+    root = _root(tmp_path)
+    stage, decision_time = _stage_phase1(root)
+    manifest = _manifest(stage)
+    aum_source = next(s for s in manifest["sources"] if s["dataset_type"] == "leveraged_etf_aum")
+    path = stage / aum_source["relative_path"]
+    aum = pd.read_csv(path)
+    aum.loc[0, "shares_outstanding"] = 10
+    aum.loc[0, "nav_per_share"] = 1
+    aum.to_csv(path, index=False)
+    aum_source["content_sha256"] = m.file_sha256(path)
+    _write_manifest(stage, manifest)
+    result = m.run_qqq_phase1_readiness(root, "fixture_phase1", decision_time, "eod_next_session")
+    assert result["readiness_status"] == "ready_for_eod_next_session_research"
+    validation = json.loads((m.qqq_phase1_readiness_dir(root, "fixture_phase1") / "provider_contract_validation_report.json").read_text(encoding="utf-8"))
+    assert any(row["code"] == "aum_shares_nav_disagreement" and row["status"] == "warning" for row in validation["diagnostics"])
+
+
+def test_qqq_phase1_readiness_manifest_detects_tamper(tmp_path: Path) -> None:
+    root = _root(tmp_path)
+    _, decision_time = _stage_phase1(root)
+    m.run_qqq_phase1_readiness(root, "fixture_phase1", decision_time, "eod_next_session")
+    out = m.qqq_phase1_readiness_dir(root, "fixture_phase1")
+    report = out / "real_data_readiness_report.md"
+    report.write_text(report.read_text(encoding="utf-8") + "\n", encoding="utf-8")
+    with pytest.raises(SystemExit, match="readiness artifact sha mismatch"):
+        m.verify_qqq_phase1_readiness(root, "fixture_phase1")

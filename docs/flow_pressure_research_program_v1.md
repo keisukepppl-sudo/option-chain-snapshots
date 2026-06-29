@@ -74,3 +74,14 @@ python -m pytest -q
 ```
 
 Phase 1 must keep real provider data local-only. It may add readiness templates, validation, timing audit, coverage reports, and operator documentation, but it must not fetch provider data or claim a real-data result when no valid local real data exists.
+
+## Phase 1 QQQ Readiness
+
+Phase 1 adds a readiness-only workflow for QQQ/TQQQ/SQQQ:
+
+```powershell
+python market_bomb_flow_pressure_research_v0.py run-qqq-phase1-readiness --staging-id <opaque_staging_id> --decision-time-utc <utc> --research-timing-class eod_next_session
+python market_bomb_flow_pressure_research_v0.py verify-qqq-phase1-readiness --staging-id <opaque_staging_id>
+```
+
+The workflow writes `real_data_readiness_report.md` and related CSV/JSON audits under the staging directory. It does not build a release, run a real-data study, run a statistical backtest, alter Fragility Score, or create trading/notification behavior.

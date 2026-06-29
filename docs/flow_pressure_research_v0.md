@@ -37,6 +37,8 @@ python market_bomb_flow_pressure_research_v0.py build-flow-staging-template --st
 python market_bomb_flow_pressure_research_v0.py validate-flow-provider-contract --staging-id fixture_flow --decision-time-utc 2020-02-20T22:00:00Z --research-timing-class eod_next_session
 python market_bomb_flow_pressure_research_v0.py audit-flow-timing --staging-id fixture_flow --decision-time-utc 2020-02-20T22:00:00Z --research-timing-class eod_next_session
 python market_bomb_flow_pressure_research_v0.py inspect-flow-source-coverage --staging-id fixture_flow --decision-time-utc 2020-02-20T22:00:00Z --research-timing-class eod_next_session
+python market_bomb_flow_pressure_research_v0.py run-qqq-phase1-readiness --staging-id fixture_flow --decision-time-utc 2020-02-20T22:00:00Z --research-timing-class eod_next_session
+python market_bomb_flow_pressure_research_v0.py verify-qqq-phase1-readiness --staging-id fixture_flow
 python market_bomb_flow_pressure_research_v0.py verify-flow-staging --staging-id fixture_flow --now-utc 2020-02-20T22:00:00Z --research-timing-class eod_next_session
 python market_bomb_flow_pressure_research_v0.py build-flow-release --staging-id fixture_flow --now-utc 2020-02-20T22:00:00Z --research-timing-class eod_next_session
 python market_bomb_flow_pressure_research_v0.py verify-flow-release --release-id <release_id>
@@ -206,7 +208,8 @@ If no row qualifies, the feature is `insufficient_coverage`.
 7. Run `validate-flow-provider-contract`.
 8. Run `audit-flow-timing`.
 9. Run `inspect-flow-source-coverage`.
-10. Only then build a research release.
+10. For QQQ/TQQQ/SQQQ Phase 1, run `run-qqq-phase1-readiness` and inspect `real_data_readiness_report.md`.
+11. Only build a research release after a separate later-phase instruction.
 
 ## Known Limits
 

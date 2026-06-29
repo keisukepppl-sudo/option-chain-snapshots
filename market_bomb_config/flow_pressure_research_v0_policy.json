@@ -26,6 +26,9 @@
   "vol_control_max_exposure": 1.0,
   "vol_control_exposure_floor": 0.0,
   "max_aum_observation_age_days": 3,
+  "phase1_minimum_coverage_years": 3,
+  "phase1_preferred_coverage_years": 5,
+  "phase1_minimum_eligible_sessions_after_warmup": 250,
   "return_consistency_tolerance": 0.0005,
   "backtest_forward_days": [
     1,

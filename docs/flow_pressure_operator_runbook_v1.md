@@ -14,8 +14,9 @@ Codex must not fetch provider data, scrape websites, use browser automation, use
 6. Validate the provider contract.
 7. Audit timing availability.
 8. Inspect source coverage.
-9. Correct errors only by obtaining a correct export. Do not interpolate, forward-fill, or guess missing values.
-10. Build a sealed release only after every readiness gate passes.
+9. Run the QQQ/TQQQ/SQQQ Phase 1 readiness report when the staged family is QQQ.
+10. Correct errors only by obtaining a correct export. Do not interpolate, forward-fill, or guess missing values.
+11. Stop at readiness unless a separate Phase 2 instruction explicitly authorizes release/study work.
 
 ## Required Staging Layout
 
@@ -49,6 +50,15 @@ research_timing_eligibility_summary.md
 real_data_readiness_report.md
 ```
 
+For QQQ/TQQQ/SQQQ, run:
+
+```powershell
+python market_bomb_flow_pressure_research_v0.py run-qqq-phase1-readiness --staging-id <opaque_staging_id> --decision-time-utc <utc> --research-timing-class eod_next_session
+python market_bomb_flow_pressure_research_v0.py verify-qqq-phase1-readiness --staging-id <opaque_staging_id>
+```
+
+This writes readiness artifacts under the staging directory and does not create a release.
+
 ## Operator Rules
 
 - Use `QQQ/TQQQ/SQQQ` as the required first family.
@@ -72,3 +82,5 @@ no_reliable_evidence
 ```
 
 Do not lower coverage, timing, or data-quality standards to force a study result.
+
+Do not run `build-flow-release`, `run-flow-real-data-study`, or `run-flow-statistical-backtest` during Phase 1.

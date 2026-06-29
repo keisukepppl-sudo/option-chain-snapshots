@@ -24,10 +24,30 @@ METHODOLOGY_VERSION = "flow_pressure_methodology_v0_0_1"
 SOURCE_CONTRACT_VERSION = "flow_provider_contract_v1"
 BACKTEST_SPEC_VERSION = "flow_pressure_backtest_spec_v0_0_2"
 REAL_DATA_STUDY_VERSION = "flow_pressure_real_data_study_v1"
+QQQ_PHASE1_READINESS_VERSION = "flow_pressure_qqq_phase1_readiness_v1"
 ACTIONIZATION_ALLOWED = False
 SUPPORTED_MODULES = {"leveraged_etf_rebalance", "vol_control_deleveraging", "cta_trend_flow", "dealer_gamma_regime"}
 IMPLEMENTED_MODULES = {"leveraged_etf_rebalance", "vol_control_deleveraging"}
 TIMING_CLASSES = {"eod_next_session", "eod_after_close", "intraday_close_window", "historical_descriptive_only"}
+QQQ_PHASE1_UNIVERSE = {
+    "underlying": "QQQ",
+    "long_etf": "TQQQ",
+    "inverse_etf": "SQQQ",
+}
+QQQ_PHASE1_REQUIRED_DATASETS = {
+    "prices_daily",
+    "leveraged_etf_reference",
+    "leveraged_etf_aum",
+    "vol_control_returns",
+}
+READINESS_STATUSES = {
+    "ready_for_eod_next_session_research",
+    "insufficient_coverage",
+    "blocked_by_data_quality",
+    "blocked_by_timing",
+    "blocked_by_mapping",
+    "historical_descriptive_only",
+}
 CONTRACT_DATASET_TYPES = {
     "prices_daily",
     "prices_intraday",
@@ -505,6 +525,11 @@ def validate_contract_rows(root: Path, staging_id: str, source: dict[str, Any], 
             nav = finite_number(row.get("nav_per_share"))
             if not np.isfinite(aum) and not (np.isfinite(shares) and np.isfinite(nav)):
                 diagnostics.append(report_row("blocked", "missing_aum_or_shares_nav", "AUM row needs aum_usd or shares_outstanding and nav_per_share", source_id, dataset_type, source_row_id))
+            if np.isfinite(aum) and np.isfinite(shares) and np.isfinite(nav):
+                implied = shares * nav
+                tolerance = max(abs(aum), abs(implied), 1.0) * 0.01
+                if abs(aum - implied) > tolerance:
+                    diagnostics.append(report_row("warning", "aum_shares_nav_disagreement", "aum_usd differs from shares_outstanding * nav_per_share by more than 1%", source_id, dataset_type, source_row_id))
         if dataset_type == "leveraged_etf_reference":
             lev = finite_number(row.get("target_leverage"))
             if not np.isfinite(lev) or lev == 0:
@@ -516,6 +541,21 @@ def validate_contract_rows(root: Path, staging_id: str, source: dict[str, Any], 
             log_return = finite_number(row.get("log_return"))
             if not np.isfinite(simple_return) and not np.isfinite(log_return):
                 diagnostics.append(report_row("blocked", "missing_return", "simple_return or log_return must be finite", source_id, dataset_type, source_row_id))
+        if dataset_type == "prices_daily":
+            open_px = finite_number(row.get("open"))
+            high_px = finite_number(row.get("high"))
+            low_px = finite_number(row.get("low"))
+            close_px = finite_number(row.get("close"))
+            adjusted_close = finite_number(row.get("adjusted_close"))
+            volume = finite_number(row.get("volume"))
+            if not all(np.isfinite(x) and x > 0 for x in [open_px, high_px, low_px, close_px]):
+                diagnostics.append(report_row("blocked", "invalid_daily_price", "daily OHLC prices must be finite and positive", source_id, dataset_type, source_row_id))
+            if np.isfinite(adjusted_close) and adjusted_close <= 0:
+                diagnostics.append(report_row("blocked", "invalid_adjusted_close", "adjusted_close must be positive when supplied", source_id, dataset_type, source_row_id))
+            if np.isfinite(volume) and volume < 0:
+                diagnostics.append(report_row("blocked", "invalid_volume", "volume must be non-negative", source_id, dataset_type, source_row_id))
+            if all(np.isfinite(x) for x in [open_px, high_px, low_px, close_px]) and not (low_px <= min(open_px, high_px, close_px) and high_px >= max(open_px, low_px, close_px)):
+                diagnostics.append(report_row("blocked", "invalid_ohlc_ordering", "daily OHLC ordering must satisfy low <= open/high/close and high >= open/low/close", source_id, dataset_type, source_row_id))
         if dataset_type == "prices_intraday":
             interval = finite_number(row.get("bar_interval_seconds"))
             if not np.isfinite(interval) or interval <= 0:
@@ -670,6 +710,13 @@ def validate_flow_provider_contract(root: Path, staging_id: str, decision_time_u
 
 def cross_file_contract_diagnostics(canonical: pd.DataFrame, timing_class: str, decision_time: pd.Timestamp, root: Path) -> list[dict[str, Any]]:
     diagnostics: list[dict[str, Any]] = []
+    prices = canonical[canonical["dataset_type"] == "prices_daily"].copy()
+    if not prices.empty:
+        prices["daily_price_basis_used"] = np.where(pd.to_numeric(prices["close"], errors="coerce").notna(), "adjusted_close_or_close", "missing")
+        for instrument, group in prices.groupby("instrument"):
+            adjusted_present = pd.to_numeric(group.get("close"), errors="coerce").notna()
+            if adjusted_present.nunique(dropna=True) > 1:
+                diagnostics.append(report_row("blocked", "mixed_daily_price_basis", "daily price basis must not mix adjusted and unadjusted rows inside one instrument series", "", "prices_daily", str(instrument)))
     refs = canonical[canonical["dataset_type"] == "leveraged_etf_reference"].copy()
     if not refs.empty:
         refs["start"] = pd.to_datetime(refs["effective_start_timestamp"], utc=True, errors="coerce")
@@ -689,6 +736,12 @@ def cross_file_contract_diagnostics(canonical: pd.DataFrame, timing_class: str, 
         for instrument, count in basis.items():
             if count > 1:
                 diagnostics.append(report_row("blocked", "mixed_price_basis", "only one explicit price_basis is permitted per return series", "", "vol_control_returns", str(instrument)))
+        work = returns.copy()
+        work["return_value_basis"] = np.where(pd.to_numeric(work["simple_return"], errors="coerce").notna(), "simple_return", "log_return")
+        value_basis = work.groupby("instrument")["return_value_basis"].nunique(dropna=True)
+        for instrument, count in value_basis.items():
+            if count > 1:
+                diagnostics.append(report_row("blocked", "mixed_return_value_basis", "simple_return and log_return must not be mixed inside one return series", "", "vol_control_returns", str(instrument)))
     if timing_class == "intraday_close_window":
         intraday = canonical[(canonical["dataset_type"] == "prices_intraday") & (canonical["timing_status"] == "timing_eligible")]
         if intraday.empty:
@@ -1462,6 +1515,421 @@ def aum_selection_audit(features: pd.DataFrame) -> pd.DataFrame:
         if col not in lev.columns:
             lev[col] = ""
     return lev[cols].drop_duplicates().reset_index(drop=True)
+
+
+def qqq_phase1_readiness_dir(root: Path, staging_id: str) -> Path:
+    return staging_dir(root, staging_id) / "readiness" / "qqq_tqqq_sqqq_phase1"
+
+
+def collect_contract_artifacts(root: Path, staging_id: str, decision_time_utc: str, research_timing_class: str) -> tuple[dict[str, Any], list[dict[str, Any]], pd.DataFrame, dict[str, Any]]:
+    manifest = load_staging_manifest(root, staging_id)
+    sources = manifest.get("sources", [])
+    validation = validate_flow_provider_contract(root, staging_id, decision_time_utc, research_timing_class)
+    frames = []
+    for source in sources if isinstance(sources, list) else []:
+        try:
+            canonical, _ = validate_contract_rows(root, staging_id, source, parse_decision_time(decision_time_utc), research_timing_class)
+            if canonical is not None and not canonical.empty:
+                frames.append(canonical)
+        except SystemExit:
+            continue
+    canonical = pd.concat(frames, ignore_index=True) if frames else pd.DataFrame()
+    return manifest, sources if isinstance(sources, list) else [], canonical, validation
+
+
+def qqq_phase1_policy(root: Path) -> dict[str, Any]:
+    p = policy(root)
+    return {
+        "minimum_coverage_years": int(p.get("phase1_minimum_coverage_years", 3)),
+        "preferred_coverage_years": int(p.get("phase1_preferred_coverage_years", 5)),
+        "minimum_eligible_sessions_after_warmup": int(p.get("phase1_minimum_eligible_sessions_after_warmup", 250)),
+        "max_aum_observation_age_days": float(p.get("max_aum_observation_age_days", 3)),
+        "warmup_sessions": max([int(x) for x in p.get("vol_control_windows", [20])] + [20]),
+    }
+
+
+def _instrument_rows(canonical: pd.DataFrame, dataset_type: str, instrument: str) -> pd.DataFrame:
+    if canonical.empty:
+        return canonical.copy()
+    col = "etf_instrument" if dataset_type in {"leveraged_etf_reference", "leveraged_etf_aum"} else "instrument"
+    return canonical[(canonical["dataset_type"].astype(str) == dataset_type) & (canonical[col].astype(str).str.upper() == instrument)].copy()
+
+
+def _coverage_metrics(rows: pd.DataFrame, warmup_sessions: int = 0) -> dict[str, Any]:
+    if rows.empty:
+        return {
+            "observed_rows": 0,
+            "timing_eligible_rows": 0,
+            "eligible_sessions_after_warmup": 0,
+            "coverage_start": "",
+            "coverage_end": "",
+            "coverage_years": 0.0,
+            "gap_count": 0,
+        }
+    work = rows.copy()
+    work["market_dt"] = pd.to_datetime(work.get("market_timestamp"), utc=True, errors="coerce")
+    eligible = work[work["timing_status"].astype(str).eq("timing_eligible")].copy()
+    dates = pd.to_datetime(eligible["market_dt"], utc=True, errors="coerce").dt.date.dropna().drop_duplicates()
+    start = work["market_dt"].min()
+    end = work["market_dt"].max()
+    gap_count = 0
+    if len(dates) >= 2:
+        business = pd.bdate_range(min(dates), max(dates))
+        gap_count = max(0, len(set(business.date) - set(dates)))
+    span_days = (end - start).days if pd.notna(start) and pd.notna(end) else 0
+    return {
+        "observed_rows": int(len(work)),
+        "timing_eligible_rows": int(len(eligible)),
+        "eligible_sessions_after_warmup": int(max(0, len(dates) - warmup_sessions)),
+        "coverage_start": iso_utc(start) if pd.notna(start) else "",
+        "coverage_end": iso_utc(end) if pd.notna(end) else "",
+        "coverage_years": round(span_days / 365.25, 4) if span_days else 0.0,
+        "gap_count": int(gap_count),
+    }
+
+
+def _component_status(coverage_ok: bool, timing_ok: bool, mapping_ok: bool = True, aum_ok: bool = True, blocked_reason: str = "") -> tuple[str, str]:
+    if blocked_reason:
+        return "blocked_by_data_quality", blocked_reason
+    if not mapping_ok:
+        return "blocked_by_mapping", "mapping_invalid_or_unavailable"
+    if not timing_ok:
+        return "blocked_by_timing", "required_rows_not_timing_eligible"
+    if not aum_ok:
+        return "blocked_by_timing", "no_fresh_timing_valid_aum"
+    if not coverage_ok:
+        return "insufficient_coverage", "minimum_coverage_or_session_threshold_not_met"
+    return "ready_for_eod_next_session_research", "valid"
+
+
+def qqq_mapping_audit(canonical: pd.DataFrame, validation: dict[str, Any]) -> pd.DataFrame:
+    rows = []
+    refs = canonical[canonical.get("dataset_type", pd.Series(dtype=str)).astype(str).eq("leveraged_etf_reference")].copy() if not canonical.empty else pd.DataFrame()
+    overlap_block = any(str(row.get("code")) == "overlapping_reference_mapping" for row in validation.get("diagnostics", []))
+    for etf, expected_direction, expected_sign in [("TQQQ", "long", 1), ("SQQQ", "inverse", -1)]:
+        group = refs[(refs["etf_instrument"].astype(str).str.upper() == etf) & (refs["underlying_instrument"].astype(str).str.upper() == "QQQ")].copy() if not refs.empty else pd.DataFrame()
+        eligible = group[group["timing_status"].astype(str).eq("timing_eligible")].copy() if not group.empty else pd.DataFrame()
+        if eligible.empty:
+            status = "blocked_by_mapping"
+            reason = "missing_or_timing_ineligible_mapping"
+            selected = pd.Series(dtype=object)
+        else:
+            selected = eligible.sort_values("effective_start_timestamp").iloc[-1]
+            lev = finite_number(selected.get("target_leverage"))
+            direction = str(selected.get("directionality", "")).lower()
+            sign_ok = np.isfinite(lev) and ((expected_sign > 0 and lev > 0) or (expected_sign < 0 and lev < 0)) and direction == expected_direction
+            status = "valid" if sign_ok and not overlap_block else "blocked_by_mapping"
+            reason = "valid" if status == "valid" else "directionality_or_overlap_invalid"
+        rows.append(
+            {
+                "etf_instrument": etf,
+                "required_underlying": "QQQ",
+                "required_directionality": expected_direction,
+                "selected_source_row_id": selected.get("source_row_id", "") if not selected.empty else "",
+                "target_leverage": selected.get("target_leverage", "") if not selected.empty else "",
+                "directionality": selected.get("directionality", "") if not selected.empty else "",
+                "mapping_timing_status": selected.get("timing_status", "") if not selected.empty else "",
+                "mapping_status": status,
+                "mapping_reason": reason,
+            }
+        )
+    return pd.DataFrame(rows)
+
+
+def qqq_aum_freshness_summary(canonical: pd.DataFrame, decision_time: pd.Timestamp) -> pd.DataFrame:
+    rows = []
+    aum = canonical[canonical.get("dataset_type", pd.Series(dtype=str)).astype(str).eq("leveraged_etf_aum")].copy() if not canonical.empty else pd.DataFrame()
+    for etf in ["TQQQ", "SQQQ"]:
+        group = aum[aum["etf_instrument"].astype(str).str.upper().eq(etf)].copy() if not aum.empty else pd.DataFrame()
+        if group.empty:
+            rows.append({"etf_instrument": etf, "observed_rows": 0, "eligible_rows": 0, "stale_rows": 0, "missing_validity_rows": 0, "latest_age_days": "", "aum_freshness_status": "blocked", "aum_freshness_reason": "missing_aum_rows"})
+            continue
+        group["available_dt"] = pd.to_datetime(group["available_at"], utc=True, errors="coerce")
+        group["age_days"] = (decision_time - group["available_dt"]).dt.total_seconds() / 86400
+        eligible = group[group["timing_status"].astype(str).eq("timing_eligible")].copy()
+        rows.append(
+            {
+                "etf_instrument": etf,
+                "observed_rows": int(len(group)),
+                "eligible_rows": int(len(eligible)),
+                "stale_rows": int(group["timing_reason"].astype(str).eq("stale_observation").sum()),
+                "missing_validity_rows": int(group["timing_reason"].astype(str).eq("missing_validity_window").sum()),
+                "latest_age_days": round(float(eligible["age_days"].min()), 4) if not eligible.empty and eligible["age_days"].notna().any() else "",
+                "aum_freshness_status": "valid" if not eligible.empty else "blocked",
+                "aum_freshness_reason": "valid" if not eligible.empty else "no_timing_valid_fresh_aum",
+            }
+        )
+    return pd.DataFrame(rows)
+
+
+def qqq_phase1_component_table(root: Path, canonical: pd.DataFrame, validation: dict[str, Any], timing_audit: pd.DataFrame) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
+    pol = qqq_phase1_policy(root)
+    decision_time = parse_utc_ts(validation.get("decision_time"), "decision_time")
+    mapping = qqq_mapping_audit(canonical, validation)
+    aum_summary = qqq_aum_freshness_summary(canonical, decision_time)
+    validation_codes = {str(row.get("code")) for row in validation.get("diagnostics", []) if row.get("status") == "blocked"}
+    data_quality_codes = validation_codes - {"available_after_decision_time", "overlapping_reference_mapping"}
+    components = []
+    specs = [
+        ("QQQ daily prices", "prices_daily", "QQQ", "yes", "n/a", "n/a", True),
+        ("TQQQ daily prices", "prices_daily", "TQQQ", "yes", "TQQQ", "n/a", True),
+        ("SQQQ daily prices", "prices_daily", "SQQQ", "yes", "SQQQ", "n/a", True),
+        ("TQQQ AUM", "leveraged_etf_aum", "TQQQ", "yes", "n/a", "TQQQ", False),
+        ("SQQQ AUM", "leveraged_etf_aum", "SQQQ", "yes", "n/a", "SQQQ", False),
+        ("QQQ vol-control returns", "vol_control_returns", "QQQ", "yes", "n/a", "n/a", True),
+    ]
+    for name, dataset_type, instrument, required, mapping_etf, aum_etf, needs_session_threshold in specs:
+        rows = _instrument_rows(canonical, dataset_type, instrument)
+        metrics = _coverage_metrics(rows, pol["warmup_sessions"] if needs_session_threshold else 0)
+        timing_ok = metrics["timing_eligible_rows"] > 0 and not (rows.get("timing_status", pd.Series(dtype=str)).astype(str).eq("blocked").any() if not rows.empty else True)
+        mapping_ok = True
+        mapping_state = mapping_etf
+        if mapping_etf != "n/a":
+            mrow = mapping[mapping["etf_instrument"].eq(mapping_etf)]
+            mapping_ok = bool(not mrow.empty and mrow.iloc[0]["mapping_status"] == "valid")
+            mapping_state = str(mrow.iloc[0]["mapping_status"]) if not mrow.empty else "blocked_by_mapping"
+        aum_ok = True
+        aum_state = aum_etf
+        if aum_etf != "n/a":
+            arow = aum_summary[aum_summary["etf_instrument"].eq(aum_etf)]
+            aum_ok = bool(not arow.empty and arow.iloc[0]["aum_freshness_status"] == "valid")
+            aum_state = str(arow.iloc[0]["aum_freshness_status"]) if not arow.empty else "blocked"
+        if needs_session_threshold:
+            coverage_ok = metrics["coverage_years"] >= pol["minimum_coverage_years"] and metrics["eligible_sessions_after_warmup"] >= pol["minimum_eligible_sessions_after_warmup"]
+        else:
+            coverage_ok = metrics["coverage_years"] >= pol["minimum_coverage_years"] and metrics["timing_eligible_rows"] > 0
+        blocked_reason = "provider_contract_blocked:" + ",".join(sorted(data_quality_codes)) if data_quality_codes else ""
+        status, reason = _component_status(coverage_ok, timing_ok, mapping_ok, aum_ok, blocked_reason)
+        components.append(
+            {
+                "Component": name,
+                "Required": required,
+                "Coverage": f"{metrics['coverage_years']}y; eligible_after_warmup={metrics['eligible_sessions_after_warmup']}; gaps={metrics['gap_count']}",
+                "Timing": "valid" if timing_ok else "blocked_or_ineligible",
+                "Mapping": mapping_state,
+                "AUM freshness": aum_state,
+                "Status": status,
+                "Blocking reason": reason,
+                **metrics,
+            }
+        )
+    return pd.DataFrame(components), mapping, aum_summary
+
+
+def qqq_phase1_required_data_diagnostics(canonical: pd.DataFrame, sources: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    diagnostics = []
+    source_datasets = {str(source.get("dataset_type", "")) for source in sources}
+    for dataset_type in sorted(QQQ_PHASE1_REQUIRED_DATASETS - source_datasets):
+        diagnostics.append(report_row("blocked", "missing_required_phase1_dataset", f"missing required QQQ Phase 1 source dataset: {dataset_type}", "", dataset_type))
+    if canonical.empty:
+        return diagnostics
+    price_instruments = set(canonical.loc[canonical["dataset_type"].astype(str).eq("prices_daily"), "instrument"].astype(str).str.upper())
+    for ticker in ["QQQ", "TQQQ", "SQQQ"]:
+        if ticker not in price_instruments:
+            diagnostics.append(report_row("blocked", "missing_required_phase1_price_instrument", f"prices_daily must contain {ticker}", "", "prices_daily", ticker))
+    aum_etfs = set(canonical.loc[canonical["dataset_type"].astype(str).eq("leveraged_etf_aum"), "etf_instrument"].astype(str).str.upper())
+    for ticker in ["TQQQ", "SQQQ"]:
+        if ticker not in aum_etfs:
+            diagnostics.append(report_row("blocked", "missing_required_phase1_aum_instrument", f"leveraged_etf_aum must contain {ticker}", "", "leveraged_etf_aum", ticker))
+    returns = canonical[canonical["dataset_type"].astype(str).eq("vol_control_returns")]
+    return_instruments = set(returns["instrument"].astype(str).str.upper()) if not returns.empty else set()
+    if "QQQ" not in return_instruments:
+        diagnostics.append(report_row("blocked", "missing_required_phase1_return_instrument", "vol_control_returns must contain QQQ", "", "vol_control_returns", "QQQ"))
+    return diagnostics
+
+
+def qqq_phase1_overall_status(component_table: pd.DataFrame, validation: dict[str, Any], research_timing_class: str) -> tuple[str, str]:
+    if research_timing_class != "eod_next_session":
+        return "historical_descriptive_only", "phase1_supports_only_eod_next_session"
+    if component_table.empty:
+        return "blocked_by_data_quality", "no_component_table"
+    statuses = set(component_table["Status"].astype(str))
+    if "blocked_by_data_quality" in statuses:
+        return "blocked_by_data_quality", "one_or_more_components_failed_data_quality"
+    if "blocked_by_mapping" in statuses:
+        return "blocked_by_mapping", "one_or_more_required_etf_mappings_invalid"
+    if "blocked_by_timing" in statuses:
+        return "blocked_by_timing", "one_or_more_required_inputs_not_timing_valid"
+    if "insufficient_coverage" in statuses:
+        return "insufficient_coverage", "one_or_more_required_components_below_coverage_threshold"
+    return "ready_for_eod_next_session_research", "all_phase1_readiness_gates_passed"
+
+
+def markdown_table(df: pd.DataFrame) -> str:
+    if df.empty:
+        return "_No rows._"
+    cols = list(df.columns)
+    lines = ["| " + " | ".join(cols) + " |", "| " + " | ".join(["---"] * len(cols)) + " |"]
+    for _, row in df.iterrows():
+        lines.append("| " + " | ".join(str(row.get(col, "")).replace("|", "/") for col in cols) + " |")
+    return "\n".join(lines)
+
+
+def qqq_real_data_readiness_report_md(
+    staging_id: str,
+    manifest: dict[str, Any],
+    validation: dict[str, Any],
+    timing_summary: dict[str, Any],
+    coverage_instrument: pd.DataFrame,
+    component_table: pd.DataFrame,
+    mapping: pd.DataFrame,
+    aum_summary: pd.DataFrame,
+    overall_status: str,
+    overall_reason: str,
+) -> str:
+    synthetic_flags = [bool(s.get("is_synthetic_fixture", False)) for s in manifest.get("sources", []) if isinstance(s, dict)]
+    data_state = "synthetic" if synthetic_flags and all(synthetic_flags) else "manually_staged_local" if synthetic_flags else "no_staged_data"
+    lines = [
+        "# QQQ / TQQQ / SQQQ Phase 1 Readiness Report",
+        "",
+        "This report validates data readiness only.",
+        "It does not run a backtest, establish predictive value, authorize trading,",
+        "or modify Fragility Score.",
+        "",
+        f"- staging_id: `{staging_id}`",
+        f"- source_contract_version: `{SOURCE_CONTRACT_VERSION}`",
+        f"- requested_timing_class: `{validation.get('research_timing_class', '')}`",
+        "- universe: `QQQ` underlying, `TQQQ` long leveraged ETF, `SQQQ` inverse leveraged ETF",
+        f"- data_state: `{data_state}`",
+        f"- overall_status: `{overall_status}`",
+        f"- overall_reason: `{overall_reason}`",
+        f"- actionization_allowed: `{ACTIONIZATION_ALLOWED}`",
+        "",
+        "## Component Status",
+        markdown_table(component_table),
+        "",
+        "## Coverage By Instrument",
+        markdown_table(coverage_instrument),
+        "",
+        "## Mapping Validation",
+        markdown_table(mapping),
+        "",
+        "## AUM Cadence And Age",
+        markdown_table(aum_summary),
+        "",
+        "## Timing Summary",
+        f"- timing_eligible_count: `{timing_summary.get('timing_eligible_count', 0)}`",
+        f"- timing_ineligible_count: `{timing_summary.get('timing_ineligible_count', 0)}`",
+        f"- blocked_count: `{timing_summary.get('blocked_count', 0)}`",
+        "",
+        "## Diagnostics",
+    ]
+    diagnostics = validation.get("diagnostics", [])
+    if diagnostics:
+        lines.append(markdown_table(pd.DataFrame(diagnostics)))
+    else:
+        lines.append("_No provider-contract diagnostics._")
+    lines += [
+        "",
+        "## Operational Boundary",
+        "- This readiness run does not create a release.",
+        "- This readiness run does not run `run-flow-real-data-study`.",
+        "- This readiness run does not run `run-flow-statistical-backtest`.",
+        "- Unknown or unprovable availability timing blocks predictive readiness.",
+        "- Daily data is not intraday close-window evidence.",
+        "- CTA and Dealer remain out of scope.",
+    ]
+    return "\n".join(lines) + "\n"
+
+
+def build_readiness_content_manifest(out_dir: Path, staging_id: str, status: str) -> dict[str, Any]:
+    entries = []
+    for path in sorted([p for p in out_dir.rglob("*") if p.is_file() and p.name != "readiness_content_manifest.json"], key=lambda p: str(p)):
+        rel = safe_relative_path(out_dir, path)
+        entries.append({"relative_path": rel, "sha256": file_sha256(path), "bytes": path.stat().st_size})
+    return {
+        "artifact_version": QQQ_PHASE1_READINESS_VERSION,
+        "staging_id": staging_id,
+        "readiness_status": status,
+        "entries": entries,
+        "content_set_sha256": content_set_hash(entries),
+        "actionization_allowed": ACTIONIZATION_ALLOWED,
+    }
+
+
+def verify_qqq_phase1_readiness(root: Path, staging_id: str) -> dict[str, Any]:
+    out_dir = qqq_phase1_readiness_dir(root, staging_id)
+    manifest_path = out_dir / "readiness_content_manifest.json"
+    if not manifest_path.exists():
+        raise SystemExit("missing readiness content manifest")
+    manifest = load_json(manifest_path)
+    seen = set()
+    recomputed = []
+    for entry in manifest.get("entries", []):
+        rel = str(entry.get("relative_path", ""))
+        if not rel or rel.startswith("/") or ".." in PurePosixPath(rel).parts:
+            raise SystemExit(f"unsafe readiness artifact path: {rel}")
+        seen.add(rel)
+        path = out_dir / rel
+        if path.is_symlink() or not path.is_file():
+            raise SystemExit(f"missing readiness artifact: {rel}")
+        sha = file_sha256(path)
+        if sha != entry.get("sha256"):
+            raise SystemExit(f"readiness artifact sha mismatch: {rel}")
+        recomputed.append({"relative_path": rel, "sha256": sha, "bytes": path.stat().st_size})
+    actual = {safe_relative_path(out_dir, p) for p in out_dir.rglob("*") if p.is_file() and p.name != "readiness_content_manifest.json"}
+    if actual != seen:
+        raise SystemExit("readiness artifact file set mismatch")
+    if manifest.get("content_set_sha256") != content_set_hash(recomputed):
+        raise SystemExit("readiness content set hash mismatch")
+    return {
+        "artifact_version": QQQ_PHASE1_READINESS_VERSION,
+        "staging_id": staging_id,
+        "readiness_status": manifest.get("readiness_status", ""),
+        "status": "valid",
+        "artifact_count": len(recomputed),
+        "actionization_allowed": ACTIONIZATION_ALLOWED,
+    }
+
+
+def run_qqq_phase1_readiness(root: Path, staging_id: str, decision_time_utc: str, research_timing_class: str = "eod_next_session") -> dict[str, Any]:
+    if research_timing_class != "eod_next_session":
+        raise SystemExit("QQQ Phase 1 readiness supports only eod_next_session")
+    out_dir = qqq_phase1_readiness_dir(root, staging_id)
+    out_dir.mkdir(parents=True, exist_ok=True)
+    manifest, sources, canonical, validation = collect_contract_artifacts(root, staging_id, decision_time_utc, research_timing_class)
+    validation = dict(validation)
+    validation["diagnostics"] = list(validation.get("diagnostics", [])) + qqq_phase1_required_data_diagnostics(canonical, sources)
+    validation["blocked_count"] = sum(1 for row in validation.get("diagnostics", []) if row.get("status") == "blocked")
+    validation["validation_status"] = "valid" if validation["blocked_count"] == 0 else "blocked"
+    decision_time = parse_decision_time(decision_time_utc)
+    timing_audit = timing_audit_frame(canonical, decision_time, research_timing_class, root)
+    timing_summary = timing_audit_summary(timing_audit)
+    coverage_instrument = source_coverage_by_instrument(canonical)
+    coverage_dataset = source_coverage_by_dataset(canonical)
+    features = build_features(root, manifest, canonical) if not canonical.empty else pd.DataFrame()
+    aum_audit = aum_selection_audit(features)
+    component_table, mapping, aum_summary = qqq_phase1_component_table(root, canonical, validation, timing_audit)
+    overall_status, overall_reason = qqq_phase1_overall_status(component_table, validation, research_timing_class)
+    report = qqq_real_data_readiness_report_md(staging_id, manifest, validation, timing_summary, coverage_instrument, component_table, mapping, aum_summary, overall_status, overall_reason)
+    write_json(out_dir / "provider_contract_validation_report.json", validation)
+    write_csv(timing_audit, out_dir / "timing_audit.csv")
+    write_json(out_dir / "timing_audit_summary.json", timing_summary)
+    write_csv(coverage_instrument, out_dir / "source_coverage_by_instrument.csv")
+    write_csv(coverage_dataset, out_dir / "source_coverage_by_dataset.csv")
+    write_csv(aum_audit, out_dir / "aum_selection_audit.csv")
+    write_csv(component_table, out_dir / "qqq_phase1_component_status.csv")
+    write_csv(mapping, out_dir / "mapping_validation.csv")
+    write_csv(aum_summary, out_dir / "aum_freshness_summary.csv")
+    (out_dir / "research_timing_eligibility_summary.md").write_text(research_timing_eligibility_summary_md(timing_summary, coverage_dataset), encoding="utf-8")
+    (out_dir / "real_data_readiness_report.md").write_text(report, encoding="utf-8")
+    summary = {
+        "artifact_version": QQQ_PHASE1_READINESS_VERSION,
+        "staging_id": staging_id,
+        "source_contract_version": SOURCE_CONTRACT_VERSION,
+        "requested_timing_class": research_timing_class,
+        "readiness_status": overall_status,
+        "readiness_reason": overall_reason,
+        "component_status_counts": component_table["Status"].value_counts().to_dict() if not component_table.empty else {},
+        "output_dir": str(out_dir),
+        "release_created": False,
+        "backtest_run": False,
+        "raw_provider_data_committed": False,
+        "actionization_allowed": ACTIONIZATION_ALLOWED,
+    }
+    write_json(out_dir / "qqq_phase1_readiness_summary.json", summary)
+    write_json(out_dir / "readiness_content_manifest.json", build_readiness_content_manifest(out_dir, staging_id, overall_status))
+    return summary
 
 
 def research_timing_eligibility_summary_md(summary: dict[str, Any], coverage_by_dataset: pd.DataFrame) -> str:
@@ -2273,6 +2741,14 @@ def main() -> None:
     p.add_argument("--staging-id", required=True)
     p.add_argument("--decision-time-utc", required=True)
     p.add_argument("--research-timing-class", default="eod_next_session", choices=sorted(TIMING_CLASSES))
+    p = sub.add_parser("run-qqq-phase1-readiness")
+    p.add_argument("--staging-id", required=True)
+    p.add_argument("--decision-time-utc", required=True)
+    p.add_argument("--research-timing-class", default="eod_next_session", choices=sorted(TIMING_CLASSES))
+    p.add_argument("--output")
+    p = sub.add_parser("verify-qqq-phase1-readiness")
+    p.add_argument("--staging-id", required=True)
+    p.add_argument("--output")
     p = sub.add_parser("run-flow-statistical-backtest")
     p.add_argument("--release-id", required=True)
     p.add_argument("--spec-path")
@@ -2303,6 +2779,10 @@ def main() -> None:
         result = inspect_release(root, args.release_id)
     elif args.command == "run-flow-real-data-study":
         result = run_flow_real_data_study(root, args.staging_id, args.decision_time_utc, args.research_timing_class)
+    elif args.command == "run-qqq-phase1-readiness":
+        result = run_qqq_phase1_readiness(root, args.staging_id, args.decision_time_utc, args.research_timing_class)
+    elif args.command == "verify-qqq-phase1-readiness":
+        result = verify_qqq_phase1_readiness(root, args.staging_id)
     elif args.command == "run-flow-statistical-backtest":
         import market_bomb_flow_pressure_statistical_backtest_v1 as stat
 
