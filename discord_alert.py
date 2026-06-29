@@ -3,8 +3,6 @@ from __future__ import annotations
 import os
 from typing import Any, Protocol
 
-import requests
-
 
 class HTTPSession(Protocol):
     def post(self, url: str, json: dict[str, Any], timeout: int) -> Any:
@@ -27,7 +25,12 @@ def send_discord_alert(
         "username": username,
         "content": _truncate(message),
     }
-    http = session or requests
+    if session is None:
+        import requests
+
+        http = requests
+    else:
+        http = session
     response = http.post(url, json=payload, timeout=timeout)
     if getattr(response, "status_code", 204) >= 400:
         text = getattr(response, "text", "")

@@ -1,0 +1,50 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  tests:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dev dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements-dev.txt
+
+      - name: Compile core modules
+        run: |
+          python -m py_compile \
+            market_bomb_flow_pressure_research_v0.py \
+            market_bomb_flow_pressure_statistical_backtest_v1.py \
+            market_bomb_fragility_data_release_v0.py \
+            market_bomb_fragility_score_v0.py \
+            market_bomb_phase3_2_cta_vol_proxy.py \
+            discord_alert.py \
+            scanner/pushover_notify.py
+
+      - name: Run targeted safety suites
+        run: |
+          python -m pytest \
+            tests/test_notifications.py \
+            tests/test_market_bomb_flow_pressure_research_v0.py \
+            tests/test_market_bomb_flow_pressure_statistical_backtest_v1.py \
+            tests/test_market_bomb_phase3_2_cta_vol_proxy.py \
+            -q
+
+      - name: Run full test suite
+        timeout-minutes: 25
+        run: python -m pytest -q --durations=20

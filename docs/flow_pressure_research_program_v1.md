@@ -1,0 +1,76 @@
+# Flow Pressure Research Program v1
+
+This program is a phased research-only path for Flow Pressure work.
+
+It does not modify Fragility Score formulas, Morita notifications, candidate ranking, trading, sizing, or execution. Every research output remains non-actionable:
+
+```text
+actionization_allowed=false
+raw_provider_data_committed=false
+is_observed_flow=false
+is_model_estimate=true
+```
+
+## Phase Order
+
+Phases must be completed in order:
+
+1. Phase 0: CI stabilization.
+2. Phase 1: real-data readiness and manual local staging.
+3. Phase 2: first QQQ / SOXL-family timing-valid study.
+4. Phase 3: reproducibility and independent replication gate.
+5. Phase 4: CTA data contract and research implementation.
+6. Phase 5: dealer gamma-regime data contract and research implementation.
+
+Do not start a later phase until the prior phase has a documented pass gate.
+
+## Phase 0 Result
+
+Phase 0 stabilizes local and CI test execution before additional research changes.
+
+Audit findings:
+
+- `requirements.txt` already declares runtime/test imports including `requests`, `beautifulsoup4`, and `pytest`.
+- No dedicated clean test-install route existed before this phase.
+- No repository-level pytest collection config existed, so default pytest collection could include non-test scripts such as `scripts/pushover_test.py`.
+- Notification tests now use injected HTTP sessions and deterministic mocks for Discord and Pushover. They do not require live webhook URLs, Pushover tokens, or real network calls.
+- The slow Fragility release suite is slow because it repeatedly builds, verifies, tampers, and re-verifies sealed release artifacts. The slow behavior is expected integrity coverage, not a live-network dependency or collection failure.
+
+Phase 0 implementation:
+
+- Added `requirements-dev.txt` as the clean development/test install route.
+- Added `pytest.ini` to collect only `tests/test_*.py`.
+- Added `.github/workflows/ci.yml` for push and pull request CI.
+- Made notification modules import optional network dependencies only when a real HTTP session is needed.
+- Added a mocked Pushover notification unit test.
+
+Phase 0 CI route:
+
+```powershell
+python -m pip install --upgrade pip
+pip install -r requirements-dev.txt
+python -m py_compile market_bomb_flow_pressure_research_v0.py market_bomb_flow_pressure_statistical_backtest_v1.py market_bomb_fragility_data_release_v0.py market_bomb_fragility_score_v0.py market_bomb_phase3_2_cta_vol_proxy.py discord_alert.py scanner/pushover_notify.py
+python -m pytest tests/test_notifications.py tests/test_market_bomb_flow_pressure_research_v0.py tests/test_market_bomb_flow_pressure_statistical_backtest_v1.py tests/test_market_bomb_phase3_2_cta_vol_proxy.py -q
+python -m pytest -q --durations=20
+```
+
+## Fragility Slow-Suite Note
+
+The Fragility release suite completed locally under the documented long timeout:
+
+```text
+tests/test_market_bomb_fragility_data_release_v0.py
+22 passed, 1 skipped in 306.66s
+```
+
+The slowest tests were release build/verify and tamper-detection paths, with individual test durations around 12 to 44 seconds. These tests are intentionally retained in the full suite because they protect release immutability, exact-file-set validation, stale data behavior, and tamper detection.
+
+## Phase 1 Gate
+
+Phase 1 may start only after the full suite passes with:
+
+```powershell
+python -m pytest -q
+```
+
+Phase 1 must keep real provider data local-only. It may add readiness templates, validation, timing audit, coverage reports, and operator documentation, but it must not fetch provider data or claim a real-data result when no valid local real data exists.

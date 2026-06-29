@@ -12,8 +12,6 @@ from pathlib import Path
 from typing import Any
 
 import pandas as pd
-import requests
-from bs4 import BeautifulSoup, XMLParsedAsHTMLWarning
 
 from discord_alert import send_discord_alert
 from scanner.pipeline import scan_universe
@@ -95,6 +93,9 @@ def clean_ticker(ticker: str) -> str:
 
 
 def parse_blackrock_holdings(portfolio_id: str) -> pd.DataFrame:
+    import requests
+    from bs4 import BeautifulSoup, XMLParsedAsHTMLWarning
+
     url = (
         "https://www.blackrock.com/varnish-api/blk-one01-product-data/product-data/api/v1/get-fund-document"
         f"?appType=PRODUCT_PAGE&appSubType=ISHARES&targetSite=us-ishares&locale=en_US&portfolioId={portfolio_id}"
@@ -533,6 +534,54 @@ def select_candidates(results: pd.DataFrame, histories: dict[str, pd.DataFrame],
     return out.sort_values(["rank_order", "standard_rs_score", "volume_multiple"], ascending=[True, False, False]).drop(columns=["rank_order"])
 
 
+def select_alert_candidates(results: pd.DataFrame, config: dict[str, Any]) -> pd.DataFrame:
+    """Compatibility wrapper for deterministic notification unit tests."""
+    if results.empty:
+        return results.copy()
+    prod = production_config(config)
+    out = results.copy()
+    rs_min = float(prod.get("rs_min", 98))
+    volume_min = float(prod.get("volume_multiple_min", 1.2))
+    truthy = pd.Series(True, index=out.index)
+    mask = (
+        out.get("trend_passed", truthy).astype(bool)
+        & (pd.to_numeric(out.get("standard_rs_score"), errors="coerce") >= rs_min)
+        & out.get("breakout_today", truthy).astype(bool)
+        & (pd.to_numeric(out.get("volume_multiple"), errors="coerce") >= volume_min)
+        & (pd.to_numeric(out.get("close"), errors="coerce") >= float(prod.get("min_price", 0)))
+        & (pd.to_numeric(out.get("avg_volume_50d"), errors="coerce") >= float(prod.get("min_avg_volume_50d", 0)))
+    )
+    out = out[mask].copy()
+    if out.empty:
+        return out
+    out["market_cap_bucket"] = out["market_cap"].map(market_cap_bucket) if "market_cap" in out.columns else "Unknown"
+    out["volume_2x_flag"] = pd.to_numeric(out.get("volume_multiple"), errors="coerce") >= float(prod.get("volume_flag_high", 2.0))
+    out["alert_rank"] = out.get("rank", "A")
+    return out.reset_index(drop=True)
+
+
+def enrich_option_liquidity(candidates: pd.DataFrame, config: dict[str, Any]) -> pd.DataFrame:
+    """Compatibility wrapper for deterministic notification unit tests."""
+    out = candidates.copy()
+    if out.empty:
+        return out
+    cfg = production_config(config).get("option_liquidity", {})
+    if not cfg.get("enabled", True):
+        out["option_liquidity"] = "Skipped"
+        out["option_liquidity_ok"] = True
+        out["option_liquidity_reason"] = "skipped"
+        out["option_iv"] = math.nan
+        out["alert_rank"] = "S"
+        return out
+    enriched = []
+    for _, row in out.iterrows():
+        data = row.to_dict()
+        data.update(option_liquidity_for(str(row.get("ticker", "")), float(row.get("close", math.nan)), config))
+        data["alert_rank"] = tier_for(data, config)
+        enriched.append(data)
+    return pd.DataFrame(enriched)
+
+
 def save_candidates(candidates: pd.DataFrame, outdir: Path) -> Path:
     outdir.mkdir(parents=True, exist_ok=True)
     path = outdir / "russell1000_momentum_candidates.csv"
@@ -674,6 +723,35 @@ def build_message(candidates: pd.DataFrame, csv_path: Path, schedule_utc: str, l
     sections.append("Exit: Day10 underlying +5% not reached -> exit / +125% take profit or Day20")
     sections.append(f"CSV: `{csv_path}`")
     return "\n\n".join(sections)
+
+
+def build_discord_message(candidates: pd.DataFrame, csv_path: Path, config: dict[str, Any]) -> str:
+    """Compatibility wrapper for production momentum notification tests."""
+    if candidates.empty:
+        return "No signals today"
+    lines = [
+        "Production Momentum Alert",
+        "RS>=98",
+        "MarketCap displayed only",
+    ]
+    for _, row in candidates.head(10).iterrows():
+        lines.append(
+            f"{row.get('alert_rank', row.get('rank', ''))} | {row.get('ticker', '')} | "
+            f"Price {float(row.get('close', row.get('latest_price', 0)) or 0):.2f} | "
+            f"RS {float(row.get('standard_rs_score', 0) or 0):.1f} | "
+            f"Vol {float(row.get('volume_multiple', 0) or 0):.2f}x | "
+            f"MarketCap {row.get('market_cap_bucket', 'Unknown')}"
+        )
+    if len(candidates) > 10:
+        lines.append(f"... plus {len(candidates) - 10} more candidates in `{csv_path}`")
+    lines.extend(
+        [
+            "60DTE ATM/+15%",
+            "+125% profit take",
+            f"CSV: `{csv_path}`",
+        ]
+    )
+    return "\n".join(lines)
 
 
 def is_strong_b(row: pd.Series, config: dict[str, Any], ignore_gap: bool = False) -> bool:

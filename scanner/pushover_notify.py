@@ -3,8 +3,6 @@ from __future__ import annotations
 import os
 from typing import Any, Protocol
 
-import requests
-
 
 PUSHOVER_MESSAGES_URL = "https://api.pushover.net/1/messages.json"
 
@@ -53,7 +51,12 @@ def send_pushover_message(
         payload["sound"] = sound or "climb"
     elif sound:
         payload["sound"] = sound
-    http = session or requests
+    if session is None:
+        import requests
+
+        http = requests
+    else:
+        http = session
     response = http.post(PUSHOVER_MESSAGES_URL, data=payload, timeout=timeout)
     result = {
         "status_code": getattr(response, "status_code", None),

@@ -5,6 +5,7 @@ from pathlib import Path
 import pandas as pd
 
 from discord_alert import send_discord_alert
+from scanner.pushover_notify import send_pushover_message
 from scanner_notify import build_discord_message, enrich_option_liquidity, select_alert_candidates
 
 
@@ -156,3 +157,26 @@ def test_discord_notifier_posts_webhook_payload():
     assert session.payload["url"] == "https://example.test/webhook"
     assert session.payload["json"]["content"] == "hello"
     assert session.payload["json"]["username"] == "Russell1000 Minervini Scanner"
+
+
+class FakePushoverSession:
+    def __init__(self) -> None:
+        self.payload = None
+
+    def post(self, url, data, timeout):
+        self.payload = {"url": url, "data": data, "timeout": timeout}
+        return FakeResponse()
+
+
+def test_pushover_notifier_posts_mocked_payload_and_masks_credentials():
+    session = FakePushoverSession()
+    result = send_pushover_message(
+        "hello",
+        app_token="test-token",
+        user_key="test-user",
+        session=session,
+    )
+    assert session.payload["url"].endswith("/messages.json")
+    assert session.payload["data"]["message"] == "hello"
+    assert result["payload"]["token"] is True
+    assert result["payload"]["user"] is True
