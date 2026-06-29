@@ -1880,7 +1880,9 @@ def verify_staging(root: Path, staging_id: str, now_utc: str | None = None, rese
     timing_class = validate_timing_class(research_timing_class, root)
     validation = validate_flow_provider_contract(root, staging_id, iso_utc(now), timing_class)
     if validation["validation_status"] != "valid":
-        raise SystemExit(f"flow staging provider contract blocked: {validation['blocked_count']} blocking diagnostics")
+        codes = sorted({str(row.get("code", "")) for row in validation.get("diagnostics", []) if row.get("status") == "blocked" and row.get("code")})
+        detail = f" ({', '.join(codes)})" if codes else ""
+        raise SystemExit(f"flow staging provider contract blocked: {validation['blocked_count']} blocking diagnostics{detail}")
     manifest = load_staging_manifest(root, staging_id)
     sources = manifest.get("sources", [])
     before_releases = releases_dir(root).exists()
