@@ -238,19 +238,21 @@ def active_pointer_path(root: Path) -> Path:
 
 
 def staging_path_has_symlink(path: Path, stop_at: Path) -> bool:
-    current = path.resolve()
     stop = stop_at.resolve()
-    parts = []
+    current = path
     while True:
-        parts.append(current)
+        if current.exists() and current.is_symlink():
+            return True
+        try:
+            if current.resolve() == stop:
+                break
+        except Exception:
+            pass
         if current == stop:
             break
         if current.parent == current:
             break
         current = current.parent
-    for item in parts:
-        if item.exists() and item.is_symlink():
-            return True
     return False
 
 
@@ -276,7 +278,10 @@ def validate_staging_source_paths(root: Path, staging_id: str, sources: list[dic
     for source in sources:
         source_id = str(source.get("source_id", ""))
         rel_text = validate_source_relative_path(source.get("relative_path", ""))
-        path = (base / rel_text).resolve()
+        raw_path = base / rel_text
+        if staging_path_has_symlink(raw_path, base):
+            raise SystemExit(f"symlinked staging source path is not allowed: {rel_text}")
+        path = raw_path.resolve()
         try:
             path.relative_to(base)
         except Exception as exc:
@@ -285,8 +290,6 @@ def validate_staging_source_paths(root: Path, staging_id: str, sources: list[dic
         if normalized in used_paths:
             raise SystemExit(f"duplicate staged source path is not allowed: {rel_text}")
         used_paths.add(normalized)
-        if staging_path_has_symlink(path, base):
-            raise SystemExit(f"symlinked staging source path is not allowed: {rel_text}")
         if not path.is_file():
             raise SystemExit(f"staged source is not a regular file: {rel_text}")
         resolved[source_id] = path
