@@ -1,0 +1,39 @@
+{
+  "phase": "flow_pressure_phase1_3b_1_free_proxy_intake_and_first_run",
+  "created_at_jst": "2026-07-01",
+  "repo_head_at_audit": "d0de6283d7be7f0a7d85a71a867ed54b3519389d",
+  "outcome": {
+    "historical_descriptive": "historical_descriptive_input_incomplete",
+    "forward_snapshot": "forward_snapshot_not_started"
+  },
+  "input_id": "manual_free_proxy_intake_20260701_template",
+  "ignored_template_root": "market_bomb_history/leveraged_etf_free_proxy_v1/input/manual_free_proxy_intake_20260701_template",
+  "committed_report_files": [
+    "outputs/flow_pressure_phase1_3b_1_free_proxy_intake/free_proxy_input_inventory.csv",
+    "outputs/flow_pressure_phase1_3b_1_free_proxy_intake/phase1_3b_1_content_manifest.json",
+    "outputs/flow_pressure_phase1_3b_1_free_proxy_intake/flow_pressure_phase1_3b_1_intake_report.md",
+    "outputs/flow_pressure_phase1_3b_1_free_proxy_intake/flow_pressure_phase1_3b_1_chatgpt_bundle.md"
+  ],
+  "non_committed_ignored_files": [
+    "market_bomb_history/leveraged_etf_free_proxy_v1/input/manual_free_proxy_intake_20260701_template/source_manifest.json",
+    "market_bomb_history/leveraged_etf_free_proxy_v1/input/manual_free_proxy_intake_20260701_template/sources/benchmark_prices.csv",
+    "market_bomb_history/leveraged_etf_free_proxy_v1/input/manual_free_proxy_intake_20260701_template/sources/benchmark_mapping.csv",
+    "market_bomb_history/leveraged_etf_free_proxy_v1/input/manual_free_proxy_intake_20260701_template/sources/aum_or_capital.csv",
+    "market_bomb_history/leveraged_etf_free_proxy_v1/input/manual_free_proxy_intake_20260701_template/sources/split_history.csv",
+    "market_bomb_history/leveraged_etf_free_proxy_v1/input/manual_free_proxy_intake_20260701_template/sources/leveraged_etf_prices.csv"
+  ],
+  "commands_run": [
+    "python market_bomb_leveraged_etf_free_proxy_v1.py build-leveraged-etf-free-proxy-template --input-id manual_free_proxy_intake_20260701_template",
+    "python -m pytest tests/test_market_bomb_leveraged_etf_free_proxy_v1.py -q --durations=30 --basetemp C:/t/lfp13b1 -o cache_dir=C:/t/c/lfp13b1"
+  ],
+  "commands_not_run": [
+    "validate-leveraged-etf-free-proxy-input",
+    "run-leveraged-etf-free-proxy-historical",
+    "verify-leveraged-etf-free-proxy-run",
+    "ingest-leveraged-etf-free-proxy-forward-snapshot"
+  ],
+  "reason_not_run": "No manually supplied real source files were present. Generated template files are header-only and must not be treated as provider data.",
+  "test_result": "34 passed",
+  "actionization_allowed": false,
+  "not_a_trading_signal": true
+}
