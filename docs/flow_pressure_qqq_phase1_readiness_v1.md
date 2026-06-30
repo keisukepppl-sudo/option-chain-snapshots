@@ -1,9 +1,10 @@
 # Flow Pressure QQQ Phase 1 Readiness v1
 
-This phase implements local readiness validation for:
+This phase implements local readiness validation for the first QQQ proxy family:
 
 ```text
-Underlying: QQQ
+Primary target benchmark: NDX
+Tradable market proxy: QQQ
 Long leveraged ETF: TQQQ
 Inverse leveraged ETF: SQQQ
 ```
@@ -29,8 +30,8 @@ vol_control_returns.csv
 
 Required content:
 
-- `prices_daily.csv`: QQQ, TQQQ, and SQQQ daily OHLCV rows.
-- `leveraged_etf_reference.csv`: explicit `TQQQ -> QQQ` and `SQQQ -> QQQ` mappings.
+- `prices_daily.csv`: NDX, QQQ, TQQQ, and SQQQ daily OHLCV or close rows as applicable.
+- `leveraged_etf_reference.csv`: explicit `TQQQ -> NDX` and `SQQQ -> NDX` target benchmark mappings, with QQQ separately labelled as market proxy.
 - `leveraged_etf_aum.csv`: observed TQQQ and SQQQ AUM, or shares plus NAV.
 - `vol_control_returns.csv`: QQQ returns with one explicit basis.
 

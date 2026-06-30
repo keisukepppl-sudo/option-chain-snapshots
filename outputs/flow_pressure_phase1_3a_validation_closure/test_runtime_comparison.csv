@@ -1,0 +1,10 @@
+comparison_id,commit,suite_name,command_class,collected_count,passed_count,failed_count,skipped_count,warning_count,wall_clock_seconds,execution_status,environment_note
+current_preflight,5043368_plus_phase1_3a_worktree,collect_only,collect_only,334,0,0,0,0,3.8,passed,"short external cache dir used"
+current_phase1_3a_qualification,5043368_plus_phase1_3a_worktree,phase1_3a_qualification,targeted,24,24,0,0,0,1.313,passed,"C:\\t short temp not required but consistent"
+current_research,5043368_plus_phase1_3a_worktree,flow_pressure_research_v0,targeted,36,35,0,1,0,226.284,passed,"C:\\t\\r short temp required to avoid Windows deep path FileNotFoundError"
+current_statistical,5043368_plus_phase1_3a_worktree,flow_pressure_statistical_backtest_v1,targeted,9,9,0,0,0,65.606,passed,"C:\\t\\s short temp"
+current_safety,5043368_plus_phase1_3a_worktree,phase0_safety_regression_set,targeted,83,82,0,1,0,274.420,passed,"C:\\t\\safe short temp"
+current_full,5043368_plus_phase1_3a_worktree,full_suite,full,334,332,0,2,52,1019.136,passed,"C:\\t\\f short temp; 52 known warnings"
+baseline_research,5043368f1868264d88f71864435409ec084c64eb,flow_pressure_research_v0,targeted,36,35,0,1,0,188.102,passed,"detached baseline worktree; C:\\t\\br short temp"
+baseline_full,5043368f1868264d88f71864435409ec084c64eb,full_suite,full,310,308,0,2,52,1021.003,passed,"detached baseline worktree; C:\\t\\bf short temp"
+current_research_long_temp,5043368_plus_phase1_3a_worktree,flow_pressure_research_v0,targeted,36,24,11,1,0,177.865,failed_environment_path_length,"C:\\tmp\\option_chain_pytest_phase1_3a1_targeted path was still too long for deep readiness artifacts"

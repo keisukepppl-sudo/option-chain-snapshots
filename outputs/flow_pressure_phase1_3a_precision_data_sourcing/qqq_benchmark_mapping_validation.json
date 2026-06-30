@@ -1,0 +1,46 @@
+{
+  "artifact_version": "flow_pressure_source_qualification_v1",
+  "actionization_allowed": false,
+  "phase1_3_readiness_run": false,
+  "phase2_study_run": false,
+  "mapping_rows": [
+    {
+      "etf_instrument": "TQQQ",
+      "target_benchmark_instrument": "NDX",
+      "target_leverage": 3.0,
+      "directionality": "long",
+      "market_proxy_instrument": "QQQ",
+      "is_proxy_underlying": false,
+      "proxy_relationship_description": "QQQ is a tradable market proxy for Nasdaq-100 exposure, not the exact leveraged ETF target benchmark.",
+      "benchmark_source_authority": "ProShares fund documentation",
+      "benchmark_exact_or_proxy": "benchmark_exact",
+      "mapping_status": "valid"
+    },
+    {
+      "etf_instrument": "SQQQ",
+      "target_benchmark_instrument": "NDX",
+      "target_leverage": -3.0,
+      "directionality": "inverse",
+      "market_proxy_instrument": "QQQ",
+      "is_proxy_underlying": false,
+      "proxy_relationship_description": "QQQ is a tradable market proxy for Nasdaq-100 exposure, not the exact leveraged ETF target benchmark.",
+      "benchmark_source_authority": "ProShares fund documentation",
+      "benchmark_exact_or_proxy": "benchmark_exact",
+      "mapping_status": "valid"
+    }
+  ],
+  "rejected_mapping_examples": [
+    {
+      "etf_instrument": "TQQQ",
+      "underlying_instrument": "QQQ",
+      "mapping_status": "blocked_by_mapping",
+      "blocking_reason": "target_benchmark_must_be_NDX"
+    },
+    {
+      "etf_instrument": "SQQQ",
+      "underlying_instrument": "QQQ",
+      "mapping_status": "blocked_by_mapping",
+      "blocking_reason": "target_benchmark_must_be_NDX"
+    }
+  ]
+}

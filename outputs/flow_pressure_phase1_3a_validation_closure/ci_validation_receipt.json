@@ -1,0 +1,13 @@
+{
+  "commit_sha": "",
+  "workflow_name": "",
+  "workflow_run_id_or_url_reference": "",
+  "ci_status": "pending_push",
+  "full_suite_executed": false,
+  "expected_test_collection_or_count": "334 local tests collected before commit",
+  "actionization_allowed": false,
+  "raw_provider_data_committed": false,
+  "phase_1_3_readiness_run": false,
+  "phase_2_run": false,
+  "notes": "Local full suite passed. Update this receipt after final commit is pushed and GitHub Actions result is verified."
+}

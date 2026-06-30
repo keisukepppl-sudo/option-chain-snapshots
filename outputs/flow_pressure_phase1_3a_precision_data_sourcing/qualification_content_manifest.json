@@ -1,0 +1,45 @@
+{
+  "artifact_version": "flow_pressure_source_qualification_v1",
+  "files": [
+    {
+      "path": "outputs/flow_pressure_phase1_3a_precision_data_sourcing/flow_pressure_phase1_3a_chatgpt_bundle.md",
+      "sha256": "a50b8f53f8060d961f21253f56fd0c86a48808e928d22c72a64e157ec7287872"
+    },
+    {
+      "path": "outputs/flow_pressure_phase1_3a_precision_data_sourcing/flow_pressure_phase1_3a_final_report.md",
+      "sha256": "15ccab284f5f1fd8546acf5385643f18037ff6335a9f65f8d137775873bac204"
+    },
+    {
+      "path": "outputs/flow_pressure_phase1_3a_precision_data_sourcing/proshares_publication_timing_inquiry.md",
+      "sha256": "1387e5d5750aa0eed21bb3cab019fe48f5a1c2c512237b927e9c87af53f72b39"
+    },
+    {
+      "path": "outputs/flow_pressure_phase1_3a_precision_data_sourcing/qqq_benchmark_mapping_validation.json",
+      "sha256": "cad16b7a42bedeaf138a958abffa6429c7f64c6f743202785947255a85b99934"
+    },
+    {
+      "path": "outputs/flow_pressure_phase1_3a_precision_data_sourcing/qqq_price_basis_and_corporate_actions_policy.md",
+      "sha256": "fc9964614965bb7399a186979dd8beb1b066ba02b7ed2c70c678ea050c6dd4a7"
+    },
+    {
+      "path": "outputs/flow_pressure_phase1_3a_precision_data_sourcing/qqq_reconciliation_plan.md",
+      "sha256": "03733441d19924b55801b52eda0001a9e905fe810426e72a95ecf723c3bbfaa0"
+    },
+    {
+      "path": "outputs/flow_pressure_phase1_3a_precision_data_sourcing/qqq_source_qualification_matrix.csv",
+      "sha256": "7337ffe40b6cb71b2af3f24d454c96f3f9f330d5e9a5ea087481129a5cfec864"
+    },
+    {
+      "path": "outputs/flow_pressure_phase1_3a_precision_data_sourcing/qqq_source_qualification_report.md",
+      "sha256": "6764184a5e611913496526a7174cf80da650a7206748a007cc8450b6b51c53f8"
+    },
+    {
+      "path": "outputs/flow_pressure_phase1_3a_precision_data_sourcing/real_data_intake_prerequisites.md",
+      "sha256": "f8ea5bd874711f047217360bb7705ab92d798b3601131fec48748092486f4069"
+    },
+    {
+      "path": "outputs/flow_pressure_phase1_3a_precision_data_sourcing/vendor_qualification_questionnaire.md",
+      "sha256": "4a6e2910d399039c829ad95bdaf721595a6c7cbd625f7881858cdcf6255444df"
+    }
+  ]
+}

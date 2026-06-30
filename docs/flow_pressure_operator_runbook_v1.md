@@ -50,7 +50,7 @@ research_timing_eligibility_summary.md
 real_data_readiness_report.md
 ```
 
-For QQQ/TQQQ/SQQQ, run:
+For the NDX benchmark / QQQ proxy / TQQQ / SQQQ family, run:
 
 ```powershell
 python market_bomb_flow_pressure_research_v0.py run-qqq-phase1-readiness --staging-id <opaque_staging_id> --decision-time-utc <utc> --research-timing-class eod_next_session
@@ -61,7 +61,7 @@ This writes readiness artifacts under the staging directory and does not create 
 
 ## Operator Rules
 
-- Use `QQQ/TQQQ/SQQQ` as the required first family.
+- Use `NDX` as the primary target benchmark and `QQQ/TQQQ/SQQQ` as the required first tradable proxy family.
 - Analyze `SOXL/SOXS` only with an explicit valid reference mapping or an explicitly marked proxy.
 - Preferred coverage is five complete years; minimum coverage is three complete years.
 - Require at least 250 timing-eligible sessions after warm-up for each primary research family.
@@ -69,6 +69,7 @@ This writes readiness artifacts under the staging directory and does not create 
 - Daily price rows must include real `available_at_timestamp`; the market close timestamp alone is not proof of availability.
 - Missing AUM, prices, returns, OI, IV, Greeks, or shares are never forward-filled.
 - Provider publication timing controls eligibility.
+- TQQQ and SQQQ must not be treated as exact `QQQ` benchmark mappings in production-like readiness. QQQ is proxy-only unless a fixture is explicitly synthetic and marked not for real readiness.
 
 ## Blocked Outcomes
 

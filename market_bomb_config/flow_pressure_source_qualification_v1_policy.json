@@ -1,0 +1,62 @@
+{
+  "artifact_version": "flow_pressure_source_qualification_v1",
+  "actionization_allowed": false,
+  "raw_provider_data_committed": false,
+  "phase1_3_readiness_allowed": false,
+  "phase2_study_allowed": false,
+  "primary_target_benchmark": "NDX",
+  "tradable_market_proxy": "QQQ",
+  "leveraged_etf_mappings": [
+    {
+      "etf_instrument": "TQQQ",
+      "target_benchmark_instrument": "NDX",
+      "target_leverage": 3.0,
+      "directionality": "long",
+      "market_proxy_instrument": "QQQ",
+      "is_proxy_underlying": false,
+      "benchmark_exact_or_proxy": "benchmark_exact"
+    },
+    {
+      "etf_instrument": "SQQQ",
+      "target_benchmark_instrument": "NDX",
+      "target_leverage": -3.0,
+      "directionality": "inverse",
+      "market_proxy_instrument": "QQQ",
+      "is_proxy_underlying": false,
+      "benchmark_exact_or_proxy": "benchmark_exact"
+    }
+  ],
+  "qualification_statuses": [
+    "gold_point_in_time_eligible",
+    "silver_documented_schedule_eligible",
+    "authoritative_but_historical_vintage_unproven",
+    "historical_descriptive_only",
+    "blocked_by_data_quality",
+    "blocked_by_timing"
+  ],
+  "predictive_allowed_statuses": [
+    "gold_point_in_time_eligible",
+    "silver_documented_schedule_eligible"
+  ],
+  "single_decision_time_validation_scope": [
+    "CSV schema validation",
+    "type validation",
+    "path containment",
+    "manifest hash validation",
+    "generic timestamp ordering checks"
+  ],
+  "single_decision_time_disallowed_scope": [
+    "historical row-level timing eligibility",
+    "historical AUM selection",
+    "revision eligibility",
+    "decision-date coverage",
+    "predictive Phase 1 readiness",
+    "Phase 2 admission"
+  ],
+  "raw_provider_data_policy": {
+    "fetching_allowed": false,
+    "browser_automation_allowed": false,
+    "api_integration_allowed": false,
+    "raw_provider_commit_allowed": false
+  }
+}

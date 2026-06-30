@@ -1,0 +1,25 @@
+{
+  "artifact_version": "flow_pressure_source_qualification_v1",
+  "files": [
+    {
+      "path": "outputs/flow_pressure_phase1_3a_validation_closure/ci_validation_receipt.json",
+      "sha256": "62275919aef1c3b9d57ca78973fe74ee04a20ee0534be02dceb7767e88652fc1"
+    },
+    {
+      "path": "outputs/flow_pressure_phase1_3a_validation_closure/flow_pressure_phase1_3a_1_chatgpt_bundle.md",
+      "sha256": "f8f5a4795b6b32939af2172f3e788ffcefbfb145159d4ff839aceecf6699ac58"
+    },
+    {
+      "path": "outputs/flow_pressure_phase1_3a_validation_closure/slow_test_attribution.md",
+      "sha256": "6e235390bda3e1c7aa040afcc9a0778a7ed238317d6b2fd38e788e273baabafc"
+    },
+    {
+      "path": "outputs/flow_pressure_phase1_3a_validation_closure/test_runtime_comparison.csv",
+      "sha256": "19058549c507db36546f0c1ec9825b10a4fea55520a2df0eafcf74cb209a34a7"
+    },
+    {
+      "path": "outputs/flow_pressure_phase1_3a_validation_closure/validation_summary.md",
+      "sha256": "fd91ea230e280d173865c8dbdffd7f40d30db340b421309e06a97a4e7b90b7e5"
+    }
+  ]
+}
