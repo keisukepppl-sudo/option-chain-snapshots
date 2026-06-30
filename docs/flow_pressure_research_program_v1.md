@@ -93,3 +93,36 @@ QQQ/TQQQ/SQQQ Phase 1 historical readiness requires a manifest-declared `decisio
 ## QQQ Phase 1.2 Hardening
 
 Phase 1.2 requires explicit schedule paths, immutable run-scoped readiness artifacts, and a complete candidate-selection audit. Phase 2 admission must use `validate-phase2-qqq-admission --readiness-artifact <readiness-run-path>` against one sealed readiness run. The admission command is a preflight only; it does not build a release, run a study, run a backtest, change scores, or enable actionization. See `docs/flow_pressure_qqq_phase1_hardening_v1.md`.
+
+## Phase 1.3A Source Qualification
+
+Phase 1.3A corrects the QQQ/TQQQ/SQQQ data-source design before real-data intake:
+
+```text
+primary_target_benchmark = NDX
+tradable_market_proxy = QQQ
+```
+
+TQQQ and SQQQ must not be treated as exact QQQ benchmark mappings in production-like readiness. Current revised historical exports without publication/revision evidence remain descriptive only.
+
+## Phase 1.3B Free Leveraged-ETF Proxy
+
+Phase 1.3B adds a separate free-data directional-amplifier proxy for TQQQ/SQQQ. It estimates only the sign and rough mechanical scale of daily-reset rebalance pressure:
+
+```text
+estimated_rebalance_notional = L * (L - 1) * A * r
+```
+
+Supported modes:
+
+```text
+historical_free_descriptive_proxy
+forward_pit_lite_observation
+```
+
+This module is research context only. It must not be used as a standalone buy/sell signal. It cannot unlock Phase 1.3 strict readiness, Phase 2 admission, Flow release, Flow statistical backtest, notifications, trading, sizing, execution, or actionization.
+
+See:
+
+- `docs/leveraged_etf_free_directional_proxy_v1.md`
+- `docs/leveraged_etf_free_proxy_operator_runbook_v1.md`

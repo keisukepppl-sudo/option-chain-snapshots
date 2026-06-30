@@ -1,0 +1,16 @@
+{
+  "artifact_version": "flow_pressure_phase1_3b_review_outputs_v1",
+  "content_set_hash": "a6cebea709265fc56ca4a591a18924532e7a326fc4c40b0829590e1a7f2b80e2",
+  "files": [
+    {
+      "bytes": 4095,
+      "relative_path": "flow_pressure_phase1_3b_chatgpt_bundle.md",
+      "sha256": "e7df96bf21bbbba94c8baf623731a1423dda07b0cfed68427e7c43c41cc0a2fa"
+    },
+    {
+      "bytes": 4925,
+      "relative_path": "flow_pressure_phase1_3b_final_report.md",
+      "sha256": "ee3f07b7285f2beeb8c96f131e686e3dd4321c3a5e7327c845d6adec8a09bf11"
+    }
+  ]
+}

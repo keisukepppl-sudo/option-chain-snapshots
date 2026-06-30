@@ -29,6 +29,7 @@ jobs:
         run: |
           python -m py_compile \
             market_bomb_flow_pressure_research_v0.py \
+            market_bomb_leveraged_etf_free_proxy_v1.py \
             market_bomb_flow_pressure_statistical_backtest_v1.py \
             market_bomb_fragility_data_release_v0.py \
             market_bomb_fragility_score_v0.py \
@@ -41,6 +42,7 @@ jobs:
           python -m pytest \
             tests/test_notifications.py \
             tests/test_market_bomb_flow_pressure_research_v0.py \
+            tests/test_market_bomb_leveraged_etf_free_proxy_v1.py \
             tests/test_market_bomb_flow_pressure_statistical_backtest_v1.py \
             tests/test_market_bomb_phase3_2_cta_vol_proxy.py \
             -q
