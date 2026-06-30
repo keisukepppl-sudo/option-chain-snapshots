@@ -59,7 +59,21 @@ Code changes for runtime: none.
 
 ## GitHub Actions Status
 
-Pending at the time this local validation artifact was created. After commit/push, `ci_validation_receipt.json` must be updated with the actual workflow run result.
+GitHub Actions passed for pushed commit `851609f74b93a601be811db7883bc1d5bfcbed39`.
+
+| Field | Value |
+|---|---|
+| Workflow | `CI` |
+| Run | `28451107788` |
+| Run URL | `https://github.com/keisukepppl-sudo/option-chain-snapshots/actions/runs/28451107788` |
+| Job | `tests` |
+| Job ID | `84313294002` |
+| Job status | `completed` |
+| Job conclusion | `success` |
+| Started | `2026-06-30T14:15:30Z` |
+| Completed | `2026-06-30T14:28:04Z` |
+
+The workflow includes both targeted safety suites and the full test suite.
 
 ## Guardrail Confirmation
 

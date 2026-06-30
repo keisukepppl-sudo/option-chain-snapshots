@@ -63,7 +63,24 @@ no_material_regression
 
 ## CI Status
 
-Pending final commit/push and GitHub Actions verification. Do not proceed to real-data intake until CI is verified for the final commit.
+GitHub Actions passed for commit:
+
+```text
+851609f74b93a601be811db7883bc1d5bfcbed39
+```
+
+Workflow:
+
+```text
+CI
+run: https://github.com/keisukepppl-sudo/option-chain-snapshots/actions/runs/28451107788
+job: tests
+job status: completed / success
+started: 2026-06-30T14:15:30Z
+completed: 2026-06-30T14:28:04Z
+```
+
+The workflow includes targeted safety suites and full test suite steps.
 
 ## Guardrails
 
