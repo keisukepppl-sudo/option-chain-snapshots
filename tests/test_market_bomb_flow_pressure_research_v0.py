@@ -28,7 +28,7 @@ def _root(tmp_path: Path) -> Path:
     test_policy = json.loads(policy_path.read_text(encoding="utf-8"))
     test_policy["phase1_minimum_coverage_years"] = 0
     test_policy["phase1_preferred_coverage_years"] = 0
-    test_policy["phase1_minimum_eligible_sessions_after_warmup"] = 30
+    test_policy["phase1_minimum_eligible_sessions_after_warmup"] = 5
     policy_path.write_text(json.dumps(test_policy, indent=2), encoding="utf-8")
     return root
 
@@ -294,7 +294,7 @@ def _phase1_decision_schedule_contract(start: str, n: int = 900) -> pd.DataFrame
 
 def _stage_phase1(root: Path, staging_id: str = "fixture_phase1") -> tuple[Path, str]:
     start = "2020-01-02"
-    n = 80
+    n = 35
     dates = pd.bdate_range(start, periods=n)
     decision_time = (pd.Timestamp(dates[-1]).tz_localize("UTC") + pd.Timedelta(hours=22)).isoformat().replace("+00:00", "Z")
     stage = m.staging_dir(root, staging_id)
@@ -340,6 +340,12 @@ def _stage_phase1(root: Path, staging_id: str = "fixture_phase1") -> tuple[Path,
     }
     (stage / "source_bundle_manifest.json").write_text(json.dumps(manifest, indent=2), encoding="utf-8")
     return stage, decision_time
+
+
+
+def _latest_phase1_run_dir(root: Path, staging_id: str) -> Path:
+    pointer = json.loads(m.latest_readiness_run_pointer(root, staging_id).read_text(encoding="utf-8"))
+    return m.qqq_phase1_readiness_run_dir(root, staging_id, pointer["readiness_run_id"])
 
 
 def test_verify_flow_staging_dry_preflight_no_persistent_release(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -647,8 +653,8 @@ def test_qqq_phase1_readiness_valid_path_outputs_report_and_no_release(tmp_path:
     root = _root(tmp_path)
     _stage_phase1(root)
     _, decision_time = _stage_phase1(root, "fixture_phase1_valid")
-    result = m.run_qqq_phase1_readiness(root, "fixture_phase1_valid", decision_time, "eod_next_session")
-    out = m.qqq_phase1_readiness_dir(root, "fixture_phase1_valid")
+    result = m.run_qqq_phase1_readiness(root, "fixture_phase1_valid", decision_time, "eod_next_session", "sources/decision_schedule.csv")
+    out = _latest_phase1_run_dir(root, "fixture_phase1_valid")
     assert result["readiness_status"] == "ready_for_eod_next_session_research"
     assert result["row_level_timing_audit_verified"] is True
     assert result["historical_revision_selection_audit_verified"] is True
@@ -657,6 +663,7 @@ def test_qqq_phase1_readiness_valid_path_outputs_report_and_no_release(tmp_path:
         "decision_schedule_validation_report.json",
         "row_level_timing_audit.csv",
         "historical_revision_selection_audit.csv",
+        "historical_candidate_selection_audit.csv",
         "timing_audit.csv",
         "timing_audit_summary.json",
         "source_coverage_by_instrument.csv",
@@ -664,14 +671,28 @@ def test_qqq_phase1_readiness_valid_path_outputs_report_and_no_release(tmp_path:
         "aum_selection_audit.csv",
         "research_timing_eligibility_summary.md",
         "real_data_readiness_report.md",
+        "readiness_receipt.json",
         "readiness_content_manifest.json",
     ]:
         assert (out / name).exists()
+    assert result["candidate_selection_audit_verified"] is True
+    assert result["decision_schedule_relative_path"] == "sources/decision_schedule.csv"
+    receipt = json.loads((out / "readiness_receipt.json").read_text(encoding="utf-8"))
+    assert receipt["candidate_selection_audit_verified"] is True
+    candidate = pd.read_csv(out / "historical_candidate_selection_audit.csv")
+    assert candidate["selected_for_feature"].astype(bool).any()
     report = (out / "real_data_readiness_report.md").read_text(encoding="utf-8")
     assert "This report validates data readiness only." in report
     assert "does not run a backtest" in report
     assert m.verify_qqq_phase1_readiness(root, "fixture_phase1_valid")["status"] == "valid"
     assert not m.releases_dir(root).exists()
+
+
+def test_qqq_phase1_requires_explicit_decision_schedule_file(tmp_path: Path) -> None:
+    root = _root(tmp_path)
+    _, decision_time = _stage_phase1(root)
+    with pytest.raises(SystemExit, match="explicit_decision_schedule_file_required_for_historical_readiness"):
+        m.run_qqq_phase1_readiness(root, "fixture_phase1", decision_time, "eod_next_session")
 
 
 def test_qqq_phase1_multidate_requires_manifest_decision_schedule(tmp_path: Path) -> None:
@@ -681,7 +702,7 @@ def test_qqq_phase1_multidate_requires_manifest_decision_schedule(tmp_path: Path
     manifest["sources"] = [source for source in manifest["sources"] if source["dataset_type"] != "decision_schedule"]
     _write_manifest(stage, manifest)
     with pytest.raises(SystemExit, match="historical_multi_date_requires_row_level_decision_schedule"):
-        m.run_qqq_phase1_readiness(root, "fixture_phase1", decision_time, "eod_next_session")
+        m.run_qqq_phase1_readiness(root, "fixture_phase1", decision_time, "eod_next_session", "sources/decision_schedule.csv")
 
 
 def test_qqq_phase1_duplicate_schedule_row_blocks_readiness(tmp_path: Path) -> None:
@@ -695,11 +716,61 @@ def test_qqq_phase1_duplicate_schedule_row_blocks_readiness(tmp_path: Path) -> N
     schedule.to_csv(path, index=False)
     sched_source["content_sha256"] = m.file_sha256(path)
     _write_manifest(stage, manifest)
-    result = m.run_qqq_phase1_readiness(root, "fixture_phase1", decision_time, "eod_next_session")
-    report = json.loads((m.qqq_phase1_readiness_dir(root, "fixture_phase1") / "decision_schedule_validation_report.json").read_text(encoding="utf-8"))
+    result = m.run_qqq_phase1_readiness(root, "fixture_phase1", decision_time, "eod_next_session", "sources/decision_schedule.csv")
+    report = json.loads((_latest_phase1_run_dir(root, "fixture_phase1") / "decision_schedule_validation_report.json").read_text(encoding="utf-8"))
     assert result["readiness_status"] == "blocked_by_timing"
     assert report["duplicate_schedule_row_count"] >= 1
     assert any(row["code"] == "duplicate_schedule_row" for row in report["diagnostics"])
+
+
+def test_qqq_phase1_readiness_runs_are_append_only(tmp_path: Path) -> None:
+    root = _root(tmp_path)
+    _, decision_time = _stage_phase1(root)
+    first = m.run_qqq_phase1_readiness(root, "fixture_phase1", decision_time, "eod_next_session", "sources/decision_schedule.csv")
+    second = m.run_qqq_phase1_readiness(root, "fixture_phase1", decision_time, "eod_next_session", "sources/decision_schedule.csv")
+    assert first["readiness_run_id"] != second["readiness_run_id"]
+    assert m.qqq_phase1_readiness_run_dir(root, "fixture_phase1", first["readiness_run_id"]).exists()
+    assert m.qqq_phase1_readiness_run_dir(root, "fixture_phase1", second["readiness_run_id"]).exists()
+
+
+def test_qqq_phase1_phase2_admission_requires_explicit_artifact_and_rejects_synthetic(tmp_path: Path) -> None:
+    root = _root(tmp_path)
+    _, decision_time = _stage_phase1(root)
+    result = m.run_qqq_phase1_readiness(root, "fixture_phase1", decision_time, "eod_next_session", "sources/decision_schedule.csv")
+    artifact = m.qqq_phase1_readiness_run_dir(root, "fixture_phase1", result["readiness_run_id"])
+    with pytest.raises(SystemExit, match="phase2_requires_explicit_readiness_artifact"):
+        m.validate_phase2_qqq_admission(root)
+    admission = m.validate_phase2_qqq_admission(root, str(artifact))
+    assert admission["status"] == "blocked"
+    assert "synthetic_readiness_not_valid_for_real_phase2" in admission["failure_codes"]
+    synthetic_admission = m.validate_phase2_qqq_admission(root, str(artifact), allow_synthetic=True)
+    assert synthetic_admission["status"] == "admission_ready"
+    assert not m.releases_dir(root).exists()
+
+
+def test_qqq_phase1_candidate_audit_tags_later_revision(tmp_path: Path) -> None:
+    root = _root(tmp_path)
+    stage, decision_time = _stage_phase1(root)
+    manifest = _manifest(stage)
+    aum_source = next(s for s in manifest["sources"] if s["dataset_type"] == "leveraged_etf_aum")
+    path = stage / aum_source["relative_path"]
+    aum = pd.read_csv(path)
+    base = aum[(aum["etf_instrument"] == "TQQQ")].iloc[-2].copy()
+    base["source_row_id"] = "AUM_TQQQ_LATE_REV"
+    base["publication_id"] = "AUM_TQQQ_REV_FAMILY"
+    base["revision_id"] = "rev_2026"
+    base["revision_sequence"] = 2
+    base["supersedes_source_row_id"] = aum[(aum["etf_instrument"] == "TQQQ")].iloc[-2]["source_row_id"]
+    base["available_at_timestamp"] = "2026-01-15T21:30:00Z"
+    aum = pd.concat([aum, pd.DataFrame([base])], ignore_index=True)
+    aum.to_csv(path, index=False)
+    aum_source["content_sha256"] = m.file_sha256(path)
+    _write_manifest(stage, manifest)
+    m.run_qqq_phase1_readiness(root, "fixture_phase1", decision_time, "eod_next_session", "sources/decision_schedule.csv")
+    candidate = pd.read_csv(_latest_phase1_run_dir(root, "fixture_phase1") / "historical_candidate_selection_audit.csv")
+    late = candidate[candidate["source_row_id"].astype(str).eq("AUM_TQQQ_LATE_REV")]
+    assert not late.empty
+    assert late["exclusion_reason"].astype(str).str.contains("later_revision_unavailable_at_decision_time").any()
 
 
 def test_qqq_phase1_missing_tqqq_mapping_blocks_mapping(tmp_path: Path) -> None:
@@ -713,9 +784,9 @@ def test_qqq_phase1_missing_tqqq_mapping_blocks_mapping(tmp_path: Path) -> None:
     manifest = _manifest(stage)
     next(s for s in manifest["sources"] if s["dataset_type"] == "leveraged_etf_reference")["content_sha256"] = m.file_sha256(path)
     _write_manifest(stage, manifest)
-    result = m.run_qqq_phase1_readiness(root, "fixture_phase1", decision_time, "eod_next_session")
+    result = m.run_qqq_phase1_readiness(root, "fixture_phase1", decision_time, "eod_next_session", "sources/decision_schedule.csv")
     assert result["readiness_status"] == "blocked_by_mapping"
-    component = pd.read_csv(m.qqq_phase1_readiness_dir(root, "fixture_phase1") / "qqq_phase1_component_status.csv")
+    component = pd.read_csv(_latest_phase1_run_dir(root, "fixture_phase1") / "qqq_phase1_component_status.csv")
     assert "blocked_by_mapping" in set(component["Status"])
     assert not m.releases_dir(root).exists()
 
@@ -731,9 +802,9 @@ def test_qqq_phase1_stale_aum_blocks_timing(tmp_path: Path) -> None:
     aum.to_csv(path, index=False)
     aum_source["content_sha256"] = m.file_sha256(path)
     _write_manifest(stage, manifest)
-    result = m.run_qqq_phase1_readiness(root, "fixture_phase1", decision_time, "eod_next_session")
+    result = m.run_qqq_phase1_readiness(root, "fixture_phase1", decision_time, "eod_next_session", "sources/decision_schedule.csv")
     assert result["readiness_status"] == "blocked_by_timing"
-    aum_summary = pd.read_csv(m.qqq_phase1_readiness_dir(root, "fixture_phase1") / "aum_freshness_summary.csv")
+    aum_summary = pd.read_csv(_latest_phase1_run_dir(root, "fixture_phase1") / "aum_freshness_summary.csv")
     assert set(aum_summary["aum_freshness_status"]) == {"blocked"}
     assert not m.releases_dir(root).exists()
 
@@ -749,9 +820,9 @@ def test_qqq_phase1_invalid_ohlc_blocks_data_quality(tmp_path: Path) -> None:
     prices.to_csv(path, index=False)
     price_source["content_sha256"] = m.file_sha256(path)
     _write_manifest(stage, manifest)
-    result = m.run_qqq_phase1_readiness(root, "fixture_phase1", decision_time, "eod_next_session")
+    result = m.run_qqq_phase1_readiness(root, "fixture_phase1", decision_time, "eod_next_session", "sources/decision_schedule.csv")
     assert result["readiness_status"] == "blocked_by_data_quality"
-    validation = json.loads((m.qqq_phase1_readiness_dir(root, "fixture_phase1") / "provider_contract_validation_report.json").read_text(encoding="utf-8"))
+    validation = json.loads((_latest_phase1_run_dir(root, "fixture_phase1") / "provider_contract_validation_report.json").read_text(encoding="utf-8"))
     assert any(row["code"] == "invalid_ohlc_ordering" for row in validation["diagnostics"])
 
 
@@ -761,13 +832,13 @@ def test_qqq_phase1_short_return_history_is_insufficient_coverage(tmp_path: Path
     manifest = _manifest(stage)
     ret_source = next(s for s in manifest["sources"] if s["dataset_type"] == "vol_control_returns")
     path = stage / ret_source["relative_path"]
-    returns = pd.read_csv(path).iloc[:30]
+    returns = pd.read_csv(path).iloc[:10]
     returns.to_csv(path, index=False)
     ret_source["content_sha256"] = m.file_sha256(path)
     _write_manifest(stage, manifest)
-    result = m.run_qqq_phase1_readiness(root, "fixture_phase1", decision_time, "eod_next_session")
+    result = m.run_qqq_phase1_readiness(root, "fixture_phase1", decision_time, "eod_next_session", "sources/decision_schedule.csv")
     assert result["readiness_status"] == "insufficient_coverage"
-    component = pd.read_csv(m.qqq_phase1_readiness_dir(root, "fixture_phase1") / "qqq_phase1_component_status.csv")
+    component = pd.read_csv(_latest_phase1_run_dir(root, "fixture_phase1") / "qqq_phase1_component_status.csv")
     row = component[component["Component"].eq("QQQ vol-control returns")].iloc[0]
     assert row["Status"] == "insufficient_coverage"
 
@@ -784,17 +855,17 @@ def test_qqq_phase1_aum_shares_nav_disagreement_is_surfaced(tmp_path: Path) -> N
     aum.to_csv(path, index=False)
     aum_source["content_sha256"] = m.file_sha256(path)
     _write_manifest(stage, manifest)
-    result = m.run_qqq_phase1_readiness(root, "fixture_phase1", decision_time, "eod_next_session")
+    result = m.run_qqq_phase1_readiness(root, "fixture_phase1", decision_time, "eod_next_session", "sources/decision_schedule.csv")
     assert result["readiness_status"] == "ready_for_eod_next_session_research"
-    validation = json.loads((m.qqq_phase1_readiness_dir(root, "fixture_phase1") / "provider_contract_validation_report.json").read_text(encoding="utf-8"))
+    validation = json.loads((_latest_phase1_run_dir(root, "fixture_phase1") / "provider_contract_validation_report.json").read_text(encoding="utf-8"))
     assert any(row["code"] == "aum_shares_nav_disagreement" and row["status"] == "warning" for row in validation["diagnostics"])
 
 
 def test_qqq_phase1_readiness_manifest_detects_tamper(tmp_path: Path) -> None:
     root = _root(tmp_path)
     _, decision_time = _stage_phase1(root)
-    m.run_qqq_phase1_readiness(root, "fixture_phase1", decision_time, "eod_next_session")
-    out = m.qqq_phase1_readiness_dir(root, "fixture_phase1")
+    m.run_qqq_phase1_readiness(root, "fixture_phase1", decision_time, "eod_next_session", "sources/decision_schedule.csv")
+    out = _latest_phase1_run_dir(root, "fixture_phase1")
     report = out / "real_data_readiness_report.md"
     report.write_text(report.read_text(encoding="utf-8") + "\n", encoding="utf-8")
     with pytest.raises(SystemExit, match="readiness artifact sha mismatch"):

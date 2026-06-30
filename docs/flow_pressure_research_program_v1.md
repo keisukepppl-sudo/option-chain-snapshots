@@ -89,3 +89,7 @@ The workflow writes `real_data_readiness_report.md` and related CSV/JSON audits 
 ## QQQ Phase 1.1 PIT Readiness
 
 QQQ/TQQQ/SQQQ Phase 1 historical readiness requires a manifest-declared `decision_schedule.csv` and row-level point-in-time audit outputs. Use `run-qqq-phase1-readiness --decision-schedule-file sources/decision_schedule.csv`; do not use a single global decision timestamp for multi-date historical readiness. See `docs/flow_pressure_qqq_phase1_point_in_time_audit_v1.md`.
+
+## QQQ Phase 1.2 Hardening
+
+Phase 1.2 requires explicit schedule paths, immutable run-scoped readiness artifacts, and a complete candidate-selection audit. Phase 2 admission must use `validate-phase2-qqq-admission --readiness-artifact <readiness-run-path>` against one sealed readiness run. The admission command is a preflight only; it does not build a release, run a study, run a backtest, change scores, or enable actionization. See `docs/flow_pressure_qqq_phase1_hardening_v1.md`.

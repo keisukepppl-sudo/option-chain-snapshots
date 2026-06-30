@@ -88,3 +88,7 @@ Do not run `build-flow-release`, `run-flow-real-data-study`, or `run-flow-statis
 ## QQQ Phase 1.1 PIT Readiness
 
 QQQ/TQQQ/SQQQ Phase 1 historical readiness requires a manifest-declared `decision_schedule.csv` and row-level point-in-time audit outputs. Use `run-qqq-phase1-readiness --decision-schedule-file sources/decision_schedule.csv`; do not use a single global decision timestamp for multi-date historical readiness. See `docs/flow_pressure_qqq_phase1_point_in_time_audit_v1.md`.
+
+## QQQ Phase 1.2 Hardening
+
+Production-like readiness must pass an explicit `--decision-schedule-file`; no hidden default schedule path is accepted. Each readiness run writes a unique immutable run directory with `readiness_receipt.json`, `readiness_content_manifest.json`, and `historical_candidate_selection_audit.csv`. Phase 2 admission is preflight-only via `validate-phase2-qqq-admission --readiness-artifact <readiness-run-path>` and does not create a release, backtest, alert, or trading output. See `docs/flow_pressure_qqq_phase1_hardening_v1.md`.
