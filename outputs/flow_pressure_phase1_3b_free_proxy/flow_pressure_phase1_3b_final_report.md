@@ -9,7 +9,8 @@ Implemented a separate, research-only free leveraged-ETF directional-amplifier p
 ## Start / Final Commit
 
 - Start commit: `3d0b02088cc769a84f7ab02869d1775f8c6606c1`
-- Final commit: pending commit at report creation
+- Implementation commit: `afa16d883657894409bb37e1e2adac3f03043d5e`
+- Final report commit: pending CI receipt commit
 
 ## Changed Files
 
@@ -120,6 +121,21 @@ python market_bomb_leveraged_etf_free_proxy_v1.py verify-leveraged-etf-free-prox
 - Targeted safety suite with free proxy: `92 passed, 1 skipped`
 - Full local suite: `366 passed, 2 skipped, 52 warnings`
 - Compile check: passed for the new module and CI core modules.
+
+## GitHub Actions
+
+GitHub Actions passed for implementation commit `afa16d883657894409bb37e1e2adac3f03043d5e`.
+
+| Field | Value |
+|---|---|
+| Workflow | `CI` |
+| Run | `28457672585` |
+| Run URL | `https://github.com/keisukepppl-sudo/option-chain-snapshots/actions/runs/28457672585` |
+| Job | `tests` |
+| Job ID | `84336826243` |
+| Job conclusion | `success` |
+| Started | `2026-06-30T15:53:56Z` |
+| Completed | `2026-06-30T16:09:23Z` |
 
 ## Known Limitations
 

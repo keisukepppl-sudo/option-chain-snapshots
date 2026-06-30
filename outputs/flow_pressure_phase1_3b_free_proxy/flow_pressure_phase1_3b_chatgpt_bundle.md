@@ -105,6 +105,18 @@ targeted safety suite: 92 passed, 1 skipped
 full local suite: 366 passed, 2 skipped, 52 warnings
 ```
 
+GitHub Actions:
+
+```text
+implementation commit: afa16d883657894409bb37e1e2adac3f03043d5e
+workflow: CI
+run: https://github.com/keisukepppl-sudo/option-chain-snapshots/actions/runs/28457672585
+job: tests
+job conclusion: success
+started: 2026-06-30T15:53:56Z
+completed: 2026-06-30T16:09:23Z
+```
+
 ## Final Judgment
 
 The model can describe the sign and rough mechanical scale of daily-reset leveraged-ETF rebalancing, but free historical data cannot prove when historical AUM records became known. Therefore history is descriptive only.

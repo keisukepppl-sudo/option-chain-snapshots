@@ -1,16 +1,21 @@
 {
   "artifact_version": "flow_pressure_phase1_3b_review_outputs_v1",
-  "content_set_hash": "a6cebea709265fc56ca4a591a18924532e7a326fc4c40b0829590e1a7f2b80e2",
+  "content_set_hash": "a28d56014b72cc71bf36784458252d6be80f334cd4d91c8cd4c6c2961b887b73",
   "files": [
     {
-      "bytes": 4095,
-      "relative_path": "flow_pressure_phase1_3b_chatgpt_bundle.md",
-      "sha256": "e7df96bf21bbbba94c8baf623731a1423dda07b0cfed68427e7c43c41cc0a2fa"
+      "bytes": 934,
+      "relative_path": "ci_validation_receipt.json",
+      "sha256": "ed5d7b1eb7f0f203dd3adfba43869700485718141be519315c51d531cdf14f86"
     },
     {
-      "bytes": 4925,
+      "bytes": 4388,
+      "relative_path": "flow_pressure_phase1_3b_chatgpt_bundle.md",
+      "sha256": "13f635111980802f76be2774b7fe4a7def7d7237d2420da9c5a6ee0b9ede709e"
+    },
+    {
+      "bytes": 5429,
       "relative_path": "flow_pressure_phase1_3b_final_report.md",
-      "sha256": "ee3f07b7285f2beeb8c96f131e686e3dd4321c3a5e7327c845d6adec8a09bf11"
+      "sha256": "754d32dbd8913ae76c5d9bf96cfe2dc2198b2c7620f252ffe263691f03b164fa"
     }
   ]
 }

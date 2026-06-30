@@ -1,0 +1,21 @@
+{
+  "commit_sha": "afa16d883657894409bb37e1e2adac3f03043d5e",
+  "workflow_name": "CI",
+  "workflow_run_id_or_url_reference": "https://github.com/keisukepppl-sudo/option-chain-snapshots/actions/runs/28457672585",
+  "ci_status": "success",
+  "full_suite_executed": true,
+  "test_job_id": 84336826243,
+  "test_job_url": "https://github.com/keisukepppl-sudo/option-chain-snapshots/actions/runs/28457672585/job/84336826243",
+  "test_job_status": "completed",
+  "test_job_conclusion": "success",
+  "test_job_started_at_utc": "2026-06-30T15:53:56Z",
+  "test_job_completed_at_utc": "2026-06-30T16:09:23Z",
+  "actionization_allowed": false,
+  "raw_provider_data_committed": false,
+  "phase_1_3_readiness_run": false,
+  "phase_2_run": false,
+  "release_created": false,
+  "backtest_run": false,
+  "notification_or_trading_changed": false,
+  "notes": "CI workflow includes targeted safety suite with free proxy tests and the full test suite."
+}
