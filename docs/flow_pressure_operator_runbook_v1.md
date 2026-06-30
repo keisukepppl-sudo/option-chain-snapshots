@@ -84,3 +84,7 @@ no_reliable_evidence
 Do not lower coverage, timing, or data-quality standards to force a study result.
 
 Do not run `build-flow-release`, `run-flow-real-data-study`, or `run-flow-statistical-backtest` during Phase 1.
+
+## QQQ Phase 1.1 PIT Readiness
+
+QQQ/TQQQ/SQQQ Phase 1 historical readiness requires a manifest-declared `decision_schedule.csv` and row-level point-in-time audit outputs. Use `run-qqq-phase1-readiness --decision-schedule-file sources/decision_schedule.csv`; do not use a single global decision timestamp for multi-date historical readiness. See `docs/flow_pressure_qqq_phase1_point_in_time_audit_v1.md`.

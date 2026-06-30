@@ -24,6 +24,12 @@ def _root(tmp_path: Path) -> Path:
         "flow_pressure_real_data_study_v1_backtest_spec.json",
     ]:
         shutil.copyfile(repo_config / name, root / "market_bomb_config" / name)
+    policy_path = root / "market_bomb_config" / "flow_pressure_research_v0_policy.json"
+    test_policy = json.loads(policy_path.read_text(encoding="utf-8"))
+    test_policy["phase1_minimum_coverage_years"] = 0
+    test_policy["phase1_preferred_coverage_years"] = 0
+    test_policy["phase1_minimum_eligible_sessions_after_warmup"] = 30
+    policy_path.write_text(json.dumps(test_policy, indent=2), encoding="utf-8")
     return root
 
 
@@ -259,9 +265,36 @@ def _phase1_aum_contract(start: str, n: int = 900) -> pd.DataFrame:
     return pd.DataFrame(rows)
 
 
+def _phase1_decision_schedule_contract(start: str, n: int = 900) -> pd.DataFrame:
+    dates = pd.bdate_range(start, periods=n)
+    rows = []
+    for i, date in enumerate(dates[:-1]):
+        target = dates[i + 1]
+        decision_time = pd.Timestamp(date).tz_localize("UTC") + pd.Timedelta(hours=22)
+        target_start = pd.Timestamp(target).tz_localize("UTC") + pd.Timedelta(hours=14, minutes=30)
+        rows.append(
+            {
+                "decision_schedule_row_id": f"SCH_{i:03d}",
+                "decision_date": date.strftime("%Y-%m-%d"),
+                "decision_time_utc": decision_time.isoformat().replace("+00:00", "Z"),
+                "target_session_date": target.strftime("%Y-%m-%d"),
+                "target_start_timestamp_utc": target_start.isoformat().replace("+00:00", "Z"),
+                "research_timing_class": "eod_next_session",
+                "decision_time_policy_version": "phase1_1_eod_next_session_v1",
+                "schedule_generation_method": "synthetic_fixture",
+                "schedule_source_description": "unit test observed QQQ session sequence",
+                "is_synthetic_fixture": True,
+                "source_name": "unit_test_local_csv",
+                "source_file": "decision_schedule.csv",
+                "dataset_version": "unit_test_v1",
+            }
+        )
+    return pd.DataFrame(rows)
+
+
 def _stage_phase1(root: Path, staging_id: str = "fixture_phase1") -> tuple[Path, str]:
     start = "2020-01-02"
-    n = 900
+    n = 80
     dates = pd.bdate_range(start, periods=n)
     decision_time = (pd.Timestamp(dates[-1]).tz_localize("UTC") + pd.Timedelta(hours=22)).isoformat().replace("+00:00", "Z")
     stage = m.staging_dir(root, staging_id)
@@ -279,6 +312,7 @@ def _stage_phase1(root: Path, staging_id: str = "fixture_phase1") -> tuple[Path,
         ("leveraged_etf_reference", "leveraged_etf_reference", "sources/leveraged_etf_reference.csv", "TQQQ", "leveraged_etf_rebalance", _reference_contract()),
         ("leveraged_etf_aum", "leveraged_etf_aum", "sources/leveraged_etf_aum.csv", "TQQQ", "leveraged_etf_rebalance", _phase1_aum_contract(start, n=n)),
         ("vol_control_returns", "vol_control_returns", "sources/vol_control_returns.csv", "QQQ", "vol_control_deleveraging", _vol_returns_contract("QQQ", start=start, n=n)),
+        ("decision_schedule", "decision_schedule", "sources/decision_schedule.csv", "QQQ", "flow_pressure_readiness", _phase1_decision_schedule_contract(start, n=n)),
     ]
     sources = []
     for source_id, dataset_type, rel, instrument, module, df in files:
@@ -286,6 +320,10 @@ def _stage_phase1(root: Path, staging_id: str = "fixture_phase1") -> tuple[Path,
         source = _contract_source(source_id, dataset_type, rel, instrument, module, sha)
         source["coverage_start_date"] = dates[0].strftime("%Y-%m-%d")
         source["coverage_end_date"] = dates[-1].strftime("%Y-%m-%d")
+        if dataset_type == "decision_schedule":
+            source["row_identifier_field"] = "decision_schedule_row_id"
+            source["asset_class"] = "decision_schedule"
+            source["availability_evidence_type"] = "synthetic_fixture"
         sources.append(source)
     manifest = {
         "artifact_version": "flow_pressure_qqq_phase1_fixture",
@@ -612,8 +650,13 @@ def test_qqq_phase1_readiness_valid_path_outputs_report_and_no_release(tmp_path:
     result = m.run_qqq_phase1_readiness(root, "fixture_phase1_valid", decision_time, "eod_next_session")
     out = m.qqq_phase1_readiness_dir(root, "fixture_phase1_valid")
     assert result["readiness_status"] == "ready_for_eod_next_session_research"
+    assert result["row_level_timing_audit_verified"] is True
+    assert result["historical_revision_selection_audit_verified"] is True
     for name in [
         "provider_contract_validation_report.json",
+        "decision_schedule_validation_report.json",
+        "row_level_timing_audit.csv",
+        "historical_revision_selection_audit.csv",
         "timing_audit.csv",
         "timing_audit_summary.json",
         "source_coverage_by_instrument.csv",
@@ -629,6 +672,34 @@ def test_qqq_phase1_readiness_valid_path_outputs_report_and_no_release(tmp_path:
     assert "does not run a backtest" in report
     assert m.verify_qqq_phase1_readiness(root, "fixture_phase1_valid")["status"] == "valid"
     assert not m.releases_dir(root).exists()
+
+
+def test_qqq_phase1_multidate_requires_manifest_decision_schedule(tmp_path: Path) -> None:
+    root = _root(tmp_path)
+    stage, decision_time = _stage_phase1(root)
+    manifest = _manifest(stage)
+    manifest["sources"] = [source for source in manifest["sources"] if source["dataset_type"] != "decision_schedule"]
+    _write_manifest(stage, manifest)
+    with pytest.raises(SystemExit, match="historical_multi_date_requires_row_level_decision_schedule"):
+        m.run_qqq_phase1_readiness(root, "fixture_phase1", decision_time, "eod_next_session")
+
+
+def test_qqq_phase1_duplicate_schedule_row_blocks_readiness(tmp_path: Path) -> None:
+    root = _root(tmp_path)
+    stage, decision_time = _stage_phase1(root)
+    manifest = _manifest(stage)
+    sched_source = next(s for s in manifest["sources"] if s["dataset_type"] == "decision_schedule")
+    path = stage / sched_source["relative_path"]
+    schedule = pd.read_csv(path)
+    schedule = pd.concat([schedule, schedule.iloc[[0]]], ignore_index=True)
+    schedule.to_csv(path, index=False)
+    sched_source["content_sha256"] = m.file_sha256(path)
+    _write_manifest(stage, manifest)
+    result = m.run_qqq_phase1_readiness(root, "fixture_phase1", decision_time, "eod_next_session")
+    report = json.loads((m.qqq_phase1_readiness_dir(root, "fixture_phase1") / "decision_schedule_validation_report.json").read_text(encoding="utf-8"))
+    assert result["readiness_status"] == "blocked_by_timing"
+    assert report["duplicate_schedule_row_count"] >= 1
+    assert any(row["code"] == "duplicate_schedule_row" for row in report["diagnostics"])
 
 
 def test_qqq_phase1_missing_tqqq_mapping_blocks_mapping(tmp_path: Path) -> None:

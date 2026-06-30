@@ -85,3 +85,7 @@ python market_bomb_flow_pressure_research_v0.py verify-qqq-phase1-readiness --st
 ```
 
 The workflow writes `real_data_readiness_report.md` and related CSV/JSON audits under the staging directory. It does not build a release, run a real-data study, run a statistical backtest, alter Fragility Score, or create trading/notification behavior.
+
+## QQQ Phase 1.1 PIT Readiness
+
+QQQ/TQQQ/SQQQ Phase 1 historical readiness requires a manifest-declared `decision_schedule.csv` and row-level point-in-time audit outputs. Use `run-qqq-phase1-readiness --decision-schedule-file sources/decision_schedule.csv`; do not use a single global decision timestamp for multi-date historical readiness. See `docs/flow_pressure_qqq_phase1_point_in_time_audit_v1.md`.

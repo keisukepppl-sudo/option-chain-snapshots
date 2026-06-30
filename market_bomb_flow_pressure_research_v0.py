@@ -25,6 +25,7 @@ SOURCE_CONTRACT_VERSION = "flow_provider_contract_v1"
 BACKTEST_SPEC_VERSION = "flow_pressure_backtest_spec_v0_0_2"
 REAL_DATA_STUDY_VERSION = "flow_pressure_real_data_study_v1"
 QQQ_PHASE1_READINESS_VERSION = "flow_pressure_qqq_phase1_readiness_v1"
+QQQ_PHASE1_PIT_AUDIT_VERSION = "flow_pressure_qqq_phase1_row_level_pit_audit_v1"
 ACTIONIZATION_ALLOWED = False
 SUPPORTED_MODULES = {"leveraged_etf_rebalance", "vol_control_deleveraging", "cta_trend_flow", "dealer_gamma_regime"}
 IMPLEMENTED_MODULES = {"leveraged_etf_rebalance", "vol_control_deleveraging"}
@@ -39,7 +40,13 @@ QQQ_PHASE1_REQUIRED_DATASETS = {
     "leveraged_etf_reference",
     "leveraged_etf_aum",
     "vol_control_returns",
+    "decision_schedule",
 }
+QQQ_PHASE1_REQUIRED_SOURCE_DATASETS = QQQ_PHASE1_REQUIRED_DATASETS - {"decision_schedule"}
+DECISION_SCHEDULE_METHODS = {"manual_explicit_schedule", "validated_observed_session_sequence", "synthetic_fixture"}
+PREDICTIVE_AVAILABILITY_EVIDENCE_TYPES = {"source_observed_timestamp", "provider_documented_publication_schedule", "provider_versioned_export"}
+NON_PREDICTIVE_AVAILABILITY_EVIDENCE_TYPES = {"operator_unverified", "unknown", ""}
+SYNTHETIC_AVAILABILITY_EVIDENCE_TYPES = {"synthetic_fixture"}
 READINESS_STATUSES = {
     "ready_for_eod_next_session_research",
     "insufficient_coverage",
@@ -54,6 +61,7 @@ CONTRACT_DATASET_TYPES = {
     "leveraged_etf_reference",
     "leveraged_etf_aum",
     "vol_control_returns",
+    "decision_schedule",
 }
 REQUIRED_SOURCE_FIELDS = [
     "source_id",
@@ -160,6 +168,21 @@ DATASET_REQUIRED_COLUMNS = {
         "simple_return",
         "log_return",
         "price_basis",
+        "source_name",
+        "source_file",
+        "dataset_version",
+    ],
+    "decision_schedule": [
+        "decision_schedule_row_id",
+        "decision_date",
+        "decision_time_utc",
+        "target_session_date",
+        "target_start_timestamp_utc",
+        "research_timing_class",
+        "decision_time_policy_version",
+        "schedule_generation_method",
+        "schedule_source_description",
+        "is_synthetic_fixture",
         "source_name",
         "source_file",
         "dataset_version",
@@ -363,6 +386,14 @@ def template_row_for(dataset_type: str, source_name: str, source_file: str) -> d
         base.update({"directionality": "long", "target_leverage": "3.0"})
     if dataset_type == "prices_intraday":
         base["bar_interval_seconds"] = "60"
+    if dataset_type == "decision_schedule":
+        base.update({
+            "research_timing_class": "eod_next_session",
+            "decision_time_policy_version": "phase1_1_eod_next_session_v1",
+            "schedule_generation_method": "manual_explicit_schedule",
+            "schedule_source_description": "operator supplied point-in-time decision schedule",
+            "is_synthetic_fixture": True,
+        })
     return base
 
 
@@ -377,6 +408,7 @@ def build_flow_staging_template(root: Path, staging_id: str) -> dict[str, Any]:
         "leveraged_etf_reference": "sources/leveraged_etf_reference.csv",
         "leveraged_etf_aum": "sources/leveraged_etf_aum.csv",
         "vol_control_returns": "sources/vol_control_returns.csv",
+        "decision_schedule": "sources/decision_schedule.csv",
     }
     sources = []
     for dataset_type, rel in dataset_files.items():
@@ -403,7 +435,7 @@ def build_flow_staging_template(root: Path, staging_id: str) -> dict[str, Any]:
                 "market_timestamp": "2000-01-01T00:00:00Z",
                 "instrument": "",
                 "asset_class": "template",
-                "module": "leveraged_etf_rebalance" if dataset_type.startswith("leveraged") or dataset_type.startswith("prices") else "vol_control_deleveraging",
+                "module": "flow_pressure_readiness" if dataset_type == "decision_schedule" else "leveraged_etf_rebalance" if dataset_type.startswith("leveraged") or dataset_type.startswith("prices") else "vol_control_deleveraging",
             }
         )
     manifest = {
@@ -457,6 +489,42 @@ def finite_number(value: Any) -> float:
         return math.nan
 
 
+def validate_decision_schedule_contract_rows(source: dict[str, Any], df: pd.DataFrame, decision_time: pd.Timestamp, research_timing_class: str, actual_hash: str, diagnostics: list[dict[str, Any]]) -> tuple[pd.DataFrame, list[dict[str, Any]]]:
+    source_id = str(source.get("source_id", ""))
+    dataset_type = "decision_schedule"
+    out_rows: list[dict[str, Any]] = []
+    for _, row in df.iterrows():
+        source_row_id = str(row.get("decision_schedule_row_id", ""))
+        decision_ts = parse_row_timestamp(row.get("decision_time_utc"), "decision_time_utc", diagnostics, source, source_row_id)
+        target_ts = parse_row_timestamp(row.get("target_start_timestamp_utc"), "target_start_timestamp_utc", diagnostics, source, source_row_id)
+        source_as_of = decision_ts
+        market_ts = decision_ts
+        timing_status = "timing_eligible"
+        timing_reason = "valid"
+        method = str(row.get("schedule_generation_method", ""))
+        row_timing_class = str(row.get("research_timing_class", ""))
+        if decision_ts is None or target_ts is None:
+            timing_status = "blocked"
+            timing_reason = "missing_timezone"
+            diagnostics.append(report_row("blocked", "missing_timezone", "decision schedule timestamps must be timezone-aware UTC", source_id, dataset_type, source_row_id))
+        elif target_ts <= decision_ts:
+            timing_status = "blocked"
+            timing_reason = "target_start_not_after_decision_time"
+            diagnostics.append(report_row("blocked", "target_start_not_after_decision_time", "target_start_timestamp_utc must be after decision_time_utc", source_id, dataset_type, source_row_id))
+        if method not in DECISION_SCHEDULE_METHODS:
+            timing_status = "blocked"
+            timing_reason = "unsupported_schedule_generation_method"
+            diagnostics.append(report_row("blocked", "unsupported_schedule_generation_method", f"unsupported schedule_generation_method: {method}", source_id, dataset_type, source_row_id))
+        if research_timing_class != "eod_next_session" or row_timing_class != "eod_next_session":
+            timing_status = "blocked"
+            timing_reason = "unsupported_research_timing_class"
+            diagnostics.append(report_row("blocked", "unsupported_research_timing_class", "Phase 1.1 permits only eod_next_session", source_id, dataset_type, source_row_id))
+        out_rows.append(canonical_row_from_contract_row(source, row, decision_time, research_timing_class, timing_status, timing_reason, market_ts, decision_ts, source_as_of, actual_hash))
+    canonical = pd.DataFrame(out_rows)
+    if not canonical.empty and canonical[["decision_date", "research_timing_class", "decision_time_policy_version"]].astype(str).duplicated().any():
+        diagnostics.append(report_row("blocked", "duplicate_schedule_row", "duplicate decision schedule row for decision_date, timing class, policy version", source_id, dataset_type))
+    return canonical, diagnostics
+
 def validate_contract_rows(root: Path, staging_id: str, source: dict[str, Any], decision_time: pd.Timestamp, research_timing_class: str) -> tuple[pd.DataFrame, list[dict[str, Any]]]:
     dataset_type = str(source.get("dataset_type", ""))
     source_id = str(source.get("source_id", ""))
@@ -471,6 +539,7 @@ def validate_contract_rows(root: Path, staging_id: str, source: dict[str, Any], 
     actual_hash = file_sha256(path)
     if str(source.get("content_sha256", "")).lower() != actual_hash.lower():
         diagnostics.append(report_row("blocked", "source_hash_mismatch", "manifest content_sha256 does not match staged file", source_id, dataset_type))
+        diagnostics.append(report_row("blocked", "manifest_hash_mismatch", "manifest content_sha256 does not match staged file", source_id, dataset_type))
     df = read_source_csv(path, source)
     required = required_columns(dataset_type)
     missing = [c for c in required if c not in df.columns]
@@ -483,6 +552,8 @@ def validate_contract_rows(root: Path, staging_id: str, source: dict[str, Any], 
         return pd.DataFrame(), diagnostics
     if df[row_id_field].astype(str).duplicated().any():
         diagnostics.append(report_row("blocked", "duplicate_source_row_id", "duplicate row identifier in source file", source_id, dataset_type))
+    if dataset_type == "decision_schedule":
+        return validate_decision_schedule_contract_rows(source, df, decision_time, research_timing_class, actual_hash, diagnostics)
     if research_timing_class == "intraday_close_window" and dataset_type == "prices_daily":
         diagnostics.append(report_row("blocked", "daily_data_not_close_window_eligible", "daily rows cannot support intraday_close_window", source_id, dataset_type))
     out_rows: list[dict[str, Any]] = []
@@ -568,6 +639,7 @@ def validate_contract_rows(root: Path, staging_id: str, source: dict[str, Any], 
         "leveraged_etf_reference": ["dataset_type", "etf_instrument", "effective_start_timestamp", "source_name", "dataset_version"],
         "leveraged_etf_aum": ["dataset_type", "etf_instrument", "as_of_timestamp", "source_name", "dataset_version"],
         "vol_control_returns": ["dataset_type", "instrument", "return_end_timestamp", "source_name", "dataset_version"],
+        "decision_schedule": ["dataset_type", "decision_date", "research_timing_class", "decision_time_policy_version"],
     }[dataset_type]
     if not canonical.empty and canonical[duplicate_keys].astype(str).duplicated().any():
         diagnostics.append(report_row("blocked", "duplicate_canonical_key", "duplicate canonical key in source export", source_id, dataset_type))
@@ -624,6 +696,21 @@ def canonical_row_from_contract_row(source: dict[str, Any], row: pd.Series, deci
         "simple_return": finite_number(row.get("simple_return")),
         "log_return": finite_number(row.get("log_return")),
         "price_basis": row.get("price_basis", ""),
+        "decision_schedule_row_id": str(row.get("decision_schedule_row_id", "")),
+        "decision_date": str(row.get("decision_date", "")),
+        "decision_time_utc": row.get("decision_time_utc", ""),
+        "target_session_date": str(row.get("target_session_date", "")),
+        "target_start_timestamp_utc": row.get("target_start_timestamp_utc", ""),
+        "decision_time_policy_version": str(row.get("decision_time_policy_version", "")),
+        "schedule_generation_method": str(row.get("schedule_generation_method", "")),
+        "schedule_source_description": str(row.get("schedule_source_description", "")),
+        "publication_id": str(row.get("publication_id", source_row_id)),
+        "revision_id": str(row.get("revision_id", "rev_0")),
+        "revision_sequence": finite_number(row.get("revision_sequence")) if str(row.get("revision_sequence", "")) != "" else 0,
+        "supersedes_source_row_id": str(row.get("supersedes_source_row_id", "")),
+        "availability_evidence_type": str(row.get("availability_evidence_type", source.get("availability_evidence_type", "synthetic_fixture" if bool(source.get("is_synthetic_fixture", False)) else "unknown"))),
+        "availability_evidence_reference": str(row.get("availability_evidence_reference", source.get("availability_evidence_reference", ""))),
+        "economic_as_of_timestamp": row.get("as_of_timestamp", row.get("return_end_timestamp", row.get("market_timestamp", ""))),
     }
     if not np.isfinite(record["aum_usd"]) and np.isfinite(record["shares_outstanding"]) and np.isfinite(record["nav_per_share"]):
         record["aum_usd"] = record["shares_outstanding"] * record["nav_per_share"]
@@ -1517,6 +1604,449 @@ def aum_selection_audit(features: pd.DataFrame) -> pd.DataFrame:
     return lev[cols].drop_duplicates().reset_index(drop=True)
 
 
+def decision_schedule_source(sources: list[dict[str, Any]], decision_schedule_file: str | None = None) -> dict[str, Any] | None:
+    normalized = validate_source_relative_path(decision_schedule_file) if decision_schedule_file else ""
+    for source in sources:
+        if str(source.get("dataset_type", "")) != "decision_schedule":
+            continue
+        if not normalized or validate_source_relative_path(source.get("relative_path")) == normalized:
+            return source
+    return None
+
+
+def decision_time_from_schedule(root: Path, staging_id: str, source: dict[str, Any]) -> str:
+    path = staged_source_path(root, staging_id, source)
+    df = read_source_csv(path, source)
+    if "decision_time_utc" not in df.columns or df.empty:
+        raise SystemExit("historical_multi_date_requires_row_level_decision_schedule")
+    times = pd.to_datetime(df["decision_time_utc"], utc=True, errors="raise")
+    return iso_utc(times.max())
+
+
+def build_qqq_phase1_decision_schedule_template(root: Path, staging_id: str, relative_path: str = "sources/decision_schedule.csv") -> dict[str, Any]:
+    stage = staging_dir(root, staging_id)
+    stage.mkdir(parents=True, exist_ok=True)
+    rel = validate_source_relative_path(relative_path)
+    path = stage / rel
+    path.parent.mkdir(parents=True, exist_ok=True)
+    if not path.exists():
+        pd.DataFrame(columns=required_columns("decision_schedule")).to_csv(path, index=False)
+    manifest_file = manifest_path(root, staging_id)
+    manifest = load_json(manifest_file) if manifest_file.exists() else {
+        "artifact_version": ARTIFACT_VERSION,
+        "source_contract_version": SOURCE_CONTRACT_VERSION,
+        "staging_id": staging_id,
+        "research_timing_class": "eod_next_session",
+        "operator_attestation": {"personal_research_only": True},
+        "sources": [],
+    }
+    sources = manifest.setdefault("sources", [])
+    existing = decision_schedule_source(sources, rel)
+    entry = {
+        "source_id": "decision_schedule",
+        "source_name": "operator_decision_schedule",
+        "source_file": rel,
+        "relative_path": rel,
+        "dataset_type": "decision_schedule",
+        "dataset_version": "phase1_1_v1",
+        "coverage_start_date": "",
+        "coverage_end_date": "",
+        "timezone": "UTC",
+        "row_identifier_field": "decision_schedule_row_id",
+        "content_sha256": file_sha256(path),
+        "is_synthetic_fixture": False,
+        "source_as_of_timestamp": "2000-01-01T00:00:00Z",
+        "available_at_timestamp": "2000-01-01T00:00:00Z",
+        "market_timestamp": "2000-01-01T00:00:00Z",
+        "instrument": "QQQ",
+        "asset_class": "decision_schedule",
+        "module": "flow_pressure_readiness",
+    }
+    if existing:
+        existing.update(entry)
+    else:
+        sources.append(entry)
+    write_json(manifest_file, manifest)
+    return {"staging_id": staging_id, "decision_schedule_file": rel, "content_sha256": entry["content_sha256"], "actionization_allowed": ACTIONIZATION_ALLOWED}
+
+
+def decision_schedule_frame(canonical: pd.DataFrame) -> pd.DataFrame:
+    if canonical.empty or "dataset_type" not in canonical.columns:
+        return pd.DataFrame()
+    sched = canonical[canonical["dataset_type"].astype(str).eq("decision_schedule")].copy()
+    if sched.empty:
+        return sched
+    sched["decision_dt"] = pd.to_datetime(sched["decision_time_utc"], utc=True, errors="coerce")
+    sched["target_start_dt"] = pd.to_datetime(sched["target_start_timestamp_utc"], utc=True, errors="coerce")
+    return sched.sort_values(["decision_dt", "decision_schedule_row_id"]).reset_index(drop=True)
+
+
+def validate_qqq_phase1_decision_schedule(canonical: pd.DataFrame, sources: list[dict[str, Any]], validation: dict[str, Any]) -> tuple[pd.DataFrame, dict[str, Any]]:
+    diagnostics: list[dict[str, Any]] = []
+    sched = decision_schedule_frame(canonical)
+    source = decision_schedule_source(sources)
+    if source is None or sched.empty:
+        diagnostics.append(report_row("blocked", "historical_multi_date_requires_row_level_decision_schedule", "Phase 1 historical readiness requires a manifest-declared decision_schedule.csv", "", "decision_schedule"))
+    qqq_prices = canonical[(canonical.get("dataset_type", pd.Series(dtype=str)).astype(str).eq("prices_daily")) & (canonical.get("instrument", pd.Series(dtype=str)).astype(str).str.upper().eq("QQQ"))].copy() if not canonical.empty else pd.DataFrame()
+    observed_sessions = set(qqq_prices.get("session_date", pd.Series(dtype=str)).astype(str)) if not qqq_prices.empty else set()
+    duplicate_count = 0
+    missing_target_count = 0
+    invalid_time_count = 0
+    invalid_method_count = 0
+    if not sched.empty:
+        duplicate_count = int(sched[["decision_date", "research_timing_class", "decision_time_policy_version"]].astype(str).duplicated().sum())
+        if duplicate_count:
+            diagnostics.append(report_row("blocked", "duplicate_schedule_row", "duplicate schedule row for decision date, timing class, policy version", "", "decision_schedule"))
+        for _, row in sched.iterrows():
+            row_id = str(row.get("decision_schedule_row_id", ""))
+            method = str(row.get("schedule_generation_method", ""))
+            if method not in DECISION_SCHEDULE_METHODS:
+                invalid_method_count += 1
+                diagnostics.append(report_row("blocked", "unsupported_schedule_generation_method", method, "", "decision_schedule", row_id))
+            if str(row.get("research_timing_class", "")) != "eod_next_session":
+                diagnostics.append(report_row("blocked", "unsupported_research_timing_class", "Phase 1.1 permits only eod_next_session", "", "decision_schedule", row_id))
+            decision_date = str(row.get("decision_date", ""))
+            target_date = str(row.get("target_session_date", ""))
+            decision_dt = row.get("decision_dt")
+            target_dt = row.get("target_start_dt")
+            if pd.isna(decision_dt) or pd.isna(target_dt):
+                diagnostics.append(report_row("blocked", "missing_timezone", "decision schedule timestamps must be UTC timezone-aware", "", "decision_schedule", row_id))
+            elif target_dt <= decision_dt:
+                invalid_time_count += 1
+                diagnostics.append(report_row("blocked", "target_start_not_after_decision_time", "target start must be after decision time", "", "decision_schedule", row_id))
+            if decision_date not in observed_sessions:
+                diagnostics.append(report_row("blocked", "missing_required_source", "decision_date is not an observed QQQ daily session", "", "decision_schedule", row_id))
+            if target_date not in observed_sessions:
+                missing_target_count += 1
+                diagnostics.append(report_row("blocked", "missing_target_session", "target_session_date is not a later observed QQQ daily session", "", "decision_schedule", row_id))
+            elif decision_date and target_date and target_date <= decision_date:
+                missing_target_count += 1
+                diagnostics.append(report_row("blocked", "missing_target_session", "target_session_date must be later than decision_date", "", "decision_schedule", row_id))
+    blocked_count = sum(1 for row in diagnostics if row.get("status") == "blocked")
+    report = {
+        "artifact_version": QQQ_PHASE1_PIT_AUDIT_VERSION,
+        "validation_status": "valid" if blocked_count == 0 else "blocked",
+        "schedule_row_count": int(len(sched)),
+        "duplicate_schedule_row_count": duplicate_count,
+        "missing_trading_session_count": missing_target_count,
+        "invalid_time_ordering_count": invalid_time_count,
+        "invalid_schedule_generation_method_count": invalid_method_count,
+        "allowed_research_timing_class": "eod_next_session",
+        "decision_schedule_required": True,
+        "predictive_multi_date_readiness_permitted": blocked_count == 0,
+        "source_contract_validation_status": validation.get("validation_status", ""),
+        "source_contract_blocked_count": validation.get("blocked_count", 0),
+        "diagnostics": diagnostics,
+        "actionization_allowed": ACTIONIZATION_ALLOWED,
+    }
+    return sched, report
+
+
+def _ts_value(value: Any) -> pd.Timestamp | None:
+    ts = pd.to_datetime(value, utc=True, errors="coerce")
+    return None if pd.isna(ts) else ts
+
+
+def _source_instrument(row: pd.Series) -> str:
+    return str(row.get("etf_instrument", row.get("instrument", ""))).upper()
+
+
+def _row_level_candidate_rows(canonical: pd.DataFrame, dataset_type: str, instrument: str, sched_row: pd.Series, pol: dict[str, Any]) -> pd.DataFrame:
+    if canonical.empty:
+        return pd.DataFrame()
+    data = canonical[canonical["dataset_type"].astype(str).eq(dataset_type)].copy()
+    if data.empty:
+        return data
+    if dataset_type in {"leveraged_etf_reference", "leveraged_etf_aum"}:
+        data = data[data["etf_instrument"].astype(str).str.upper().eq(instrument)]
+    else:
+        data = data[data["instrument"].astype(str).str.upper().eq(instrument)]
+    if data.empty:
+        return data
+    decision_date = str(sched_row.get("decision_date", ""))
+    decision_dt = sched_row.get("decision_dt")
+    if dataset_type == "prices_daily":
+        return data[data["session_date"].astype(str).eq(decision_date)].copy()
+    if dataset_type == "vol_control_returns":
+        data["return_date"] = pd.to_datetime(data["return_end_timestamp"], utc=True, errors="coerce").dt.strftime("%Y-%m-%d")
+        return data[data["return_date"].astype(str).eq(decision_date)].copy()
+    if dataset_type == "leveraged_etf_reference":
+        data["start_dt"] = pd.to_datetime(data["effective_start_timestamp"], utc=True, errors="coerce")
+        data["end_dt"] = pd.to_datetime(data["effective_end_timestamp"], utc=True, errors="coerce")
+        return data[(data["start_dt"].isna() | (data["start_dt"] <= decision_dt)) & (data["end_dt"].isna() | (data["end_dt"] >= decision_dt))].copy()
+    if dataset_type == "leveraged_etf_aum":
+        data["as_of_dt"] = pd.to_datetime(data["as_of_timestamp"], utc=True, errors="coerce")
+        data["valid_until_dt"] = pd.to_datetime(data["valid_until_timestamp"], utc=True, errors="coerce")
+        lookback_days = max(float(pol["max_aum_observation_age_days"]), 1.0) + 2.0
+        return data[(data["as_of_dt"].notna()) & (data["as_of_dt"] <= decision_dt) & (data["as_of_dt"] >= decision_dt - pd.Timedelta(days=lookback_days))].copy()
+    return data
+
+
+def build_row_level_timing_audit(root: Path, canonical: pd.DataFrame, sched: pd.DataFrame) -> pd.DataFrame:
+    cols = [
+        "audit_row_id", "decision_schedule_row_id", "decision_date", "decision_time_utc", "target_session_date", "target_start_timestamp_utc", "research_timing_class",
+        "dataset_type", "instrument", "source_row_id", "publication_id", "revision_id", "economic_as_of_timestamp", "source_as_of_timestamp", "market_timestamp",
+        "available_at_timestamp", "valid_until_timestamp", "aum_observation_age_days", "availability_evidence_type", "timing_eligible", "selection_eligible",
+        "selected_for_feature", "exclusion_reason", "selection_rule_version", "source_name", "source_file", "dataset_version",
+    ]
+    if sched.empty:
+        return pd.DataFrame(columns=cols)
+    pol = qqq_phase1_policy(root)
+    specs = [
+        ("prices_daily", "QQQ"), ("prices_daily", "TQQQ"), ("prices_daily", "SQQQ"),
+        ("leveraged_etf_reference", "TQQQ"), ("leveraged_etf_reference", "SQQQ"),
+        ("leveraged_etf_aum", "TQQQ"), ("leveraged_etf_aum", "SQQQ"),
+        ("vol_control_returns", "QQQ"),
+    ]
+    rows: list[dict[str, Any]] = []
+    for _, sched_row in sched.iterrows():
+        decision_dt = sched_row.get("decision_dt")
+        for dataset_type, instrument in specs:
+            candidates = _row_level_candidate_rows(canonical, dataset_type, instrument, sched_row, pol)
+            if candidates.empty:
+                rows.append({
+                    "audit_row_id": bytes_sha256(f"{sched_row.get('decision_schedule_row_id')}|{dataset_type}|{instrument}|missing".encode("utf-8"))[:16],
+                    "decision_schedule_row_id": sched_row.get("decision_schedule_row_id", ""),
+                    "decision_date": sched_row.get("decision_date", ""),
+                    "decision_time_utc": sched_row.get("decision_time_utc", ""),
+                    "target_session_date": sched_row.get("target_session_date", ""),
+                    "target_start_timestamp_utc": sched_row.get("target_start_timestamp_utc", ""),
+                    "research_timing_class": sched_row.get("research_timing_class", ""),
+                    "dataset_type": dataset_type,
+                    "instrument": instrument,
+                    "source_row_id": "",
+                    "publication_id": "",
+                    "revision_id": "",
+                    "economic_as_of_timestamp": "",
+                    "source_as_of_timestamp": "",
+                    "market_timestamp": "",
+                    "available_at_timestamp": "",
+                    "valid_until_timestamp": "",
+                    "aum_observation_age_days": "",
+                    "availability_evidence_type": "",
+                    "timing_eligible": False,
+                    "selection_eligible": False,
+                    "selected_for_feature": False,
+                    "exclusion_reason": "missing_required_source",
+                    "selection_rule_version": "phase1_1_latest_available_v1",
+                    "source_name": "",
+                    "source_file": "",
+                    "dataset_version": "",
+                })
+                continue
+            group_indices = []
+            for idx, row in candidates.iterrows():
+                available = _ts_value(row.get("available_at"))
+                source_as_of = _ts_value(row.get("source_as_of"))
+                market_ts = _ts_value(row.get("market_timestamp"))
+                valid_until = _ts_value(row.get("valid_until_timestamp"))
+                evidence = str(row.get("availability_evidence_type", ""))
+                exclusion: list[str] = []
+                if available is None or source_as_of is None or market_ts is None:
+                    exclusion.append("missing_timezone")
+                else:
+                    if available > decision_dt:
+                        exclusion.append("available_after_decision_time")
+                    if source_as_of > available:
+                        exclusion.append("as_of_after_available_at")
+                    if market_ts > available:
+                        exclusion.append("market_timestamp_after_available_at")
+                synthetic_ok = evidence in SYNTHETIC_AVAILABILITY_EVIDENCE_TYPES and str(row.get("source_name", "")).startswith("unit_test")
+                if evidence in NON_PREDICTIVE_AVAILABILITY_EVIDENCE_TYPES:
+                    exclusion.append("operator_unverified_availability" if evidence == "operator_unverified" else "unknown_availability_evidence")
+                elif evidence not in PREDICTIVE_AVAILABILITY_EVIDENCE_TYPES and not synthetic_ok:
+                    exclusion.append("unknown_availability_evidence")
+                age_days: Any = ""
+                if dataset_type == "leveraged_etf_aum":
+                    as_of = _ts_value(row.get("as_of_timestamp"))
+                    if as_of is None:
+                        exclusion.append("missing_timezone")
+                    else:
+                        age_days = round(float((decision_dt - as_of).total_seconds() / 86400), 4)
+                        if age_days > pol["max_aum_observation_age_days"]:
+                            exclusion.append("stale_aum_observation")
+                    if valid_until is None or valid_until < decision_dt:
+                        exclusion.append("outside_validity_window")
+                if dataset_type == "leveraged_etf_reference":
+                    start = _ts_value(row.get("effective_start_timestamp"))
+                    end = _ts_value(row.get("effective_end_timestamp"))
+                    if start is not None and start > decision_dt:
+                        exclusion.append("mapping_not_effective")
+                    if end is not None and end < decision_dt:
+                        exclusion.append("mapping_not_effective")
+                timing_eligible = len(exclusion) == 0
+                group_indices.append((idx, timing_eligible, available, row.get("revision_sequence", 0)))
+                rows.append({
+                    "audit_row_id": bytes_sha256(f"{sched_row.get('decision_schedule_row_id')}|{dataset_type}|{instrument}|{row.get('source_row_id')}".encode("utf-8"))[:16],
+                    "decision_schedule_row_id": sched_row.get("decision_schedule_row_id", ""),
+                    "decision_date": sched_row.get("decision_date", ""),
+                    "decision_time_utc": sched_row.get("decision_time_utc", ""),
+                    "target_session_date": sched_row.get("target_session_date", ""),
+                    "target_start_timestamp_utc": sched_row.get("target_start_timestamp_utc", ""),
+                    "research_timing_class": sched_row.get("research_timing_class", ""),
+                    "dataset_type": dataset_type,
+                    "instrument": instrument,
+                    "source_row_id": row.get("source_row_id", ""),
+                    "publication_id": row.get("publication_id", ""),
+                    "revision_id": row.get("revision_id", ""),
+                    "economic_as_of_timestamp": row.get("economic_as_of_timestamp", ""),
+                    "source_as_of_timestamp": row.get("source_as_of", ""),
+                    "market_timestamp": row.get("market_timestamp", ""),
+                    "available_at_timestamp": row.get("available_at", ""),
+                    "valid_until_timestamp": row.get("valid_until_timestamp", ""),
+                    "aum_observation_age_days": age_days,
+                    "availability_evidence_type": evidence,
+                    "timing_eligible": timing_eligible,
+                    "selection_eligible": timing_eligible,
+                    "selected_for_feature": False,
+                    "exclusion_reason": ";".join(dict.fromkeys(exclusion)) if exclusion else "",
+                    "selection_rule_version": "phase1_1_latest_available_v1",
+                    "source_name": row.get("source_name", ""),
+                    "source_file": row.get("source_file", ""),
+                    "dataset_version": row.get("dataset_version", ""),
+                })
+            eligible = [item for item in group_indices if item[1]]
+            if eligible:
+                selected_idx = sorted(eligible, key=lambda item: (item[2] or pd.Timestamp.min.tz_localize("UTC"), float(item[3]) if str(item[3]) != "" else 0, str(item[0])))[-1][0]
+                selected_source_id = str(candidates.loc[selected_idx].get("source_row_id", ""))
+                for audit_row in rows:
+                    if audit_row["decision_schedule_row_id"] == sched_row.get("decision_schedule_row_id") and audit_row["dataset_type"] == dataset_type and audit_row["instrument"] == instrument and str(audit_row["source_row_id"]) == selected_source_id:
+                        audit_row["selected_for_feature"] = True
+    return pd.DataFrame(rows, columns=cols)
+
+
+def historical_revision_selection_audit(row_level: pd.DataFrame) -> pd.DataFrame:
+    cols = [
+        "decision_date",
+        "decision_time_utc",
+        "dataset_type",
+        "instrument",
+        "candidate_count",
+        "eligible_candidate_count",
+        "selected_source_row_id",
+        "selected_publication_id",
+        "selected_revision_id",
+        "selected_available_at_timestamp",
+        "selected_economic_as_of_timestamp",
+        "selected_aum_age_days",
+        "later_revision_count_excluded",
+        "stale_candidate_count_excluded",
+        "invalid_candidate_count_excluded",
+        "selection_status",
+        "selection_reason",
+        "decision_schedule_row_id",
+    ]
+    if row_level.empty:
+        return pd.DataFrame(columns=cols)
+    rows = []
+    for keys, group in row_level.groupby(["decision_schedule_row_id", "decision_date", "decision_time_utc", "dataset_type", "instrument"], dropna=False):
+        real = group[group["source_row_id"].astype(str).ne("")]
+        selected = real[real["selected_for_feature"].astype(bool)] if not real.empty else pd.DataFrame()
+        later = real[real["exclusion_reason"].astype(str).str.contains("available_after_decision_time", na=False)] if not real.empty else pd.DataFrame()
+        stale = real[real["exclusion_reason"].astype(str).str.contains("stale_aum_observation|outside_validity_window", na=False)] if not real.empty else pd.DataFrame()
+        invalid = real[(~real["selection_eligible"].astype(bool)) & (~real.index.isin(later.index)) & (~real.index.isin(stale.index))] if not real.empty else pd.DataFrame()
+        if not selected.empty:
+            sel = selected.iloc[0]
+            status = "selected"
+            reason = "latest_legal_available_row_selected"
+        else:
+            sel = pd.Series(dtype=object)
+            status = "missing_selected_feature_row"
+            reason = group.iloc[0].get("exclusion_reason", "missing_required_source") if not group.empty else "missing_required_source"
+        rows.append({
+            "decision_date": keys[1],
+            "decision_time_utc": keys[2],
+            "dataset_type": keys[3],
+            "instrument": keys[4],
+            "candidate_count": int(len(real)),
+            "eligible_candidate_count": int(real["selection_eligible"].astype(bool).sum()) if not real.empty else 0,
+            "selected_source_row_id": sel.get("source_row_id", "") if not selected.empty else "",
+            "selected_publication_id": sel.get("publication_id", "") if not selected.empty else "",
+            "selected_revision_id": sel.get("revision_id", "") if not selected.empty else "",
+            "selected_available_at_timestamp": sel.get("available_at_timestamp", "") if not selected.empty else "",
+            "selected_economic_as_of_timestamp": sel.get("economic_as_of_timestamp", "") if not selected.empty else "",
+            "selected_aum_age_days": sel.get("aum_observation_age_days", "") if not selected.empty else "",
+            "later_revision_count_excluded": int(len(later)),
+            "stale_candidate_count_excluded": int(len(stale)),
+            "invalid_candidate_count_excluded": int(len(invalid)),
+            "selection_status": status,
+            "selection_reason": reason,
+            "decision_schedule_row_id": keys[0],
+        })
+    return pd.DataFrame(rows, columns=cols)
+
+
+def qqq_phase1_component_table_from_row_level(root: Path, sched: pd.DataFrame, row_level: pd.DataFrame, validation: dict[str, Any], schedule_report: dict[str, Any]) -> pd.DataFrame:
+    pol = qqq_phase1_policy(root)
+    decision_count = int(len(sched))
+    selected = row_level[row_level.get("selected_for_feature", pd.Series(dtype=bool)).astype(bool)].copy() if not row_level.empty else pd.DataFrame()
+    validation_codes = {str(row.get("code")) for row in validation.get("diagnostics", []) if row.get("status") == "blocked"}
+    schedule_blocked = schedule_report.get("validation_status") != "valid"
+    components = []
+    specs = [
+        ("Decision schedule", "decision_schedule", "QQQ", False),
+        ("QQQ daily prices", "prices_daily", "QQQ", True),
+        ("TQQQ daily prices", "prices_daily", "TQQQ", True),
+        ("SQQQ daily prices", "prices_daily", "SQQQ", True),
+        ("TQQQ mapping", "leveraged_etf_reference", "TQQQ", False),
+        ("SQQQ mapping", "leveraged_etf_reference", "SQQQ", False),
+        ("TQQQ AUM", "leveraged_etf_aum", "TQQQ", False),
+        ("SQQQ AUM", "leveraged_etf_aum", "SQQQ", False),
+        ("QQQ vol-control returns", "vol_control_returns", "QQQ", True),
+    ]
+    schedule_years = 0.0
+    if not sched.empty:
+        start = pd.to_datetime(sched["decision_date"], errors="coerce").min()
+        end = pd.to_datetime(sched["decision_date"], errors="coerce").max()
+        schedule_years = round(float((end - start).days / 365.25), 4) if pd.notna(start) and pd.notna(end) and end > start else 0.0
+    for name, dataset_type, instrument, needs_session_threshold in specs:
+        if dataset_type == "decision_schedule":
+            observed = decision_count
+            eligible_after_warmup = max(0, decision_count - pol["warmup_sessions"])
+            coverage_years = schedule_years
+            timing_ok = not schedule_blocked and decision_count > 0
+            coverage_ok = coverage_years >= pol["minimum_coverage_years"] and eligible_after_warmup >= pol["minimum_eligible_sessions_after_warmup"]
+        else:
+            subset = selected[(selected["dataset_type"].astype(str).eq(dataset_type)) & (selected["instrument"].astype(str).str.upper().eq(instrument))] if not selected.empty else pd.DataFrame()
+            observed = int(len(subset))
+            eligible_after_warmup = max(0, observed - pol["warmup_sessions"]) if needs_session_threshold else observed
+            coverage_years = schedule_years
+            timing_ok = (observed > 0 and decision_count > 0) if needs_session_threshold else (observed == decision_count and decision_count > 0)
+            coverage_ok = (coverage_years >= pol["minimum_coverage_years"] and eligible_after_warmup >= pol["minimum_eligible_sessions_after_warmup"] and observed == decision_count) if needs_session_threshold else timing_ok
+        blocked_reason = "decision_schedule_invalid" if schedule_blocked else "provider_contract_blocked:" + ",".join(sorted(validation_codes)) if validation_codes else ""
+        if dataset_type == "leveraged_etf_reference" and not timing_ok and not blocked_reason:
+            status, reason = "blocked_by_mapping", "missing_or_timing_ineligible_mapping"
+        else:
+            status, reason = _component_status(coverage_ok, timing_ok, True, True, blocked_reason)
+        components.append({
+            "Component": name,
+            "Required": "yes",
+            "Coverage": f"{coverage_years}y; eligible_after_warmup={eligible_after_warmup}; selected={observed}/{decision_count}",
+            "Timing": "valid" if timing_ok else "blocked_or_ineligible",
+            "Mapping": "n/a",
+            "AUM freshness": "n/a",
+            "Status": status,
+            "Blocking reason": reason,
+            "observed_rows": observed,
+            "timing_eligible_rows": observed,
+            "eligible_sessions_after_warmup": eligible_after_warmup,
+            "coverage_start": sched["decision_date"].min() if not sched.empty else "",
+            "coverage_end": sched["decision_date"].max() if not sched.empty else "",
+            "coverage_years": coverage_years,
+            "gap_count": 0,
+        })
+    return pd.DataFrame(components)
+
+
+def require_row_level_phase1_readiness_if_present(root: Path, staging_id: str) -> None:
+    out_dir = qqq_phase1_readiness_dir(root, staging_id)
+    summary_path = out_dir / "qqq_phase1_readiness_summary.json"
+    if not summary_path.exists():
+        return
+    summary = load_json(summary_path)
+    if (summary.get("overall_phase1_readiness_status") or summary.get("readiness_status")) != "ready_for_eod_next_session_research" or not summary.get("row_level_decision_schedule_required", summary.get("decision_schedule_required")) or not summary.get("row_level_timing_audit_verified") or not summary.get("historical_revision_selection_audit_verified"):
+        raise SystemExit("phase2_study_requires_verified_row_level_phase1_readiness")
+
 def qqq_phase1_readiness_dir(root: Path, staging_id: str) -> Path:
     return staging_dir(root, staging_id) / "readiness" / "qqq_tqqq_sqqq_phase1"
 
@@ -1872,38 +2402,78 @@ def verify_qqq_phase1_readiness(root: Path, staging_id: str) -> dict[str, Any]:
         raise SystemExit("readiness artifact file set mismatch")
     if manifest.get("content_set_sha256") != content_set_hash(recomputed):
         raise SystemExit("readiness content set hash mismatch")
+    required_pit = {"row_level_timing_audit.csv", "historical_revision_selection_audit.csv", "decision_schedule_validation_report.json"}
+    missing_pit = sorted(required_pit - seen)
+    if missing_pit:
+        raise SystemExit("missing row-level PIT readiness artifacts: " + ",".join(missing_pit))
+    summary_path = out_dir / "qqq_phase1_readiness_summary.json"
+    if summary_path.exists():
+        summary = load_json(summary_path)
+        if summary.get("readiness_status") == "ready_for_eod_next_session_research" and (not summary.get("row_level_timing_audit_verified") or not summary.get("historical_revision_selection_audit_verified")):
+            raise SystemExit("ready Phase1 artifact lacks verified row-level PIT audit")
     return {
         "artifact_version": QQQ_PHASE1_READINESS_VERSION,
         "staging_id": staging_id,
         "readiness_status": manifest.get("readiness_status", ""),
         "status": "valid",
         "artifact_count": len(recomputed),
+        "row_level_pit_required": True,
         "actionization_allowed": ACTIONIZATION_ALLOWED,
     }
 
 
-def run_qqq_phase1_readiness(root: Path, staging_id: str, decision_time_utc: str, research_timing_class: str = "eod_next_session") -> dict[str, Any]:
+def run_qqq_phase1_readiness(root: Path, staging_id: str, decision_time_utc: str | None = None, research_timing_class: str = "eod_next_session", decision_schedule_file: str | None = None, single_date_synthetic_smoke: bool = False) -> dict[str, Any]:
     if research_timing_class != "eod_next_session":
         raise SystemExit("QQQ Phase 1 readiness supports only eod_next_session")
+    manifest_for_schedule = load_staging_manifest(root, staging_id)
+    sources_for_schedule = manifest_for_schedule.get("sources", [])
+    schedule_source = decision_schedule_source(sources_for_schedule if isinstance(sources_for_schedule, list) else [], decision_schedule_file)
+    if schedule_source is None and not single_date_synthetic_smoke:
+        raise SystemExit("historical_multi_date_requires_row_level_decision_schedule")
+    if schedule_source is not None:
+        decision_time_for_contract = decision_time_from_schedule(root, staging_id, schedule_source)
+    elif decision_time_utc:
+        decision_time_for_contract = decision_time_utc
+    else:
+        raise SystemExit("historical_multi_date_requires_row_level_decision_schedule")
     out_dir = qqq_phase1_readiness_dir(root, staging_id)
     out_dir.mkdir(parents=True, exist_ok=True)
-    manifest, sources, canonical, validation = collect_contract_artifacts(root, staging_id, decision_time_utc, research_timing_class)
+    manifest, sources, canonical, validation = collect_contract_artifacts(root, staging_id, decision_time_for_contract, research_timing_class)
+    if single_date_synthetic_smoke and schedule_source is None:
+        qqq_dates = canonical[(canonical.get("dataset_type", pd.Series(dtype=str)).astype(str).eq("prices_daily")) & (canonical.get("instrument", pd.Series(dtype=str)).astype(str).str.upper().eq("QQQ"))].get("session_date", pd.Series(dtype=str)).drop_duplicates()
+        synthetic_sources = [bool(source.get("is_synthetic_fixture", False)) for source in sources]
+        if len(qqq_dates) != 1 or not synthetic_sources or not all(synthetic_sources):
+            raise SystemExit("historical_multi_date_requires_row_level_decision_schedule")
     validation = dict(validation)
     validation["diagnostics"] = list(validation.get("diagnostics", [])) + qqq_phase1_required_data_diagnostics(canonical, sources)
+    sched, schedule_report = validate_qqq_phase1_decision_schedule(canonical, sources, validation)
+    validation["diagnostics"].extend(schedule_report.get("diagnostics", []))
     validation["blocked_count"] = sum(1 for row in validation.get("diagnostics", []) if row.get("status") == "blocked")
     validation["validation_status"] = "valid" if validation["blocked_count"] == 0 else "blocked"
-    decision_time = parse_decision_time(decision_time_utc)
+    decision_time = parse_decision_time(decision_time_for_contract)
     timing_audit = timing_audit_frame(canonical, decision_time, research_timing_class, root)
     timing_summary = timing_audit_summary(timing_audit)
-    coverage_instrument = source_coverage_by_instrument(canonical)
+    coverage_instrument = source_coverage_by_instrument(canonical[canonical.get("dataset_type", pd.Series(dtype=str)).astype(str).ne("decision_schedule")].copy() if not canonical.empty else canonical)
     coverage_dataset = source_coverage_by_dataset(canonical)
-    features = build_features(root, manifest, canonical) if not canonical.empty else pd.DataFrame()
+    features = build_features(root, manifest, canonical[canonical.get("dataset_type", pd.Series(dtype=str)).astype(str).ne("decision_schedule")].copy()) if not canonical.empty else pd.DataFrame()
     aum_audit = aum_selection_audit(features)
-    component_table, mapping, aum_summary = qqq_phase1_component_table(root, canonical, validation, timing_audit)
+    row_level = build_row_level_timing_audit(root, canonical, sched)
+    revision_audit = historical_revision_selection_audit(row_level)
+    component_table = qqq_phase1_component_table_from_row_level(root, sched, row_level, validation, schedule_report)
+    mapping = qqq_mapping_audit(canonical, validation)
+    aum_summary = qqq_aum_freshness_summary(canonical, decision_time)
     overall_status, overall_reason = qqq_phase1_overall_status(component_table, validation, research_timing_class)
+    if schedule_report.get("validation_status") != "valid":
+        overall_status, overall_reason = "blocked_by_timing", "decision_schedule_invalid"
+    if not row_level.empty and (revision_audit.empty or revision_audit["selection_status"].astype(str).ne("selected").any()):
+        if overall_status == "ready_for_eod_next_session_research":
+            overall_status, overall_reason = "blocked_by_timing", "row_level_feature_selection_incomplete"
     report = qqq_real_data_readiness_report_md(staging_id, manifest, validation, timing_summary, coverage_instrument, component_table, mapping, aum_summary, overall_status, overall_reason)
     write_json(out_dir / "provider_contract_validation_report.json", validation)
+    write_json(out_dir / "decision_schedule_validation_report.json", schedule_report)
     write_csv(timing_audit, out_dir / "timing_audit.csv")
+    write_csv(row_level, out_dir / "row_level_timing_audit.csv")
+    write_csv(revision_audit, out_dir / "historical_revision_selection_audit.csv")
     write_json(out_dir / "timing_audit_summary.json", timing_summary)
     write_csv(coverage_instrument, out_dir / "source_coverage_by_instrument.csv")
     write_csv(coverage_dataset, out_dir / "source_coverage_by_dataset.csv")
@@ -1915,10 +2485,18 @@ def run_qqq_phase1_readiness(root: Path, staging_id: str, decision_time_utc: str
     (out_dir / "real_data_readiness_report.md").write_text(report, encoding="utf-8")
     summary = {
         "artifact_version": QQQ_PHASE1_READINESS_VERSION,
+        "pit_audit_version": QQQ_PHASE1_PIT_AUDIT_VERSION,
         "staging_id": staging_id,
         "source_contract_version": SOURCE_CONTRACT_VERSION,
         "requested_timing_class": research_timing_class,
+        "decision_time": decision_time_for_contract,
+        "decision_schedule_file": validate_source_relative_path(schedule_source.get("relative_path")) if schedule_source else "",
+        "decision_schedule_required": True,
+        "row_level_decision_schedule_required": True,
+        "row_level_timing_audit_verified": bool(not row_level.empty and schedule_report.get("validation_status") == "valid"),
+        "historical_revision_selection_audit_verified": bool(not revision_audit.empty and revision_audit["selection_status"].astype(str).eq("selected").all()),
         "readiness_status": overall_status,
+        "overall_phase1_readiness_status": overall_status,
         "readiness_reason": overall_reason,
         "component_status_counts": component_table["Status"].value_counts().to_dict() if not component_table.empty else {},
         "output_dir": str(out_dir),
@@ -2667,6 +3245,7 @@ def write_real_data_study_backtest_artifacts(root: Path, rel: Path, run_dir: Pat
 
 
 def run_flow_real_data_study(root: Path, staging_id: str, decision_time_utc: str, research_timing_class: str = "eod_next_session") -> dict[str, Any]:
+    require_row_level_phase1_readiness_if_present(root, staging_id)
     validation = validate_flow_provider_contract(root, staging_id, decision_time_utc, research_timing_class)
     if validation["validation_status"] != "valid":
         raise SystemExit("real-data study blocked by provider contract validation")
@@ -2741,9 +3320,18 @@ def main() -> None:
     p.add_argument("--staging-id", required=True)
     p.add_argument("--decision-time-utc", required=True)
     p.add_argument("--research-timing-class", default="eod_next_session", choices=sorted(TIMING_CLASSES))
+    p = sub.add_parser("build-qqq-phase1-decision-schedule-template")
+    p.add_argument("--staging-id", required=True)
+    p.add_argument("--decision-schedule-file", default="sources/decision_schedule.csv")
+    p = sub.add_parser("validate-qqq-phase1-decision-schedule")
+    p.add_argument("--staging-id", required=True)
+    p.add_argument("--decision-schedule-file", default="sources/decision_schedule.csv")
+    p.add_argument("--output")
     p = sub.add_parser("run-qqq-phase1-readiness")
     p.add_argument("--staging-id", required=True)
-    p.add_argument("--decision-time-utc", required=True)
+    p.add_argument("--decision-time-utc")
+    p.add_argument("--decision-schedule-file", default="sources/decision_schedule.csv")
+    p.add_argument("--single-date-synthetic-smoke", action="store_true")
     p.add_argument("--research-timing-class", default="eod_next_session", choices=sorted(TIMING_CLASSES))
     p.add_argument("--output")
     p = sub.add_parser("verify-qqq-phase1-readiness")
@@ -2779,8 +3367,19 @@ def main() -> None:
         result = inspect_release(root, args.release_id)
     elif args.command == "run-flow-real-data-study":
         result = run_flow_real_data_study(root, args.staging_id, args.decision_time_utc, args.research_timing_class)
+    elif args.command == "build-qqq-phase1-decision-schedule-template":
+        result = build_qqq_phase1_decision_schedule_template(root, args.staging_id, args.decision_schedule_file)
+    elif args.command == "validate-qqq-phase1-decision-schedule":
+        manifest = load_staging_manifest(root, args.staging_id)
+        sources = manifest.get("sources", [])
+        source = decision_schedule_source(sources if isinstance(sources, list) else [], args.decision_schedule_file)
+        if source is None:
+            raise SystemExit("historical_multi_date_requires_row_level_decision_schedule")
+        decision_time = decision_time_from_schedule(root, args.staging_id, source)
+        _, sources, canonical, validation = collect_contract_artifacts(root, args.staging_id, decision_time, "eod_next_session")
+        _, result = validate_qqq_phase1_decision_schedule(canonical, sources, validation)
     elif args.command == "run-qqq-phase1-readiness":
-        result = run_qqq_phase1_readiness(root, args.staging_id, args.decision_time_utc, args.research_timing_class)
+        result = run_qqq_phase1_readiness(root, args.staging_id, args.decision_time_utc, args.research_timing_class, args.decision_schedule_file, args.single_date_synthetic_smoke)
     elif args.command == "verify-qqq-phase1-readiness":
         result = verify_qqq_phase1_readiness(root, args.staging_id)
     elif args.command == "run-flow-statistical-backtest":
