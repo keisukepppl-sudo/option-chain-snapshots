@@ -64,3 +64,5 @@ python market_bomb_cta_research_v1.py validate-cta-cot-intake --input-id <input_
 ```
 
 Only `cot_intake_validation_status=valid` means the input is ready for a later CTA rerun. This is not permission to run COT validation, tune a model, issue a signal, or claim actual CTA positioning.
+
+For the confirmed NDX/COT study, preserve the literal CFTC Contract Market Code `20974+`. Do not substitute the secondary `CFTC_Market_Code`. After four verified CTA reruns and four verified COT validation artifacts exist, `run-cta-cot-robustness-analysis` may create a descriptive robustness artifact. It must not be read as model acceptance or selection.

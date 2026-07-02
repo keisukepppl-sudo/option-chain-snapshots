@@ -87,3 +87,8 @@ Each run writes:
 
 The content manifest supports tamper checks for the generated artifact set.
 
+## Provenance And Characterization
+
+New-generation vol-control artifacts record repository commit, module source hash, source manifest hash, and model registry hash. Legacy artifacts remain verifiable under their legacy compatibility behavior.
+
+Cross-spec characterization is descriptive state-path analysis only. It uses six fixed NDX specifications and seven fixed windows. It has no external manager-flow ground truth and does not rank, select, accept, or reject a model.

@@ -65,3 +65,6 @@ Verification checks the content manifest and confirms actionization, Phase 2, re
 - Do not treat the output as actual vol-control manager exposure.
 - Do not create releases or notifications from this module.
 
+## Cross-Spec Characterization
+
+For six-spec NDX characterization, run fresh artifacts for the six predeclared specs, verify each artifact, then run `run-vol-control-cross-spec-characterization`. The characterization summary must remain descriptive and must not contain raw daily prices, returns, PnL, Sharpe, alpha, ranking, selection, or trading guidance.

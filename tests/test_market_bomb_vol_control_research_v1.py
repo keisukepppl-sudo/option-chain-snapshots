@@ -22,6 +22,9 @@ def _copy_config(root: Path) -> None:
     dst = root / "config" / "vol_control_research_v1"
     dst.mkdir(parents=True, exist_ok=True)
     shutil.copyfile(REPO_ROOT / "config" / "vol_control_research_v1" / "model_specs.json", dst / "model_specs.json")
+    characterization = REPO_ROOT / "config" / "vol_control_research_v1" / "cross_spec_characterization_specs.json"
+    if characterization.exists():
+        shutil.copyfile(characterization, dst / "cross_spec_characterization_specs.json")
 
 
 def _price_rows(instrument: str = "NDX", count: int = 35, start: float = 100.0, basis: str = "raw") -> list[dict[str, object]]:
@@ -317,3 +320,44 @@ def test_cot_unavailable_timing_rows_are_visible_but_not_daily_validation(tmp_pa
     inspection = vc.inspect_cot_sanity_input(tmp_path, "cot")
     assert inspection["weekly_sanity_check_only"] is True
     assert inspection["rows"][0]["timing_fields_present"] is False
+
+
+def test_new_vol_receipt_contains_provenance(tmp_path: Path) -> None:
+    _stage(tmp_path, prices=_price_rows(count=90), schedule=_schedule_rows(count=90))
+    result, _ = _run(tmp_path)
+    receipt = json.loads((Path(str(result["run_artifact"])) / "vol_control_run_receipt.json").read_text())
+    for field in ["source_manifest_hash", "repository_commit_sha", "repository_commit_status", "module_source_sha256", "model_spec_registry_hash", "benchmark_instrument", "benchmark_exact_or_proxy"]:
+        assert receipt[field]
+
+
+def test_vol_characterization_requires_exactly_six_and_no_artifact(tmp_path: Path) -> None:
+    _stage(tmp_path, prices=_price_rows(count=90), schedule=_schedule_rows(count=90))
+    result, _ = _run(tmp_path)
+    before = set((tmp_path / "market_bomb_history" / "vol_control_research_v1").glob("cross_spec_characterization_runs/*"))
+    with pytest.raises(SystemExit, match="vol_control_characterization_requires_exactly_six_artifacts"):
+        vc.run_cross_spec_characterization(tmp_path, "fixture_vc", "ndx_exact_descriptive", "vc_ndx_six_spec_characterization_v1", [str(result["run_artifact"])])
+    after = set((tmp_path / "market_bomb_history" / "vol_control_research_v1").glob("cross_spec_characterization_runs/*"))
+    assert before == after
+
+
+def test_vol_characterization_runs_pairwise_and_verifies(tmp_path: Path) -> None:
+    _stage(tmp_path, prices=_price_rows(count=100), schedule=_schedule_rows(count=100))
+    specs = [
+        "vc_daily_20d_target10_cap100_v1",
+        "vc_daily_40d_target10_cap100_v1",
+        "vc_daily_60d_target10_cap100_v1",
+        "vc_daily_20d_target12_cap100_v1",
+        "vc_daily_40d_target12_cap100_v1",
+        "vc_daily_60d_target12_cap100_v1",
+    ]
+    artifacts = [str(vc.run_historical(tmp_path, "fixture_vc", "ndx_exact_descriptive", spec)["run_artifact"]) for spec in specs]
+    analysis = vc.run_cross_spec_characterization(tmp_path, "fixture_vc", "ndx_exact_descriptive", "vc_ndx_six_spec_characterization_v1", artifacts)
+    artifact = Path(str(analysis["analysis_artifact"]))
+    assert vc.verify_cross_spec_characterization(str(artifact))["verification_status"] == "valid"
+    summary = pd.read_csv(artifact / "vol_control_cross_spec_summary.csv")
+    pairwise = pd.read_csv(artifact / "vol_control_cross_spec_pairwise_dispersion.csv")
+    assert list(summary["analysis_window_id"].drop_duplicates()) == ["full_covered_period", "pre_2025", "from_2025", "calendar_2024", "calendar_2025", "calendar_2023_h2", "calendar_2026_ytd"]
+    assert len(pairwise[pairwise["analysis_window_id"] == "full_covered_period"]) == 15
+    assert not {"winner", "best_model", "pass_fail", "return_correlation", "pnl"} & set(summary.columns)
+    (artifact / "vol_control_cross_spec_summary.md").write_text("tampered", encoding="utf-8")
+    assert vc.verify_cross_spec_characterization(str(artifact))["verification_status"] == "tampered"

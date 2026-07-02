@@ -61,3 +61,5 @@ python market_bomb_cta_research_v1.py validate-cta-cot-intake `
 ```
 
 This command is read-only. It creates no CTA artifact, reads no CTA artifact, computes no correlation, computes no sign agreement, computes no lag, and performs no model selection. It checks manifest hashes, mapping eligibility, exact COT row mapping identity, requested reporting group, unique weekly keys, positive open interest, and publication/availability timestamp ordering.
+
+Robustness analysis is a separate immutable artifact created only from verified COT validation artifacts. It keeps the two alignment modes separate, uses the predeclared seven windows, recomputes changes inside each window, and never copies raw weekly-pair rows into the robustness summary.

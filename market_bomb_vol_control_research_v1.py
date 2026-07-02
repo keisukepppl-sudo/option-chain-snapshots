@@ -134,6 +134,40 @@ def truthy(value: Any) -> bool:
     return str(value).strip().lower() in {"true", "1", "yes", "y"}
 
 
+def repository_commit_sha(root: Path) -> str:
+    for candidate in [root, Path(__file__).resolve().parent, Path.cwd()]:
+        try:
+            completed = subprocess.run(["git", "rev-parse", "HEAD"], cwd=candidate, check=True, text=True, capture_output=True)
+        except Exception:
+            continue
+        sha = completed.stdout.strip()
+        if len(sha) == 40 and all(ch in "0123456789abcdefABCDEF" for ch in sha):
+            return sha
+    return ""
+
+
+def code_provenance(root: Path, model_spec_registry_hash: str, analysis_spec_registry_hash: str | None = None) -> dict[str, Any]:
+    commit = repository_commit_sha(root)
+    payload = {
+        "repository_commit_sha": commit,
+        "repository_commit_status": "available" if commit else "unavailable",
+        "module_source_sha256": file_sha256(Path(__file__).resolve()),
+        "model_spec_registry_hash": model_spec_registry_hash,
+    }
+    if analysis_spec_registry_hash is not None:
+        payload["analysis_spec_registry_hash"] = analysis_spec_registry_hash
+    return payload
+
+
+def require_provenance_fields(receipt: dict[str, Any], failures: list[dict[str, Any]], relative_path: str) -> None:
+    if any(field in receipt for field in ["repository_commit_sha", "repository_commit_status", "module_source_sha256"]):
+        for field in ["repository_commit_sha", "repository_commit_status", "module_source_sha256", "model_spec_registry_hash"]:
+            if not receipt.get(field):
+                failures.append({"relative_path": relative_path, "reason": f"{field}_missing"})
+        if receipt.get("repository_commit_sha") and receipt.get("repository_commit_status") != "available":
+            failures.append({"relative_path": relative_path, "reason": "repository_commit_status_invalid"})
+
+
 def vc_root(root: Path) -> Path:
     return root / "market_bomb_history" / "vol_control_research_v1"
 
@@ -150,8 +184,16 @@ def historical_run_dir(root: Path, run_id: str) -> Path:
     return vc_root(root) / "historical_runs" / run_id
 
 
+def characterization_run_dir(root: Path, run_id: str) -> Path:
+    return vc_root(root) / "cross_spec_characterization_runs" / run_id
+
+
 def config_path(root: Path) -> Path:
     return root / "config" / "vol_control_research_v1" / "model_specs.json"
+
+
+def characterization_config_path(root: Path) -> Path:
+    return root / "config" / "vol_control_research_v1" / "cross_spec_characterization_specs.json"
 
 
 def safe_rel(base: Path, rel: str) -> Path:
@@ -635,6 +677,7 @@ def run_historical(root: Path, input_id: str, benchmark_mode: str, model_spec_id
         raise SystemExit("model_spec_frequency_must_be_daily")
     prices = prepare_prices(root, input_id, benchmark_mode)
     schedule = prepare_schedule(root, input_id)
+    benchmark_instrument, benchmark_exact_or_proxy = selected_instrument(benchmark_mode)
     run_id = f"{utc_now_compact()}_{bytes_sha256((input_id + benchmark_mode + model_spec_id + str(uuid.uuid4())).encode())[:12]}"
     out = historical_run_dir(root, run_id)
     if out.exists():
@@ -656,7 +699,10 @@ def run_historical(root: Path, input_id: str, benchmark_mode: str, model_spec_id
         "input_id": input_id,
         "mode": HISTORICAL_MODE,
         "benchmark_mode": benchmark_mode,
+        "benchmark_instrument": benchmark_instrument,
+        "benchmark_exact_or_proxy": benchmark_exact_or_proxy,
         "model_spec_id": model_spec_id,
+        "source_manifest_hash": manifest_hash,
         "model_spec_registry_hash": registry_hash,
         "research_only": True,
         "actionization_allowed": ACTIONIZATION_ALLOWED,
@@ -669,9 +715,10 @@ def run_historical(root: Path, input_id: str, benchmark_mode: str, model_spec_id
         "phase2_run": False,
         "release_created": False,
         "backtest_run": False,
+        **code_provenance(root, registry_hash),
     }
     write_json(out / "vol_control_run_receipt.json", receipt)
-    write_json(out / "vol_control_content_manifest.json", build_content_manifest(out, run_id))
+    write_json(out / "vol_control_content_manifest.json", build_content_manifest(out, run_id, "vol_control_content_manifest.json"))
     return {"run_status": "completed", "run_artifact": str(out), **receipt}
 
 
@@ -712,10 +759,10 @@ No output can unlock strict Phase 1.3 readiness, Phase 2 admission, release buil
 """
 
 
-def build_content_manifest(out_dir: Path, run_id: str) -> dict[str, Any]:
+def build_content_manifest(out_dir: Path, run_id: str, manifest_name: str) -> dict[str, Any]:
     files = []
     for path in sorted(out_dir.rglob("*")):
-        if path.is_file() and path.name != "vol_control_content_manifest.json":
+        if path.is_file() and path.name != manifest_name:
             files.append({"relative_path": path.relative_to(out_dir).as_posix(), "sha256": file_sha256(path), "bytes": path.stat().st_size})
     return {
         "artifact_version": ARTIFACT_VERSION,
@@ -753,6 +800,245 @@ def verify_run(run_artifact: str) -> dict[str, Any]:
         if receipt.get(field) is not False:
             result["verification_status"] = "tampered"
             result.setdefault("failures", []).append({"relative_path": "vol_control_run_receipt.json", "reason": f"{field}_must_be_false"})
+    provenance_failures: list[dict[str, Any]] = []
+    require_provenance_fields(receipt, provenance_failures, "vol_control_run_receipt.json")
+    if provenance_failures:
+        result["verification_status"] = "tampered"
+        result.setdefault("failures", []).extend(provenance_failures)
+    return result
+
+
+def load_characterization_specs(root: Path) -> tuple[dict[str, Any], str]:
+    path = characterization_config_path(root)
+    if not path.exists():
+        raise SystemExit(f"missing cross-spec characterization registry: {path}")
+    payload = load_json(path)
+    return payload, file_sha256(path)
+
+
+def get_characterization_spec(root: Path, analysis_spec_id: str) -> tuple[dict[str, Any], dict[str, Any], str]:
+    registry, registry_hash = load_characterization_specs(root)
+    for spec in registry.get("analysis_specs", []):
+        if str(spec.get("analysis_spec_id")) == analysis_spec_id:
+            return registry, spec, registry_hash
+    raise SystemExit(f"unknown_analysis_spec_id:{analysis_spec_id}")
+
+
+def bounded_daily(daily: pd.DataFrame, window: dict[str, Any]) -> pd.DataFrame:
+    work = daily.copy()
+    work["observation_date"] = pd.to_datetime(work["observation_date"], errors="coerce")
+    if window.get("start"):
+        work = work[work["observation_date"].ge(pd.Timestamp(str(window["start"])))]
+    if window.get("end"):
+        work = work[work["observation_date"].le(pd.Timestamp(str(window["end"])))]
+    work = work.sort_values("observation_date").copy()
+    work["target_exposure"] = pd.to_numeric(work["target_exposure"], errors="coerce")
+    work["exposure_change"] = pd.to_numeric(work["exposure_change"], errors="coerce")
+    return work
+
+
+def vol_summary_row(model_spec_id: str, spec_snapshot: dict[str, Any], window: dict[str, Any], group: pd.DataFrame, analysis_spec: dict[str, Any]) -> dict[str, Any]:
+    tolerance = float(analysis_spec["comparison_tolerance"])
+    minimum = int(analysis_spec["minimum_observations_for_summary"])
+    thin_threshold = int(analysis_spec["thin_window_observation_threshold"])
+    valid = group[pd.to_numeric(group["target_exposure"], errors="coerce").notna()].copy()
+    changes = pd.to_numeric(group["exposure_change"], errors="coerce")
+    nonzero_changes = changes[changes.abs().gt(tolerance)].abs()
+    enough = len(valid) >= minimum
+    cap = float(spec_snapshot["exposure_cap"])
+    return {
+        "model_spec_id": model_spec_id,
+        "analysis_window_id": window["analysis_window_id"],
+        "window_class": window["window_class"],
+        "coverage_start": "" if group.empty else group["observation_date"].min().strftime("%Y-%m-%d"),
+        "coverage_end": "" if group.empty else group["observation_date"].max().strftime("%Y-%m-%d"),
+        "observation_count": int(len(group)),
+        "metrics_available": bool(enough),
+        "metrics_unavailable_reason": "" if enough else f"valid_observation_count_below_{minimum}",
+        "thin_window_flag": bool(len(valid) < thin_threshold),
+        "trailing_window_sessions": int(spec_snapshot["trailing_window_sessions"]),
+        "target_volatility": float(spec_snapshot["target_volatility"]),
+        "exposure_floor": float(spec_snapshot["exposure_floor"]),
+        "exposure_cap": cap,
+        "valid_target_exposure_count": int(len(valid)),
+        "input_unavailable_count": int(group["exposure_change_label"].astype(str).eq(UNAVAILABLE_LABEL).sum()),
+        "mean_target_exposure": "" if not enough else float(valid["target_exposure"].mean()),
+        "median_target_exposure": "" if not enough else float(valid["target_exposure"].median()),
+        "min_target_exposure": "" if not enough else float(valid["target_exposure"].min()),
+        "max_target_exposure": "" if not enough else float(valid["target_exposure"].max()),
+        "std_target_exposure": "" if not enough else float(valid["target_exposure"].std()) if len(valid) > 1 else 0.0,
+        "cap_binding_session_count": int(valid["target_exposure"].ge(cap - tolerance).sum()),
+        "below_cap_session_count": int(valid["target_exposure"].lt(cap - tolerance).sum()),
+        "increase_risk_count": int(group["exposure_change_label"].astype(str).eq(INCREASE_LABEL).sum()),
+        "reduce_risk_count": int(group["exposure_change_label"].astype(str).eq(REDUCE_LABEL).sum()),
+        "unchanged_count": int(group["exposure_change_label"].astype(str).eq(UNCHANGED_LABEL).sum()),
+        "nonzero_rebalance_count": int(nonzero_changes.count()),
+        "total_absolute_exposure_change": "" if not enough else float(nonzero_changes.sum()),
+        "mean_absolute_nonzero_exposure_change": "" if not enough or nonzero_changes.empty else float(nonzero_changes.mean()),
+        "median_absolute_nonzero_exposure_change": "" if not enough or nonzero_changes.empty else float(nonzero_changes.median()),
+        "maximum_absolute_exposure_change": "" if not enough or nonzero_changes.empty else float(nonzero_changes.max()),
+        "ranking_allowed": False,
+        "model_selection_allowed": False,
+        "returns_analysis_allowed": False,
+    }
+
+
+def pairwise_dispersion_rows(dailies: dict[str, pd.DataFrame], required_specs: list[str], windows: list[dict[str, Any]], tolerance: float) -> list[dict[str, Any]]:
+    rows: list[dict[str, Any]] = []
+    for window in windows:
+        bounded = {model: bounded_daily(df, window)[["observation_date", "target_exposure"]].dropna() for model, df in dailies.items()}
+        for left_index, left in enumerate(required_specs):
+            for right in required_specs[left_index + 1 :]:
+                merged = bounded[left].merge(bounded[right], on="observation_date", suffixes=("_left", "_right"), how="inner")
+                diff = (merged["target_exposure_left"] - merged["target_exposure_right"]).abs()
+                rows.append(
+                    {
+                        "analysis_window_id": window["analysis_window_id"],
+                        "left_model_spec_id": left,
+                        "right_model_spec_id": right,
+                        "overlapping_valid_exposure_count": int(len(merged)),
+                        "mean_absolute_exposure_difference": "" if merged.empty else float(diff.mean()),
+                        "median_absolute_exposure_difference": "" if merged.empty else float(diff.median()),
+                        "maximum_absolute_exposure_difference": "" if merged.empty else float(diff.max()),
+                        "exact_equal_exposure_session_count": int(diff.le(tolerance).sum()) if not merged.empty else 0,
+                        "exact_equal_exposure_fraction": "" if merged.empty else float(diff.le(tolerance).sum() / len(merged)),
+                    }
+                )
+    return rows
+
+
+def run_cross_spec_characterization(root: Path, input_id: str, benchmark_mode: str, analysis_spec_id: str, run_artifacts: list[str]) -> dict[str, Any]:
+    if len(run_artifacts) != 6:
+        raise SystemExit("vol_control_characterization_requires_exactly_six_artifacts")
+    registry, analysis_spec, analysis_registry_hash = get_characterization_spec(root, analysis_spec_id)
+    required_specs = [str(value) for value in analysis_spec["required_model_specs"]]
+    seen_specs: set[str] = set()
+    baseline: dict[str, Any] | None = None
+    refs: list[dict[str, Any]] = []
+    dailies: dict[str, pd.DataFrame] = {}
+    spec_snapshots: dict[str, dict[str, Any]] = {}
+    for artifact in run_artifacts:
+        path = Path(artifact).resolve()
+        verification = verify_run(str(path))
+        if verification["verification_status"] != "valid":
+            raise SystemExit("vol_control_characterization_artifact_invalid")
+        receipt = load_json(path / "vol_control_run_receipt.json")
+        model_spec_id = str(receipt.get("model_spec_id", ""))
+        if model_spec_id in seen_specs:
+            raise SystemExit("vol_control_characterization_duplicate_model_spec")
+        seen_specs.add(model_spec_id)
+        if model_spec_id not in required_specs:
+            raise SystemExit("vol_control_characterization_model_set_mismatch")
+        if str(receipt.get("input_id")) != input_id:
+            raise SystemExit("vol_control_characterization_input_mismatch")
+        if str(receipt.get("benchmark_mode")) != benchmark_mode:
+            raise SystemExit("vol_control_characterization_benchmark_mode_mismatch")
+        current = {
+            "source_manifest_hash": receipt.get("source_manifest_hash"),
+            "model_spec_registry_hash": receipt.get("model_spec_registry_hash"),
+            "repository_commit_sha": receipt.get("repository_commit_sha"),
+            "module_source_sha256": receipt.get("module_source_sha256"),
+            "benchmark_instrument": receipt.get("benchmark_instrument"),
+            "benchmark_exact_or_proxy": receipt.get("benchmark_exact_or_proxy"),
+        }
+        if not all(current.values()):
+            raise SystemExit("vol_control_characterization_provenance_mismatch")
+        if baseline is None:
+            baseline = current
+        elif current != baseline:
+            if current.get("source_manifest_hash") != baseline.get("source_manifest_hash"):
+                raise SystemExit("vol_control_characterization_source_manifest_mismatch")
+            if current.get("model_spec_registry_hash") != baseline.get("model_spec_registry_hash"):
+                raise SystemExit("vol_control_characterization_registry_mismatch")
+            if current.get("benchmark_instrument") != baseline.get("benchmark_instrument") or current.get("benchmark_exact_or_proxy") != baseline.get("benchmark_exact_or_proxy"):
+                raise SystemExit("vol_control_characterization_benchmark_mode_mismatch")
+            raise SystemExit("vol_control_characterization_provenance_mismatch")
+        snapshot = load_json(path / "vol_control_model_spec_snapshot.json")["selected_model_spec"]
+        spec_snapshots[model_spec_id] = snapshot
+        dailies[model_spec_id] = pd.read_csv(path / "vol_control_daily_exposure.csv")
+        refs.append({"run_artifact": str(path), "model_spec_id": model_spec_id, "verification_status": verification["verification_status"], "content_manifest_hash": file_sha256(path / "vol_control_content_manifest.json")})
+    if set(seen_specs) != set(required_specs):
+        raise SystemExit("vol_control_characterization_model_set_mismatch")
+    rows: list[dict[str, Any]] = []
+    for model_spec_id in required_specs:
+        for window in analysis_spec["analysis_windows"]:
+            rows.append(vol_summary_row(model_spec_id, spec_snapshots[model_spec_id], window, bounded_daily(dailies[model_spec_id], window), analysis_spec))
+    pair_rows = pairwise_dispersion_rows(dailies, required_specs, analysis_spec["analysis_windows"], float(analysis_spec["comparison_tolerance"]))
+    run_id = f"{utc_now_compact()}_{bytes_sha256((analysis_spec_id + input_id + benchmark_mode + str(uuid.uuid4())).encode())[:12]}"
+    out = characterization_run_dir(root, run_id)
+    if out.exists():
+        raise SystemExit("vol_control_characterization_artifact_not_immutable")
+    out.mkdir(parents=True, exist_ok=False)
+    write_json(out / "vol_control_cross_spec_analysis_spec_snapshot.json", {"registry": registry, "registry_content_sha256": analysis_registry_hash, "selected_analysis_spec": analysis_spec})
+    write_json(out / "vol_control_cross_spec_run_references.json", {"run_artifacts": refs})
+    write_csv(out / "vol_control_cross_spec_summary.csv", rows)
+    write_csv(out / "vol_control_cross_spec_pairwise_dispersion.csv", pair_rows)
+    (out / "vol_control_cross_spec_summary.md").write_text(f"# Vol-Control Cross-Spec Characterization\n\nSummary rows: `{len(rows)}`\nPairwise rows: `{len(pair_rows)}`\n\nNo returns, PnL, ranking, selection, acceptance threshold, trading signal, or actionization is produced.\n", encoding="utf-8")
+    (out / "vol_control_cross_spec_limitations.md").write_text("# Vol-Control Cross-Spec Limitations\n\nHistorical descriptive state-path characterization only. No actual manager-flow ground truth, no market-impact estimate, no strict PIT claim, and no Phase 2 admission.\n", encoding="utf-8")
+    model_registry_hash = str(baseline["model_spec_registry_hash"]) if baseline else ""
+    receipt = {
+        "artifact_version": ARTIFACT_VERSION,
+        "module_name": MODULE_NAME,
+        "run_id": run_id,
+        "analysis_spec_id": analysis_spec_id,
+        "input_id": input_id,
+        "benchmark_mode": benchmark_mode,
+        "benchmark_instrument": baseline.get("benchmark_instrument") if baseline else "",
+        "benchmark_exact_or_proxy": baseline.get("benchmark_exact_or_proxy") if baseline else "",
+        "source_manifest_hash": baseline.get("source_manifest_hash") if baseline else "",
+        "run_artifact_count": len(run_artifacts),
+        "ranking_allowed": False,
+        "model_selection_allowed": False,
+        "returns_analysis_allowed": False,
+        "release_created": False,
+        "backtest_run": False,
+        "phase1_3_readiness_run": False,
+        "phase2_run": False,
+        "research_only": True,
+        "actionization_allowed": ACTIONIZATION_ALLOWED,
+        "not_a_trading_signal": True,
+        "not_actual_manager_flow_estimate": True,
+        "not_market_impact_estimate": True,
+        "predictive_pit_eligible": False,
+        "phase2_eligible": False,
+        **code_provenance(root, model_registry_hash, analysis_registry_hash),
+    }
+    write_json(out / "vol_control_cross_spec_receipt.json", receipt)
+    write_json(out / "vol_control_cross_spec_content_manifest.json", build_content_manifest(out, run_id, "vol_control_cross_spec_content_manifest.json"))
+    return {"analysis_status": "completed", "analysis_artifact": str(out), **receipt}
+
+
+def verify_cross_spec_characterization(analysis_artifact: str) -> dict[str, Any]:
+    path = Path(analysis_artifact).resolve()
+    manifest_name = "vol_control_cross_spec_content_manifest.json"
+    manifest_path = path / manifest_name
+    if not manifest_path.exists():
+        raise SystemExit(f"missing {manifest_name}")
+    manifest = load_json(manifest_path)
+    failures = []
+    expected = {entry["relative_path"]: entry for entry in manifest.get("files", [])}
+    actual = {p.relative_to(path).as_posix(): p for p in path.rglob("*") if p.is_file() and p.name != manifest_name}
+    for rel, entry in expected.items():
+        target = path / rel
+        if not target.exists():
+            failures.append({"relative_path": rel, "reason": "missing"})
+        elif file_sha256(target) != entry.get("sha256"):
+            failures.append({"relative_path": rel, "reason": "sha256_mismatch"})
+    for rel in sorted(set(actual) - set(expected)):
+        failures.append({"relative_path": rel, "reason": "extra_file"})
+    result = {"verification_status": "valid" if not failures else "tampered", "failures": failures, "analysis_artifact": str(path)}
+    receipt = load_json(path / "vol_control_cross_spec_receipt.json")
+    for field in ["actionization_allowed", "predictive_pit_eligible", "phase2_eligible", "phase1_3_readiness_run", "phase2_run", "release_created", "backtest_run", "ranking_allowed", "model_selection_allowed", "returns_analysis_allowed"]:
+        if receipt.get(field) is not False:
+            result["verification_status"] = "tampered"
+            result.setdefault("failures", []).append({"relative_path": "vol_control_cross_spec_receipt.json", "reason": f"{field}_must_be_false"})
+    provenance_failures: list[dict[str, Any]] = []
+    require_provenance_fields(receipt, provenance_failures, "vol_control_cross_spec_receipt.json")
+    if not receipt.get("analysis_spec_registry_hash"):
+        provenance_failures.append({"relative_path": "vol_control_cross_spec_receipt.json", "reason": "analysis_spec_registry_hash_missing"})
+    if provenance_failures:
+        result["verification_status"] = "tampered"
+        result.setdefault("failures", []).extend(provenance_failures)
     return result
 
 
@@ -776,6 +1062,13 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--input-id", required=True)
     p = sub.add_parser("inspect-vol-control-cot-sanity-input")
     p.add_argument("--input-id", required=True)
+    p = sub.add_parser("run-vol-control-cross-spec-characterization")
+    p.add_argument("--input-id", required=True)
+    p.add_argument("--benchmark-mode", choices=["ndx_exact_descriptive", "qqq_proxy_only_descriptive"], required=True)
+    p.add_argument("--analysis-spec-id", required=True)
+    p.add_argument("--run-artifact", action="append", required=True)
+    p = sub.add_parser("verify-vol-control-cross-spec-characterization")
+    p.add_argument("--analysis-artifact", required=True)
     return parser
 
 
@@ -796,6 +1089,10 @@ def main(argv: list[str] | None = None) -> int:
         result = build_cot_template(root, args.input_id)
     elif args.command == "inspect-vol-control-cot-sanity-input":
         result = inspect_cot_sanity_input(root, args.input_id)
+    elif args.command == "run-vol-control-cross-spec-characterization":
+        result = run_cross_spec_characterization(root, args.input_id, args.benchmark_mode, args.analysis_spec_id, args.run_artifact)
+    elif args.command == "verify-vol-control-cross-spec-characterization":
+        result = verify_cross_spec_characterization(args.analysis_artifact)
     else:
         raise SystemExit(f"unknown command: {args.command}")
     print(json_dumps(result))

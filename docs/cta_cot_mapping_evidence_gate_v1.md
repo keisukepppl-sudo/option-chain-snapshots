@@ -86,3 +86,5 @@ The intake gate requires:
 - positive open interest.
 
 It does not read historical CTA artifacts and does not compute COT comparison statistics.
+
+The NDX confirmed mapping uses the literal CFTC Contract Market Code `20974+` for `NASDAQ-100 Consolidated - CHICAGO MERCANTILE EXCHANGE`. NDX remains a cash-index proxy. COT `leveraged_funds` is not CTA-only and cannot establish actual CTA position, flow, or market impact.

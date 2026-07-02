@@ -160,6 +160,40 @@ def sign(value: float) -> float:
     return 0.0
 
 
+def repository_commit_sha(root: Path) -> str:
+    for candidate in [root, Path(__file__).resolve().parent, Path.cwd()]:
+        try:
+            completed = subprocess.run(["git", "rev-parse", "HEAD"], cwd=candidate, check=True, text=True, capture_output=True)
+        except Exception:
+            continue
+        sha = completed.stdout.strip()
+        if len(sha) == 40 and all(ch in "0123456789abcdefABCDEF" for ch in sha):
+            return sha
+    return ""
+
+
+def code_provenance(root: Path, model_spec_registry_hash: str, analysis_spec_registry_hash: str | None = None) -> dict[str, Any]:
+    commit = repository_commit_sha(root)
+    payload = {
+        "repository_commit_sha": commit,
+        "repository_commit_status": "available" if commit else "unavailable",
+        "module_source_sha256": file_sha256(Path(__file__).resolve()),
+        "model_spec_registry_hash": model_spec_registry_hash,
+    }
+    if analysis_spec_registry_hash is not None:
+        payload["analysis_spec_registry_hash"] = analysis_spec_registry_hash
+    return payload
+
+
+def require_provenance_fields(receipt: dict[str, Any], failures: list[dict[str, Any]], relative_path: str) -> None:
+    if any(field in receipt for field in ["repository_commit_sha", "repository_commit_status", "module_source_sha256"]):
+        for field in ["repository_commit_sha", "repository_commit_status", "module_source_sha256", "model_spec_registry_hash"]:
+            if not receipt.get(field):
+                failures.append({"relative_path": relative_path, "reason": f"{field}_missing"})
+        if receipt.get("repository_commit_sha") and receipt.get("repository_commit_status") != "available":
+            failures.append({"relative_path": relative_path, "reason": "repository_commit_status_invalid"})
+
+
 def normalize_identifier(value: Any) -> str:
     if value is None:
         return ""
@@ -227,8 +261,16 @@ def validation_run_dir(root: Path, run_id: str) -> Path:
     return cta_root(root) / "cot_validation_runs" / run_id
 
 
+def robustness_run_dir(root: Path, run_id: str) -> Path:
+    return cta_root(root) / "cot_robustness_runs" / run_id
+
+
 def config_path(root: Path) -> Path:
     return root / "config" / "cta_research_v1" / "model_specs.json"
+
+
+def robustness_config_path(root: Path) -> Path:
+    return root / "config" / "cta_research_v1" / "cot_robustness_specs.json"
 
 
 def safe_rel(base: Path, rel: str) -> Path:
@@ -952,6 +994,7 @@ def run_historical(root: Path, input_id: str, market_id: str, model_spec_id: str
         "market_id": market_id,
         "mode": HISTORICAL_MODE,
         "model_spec_id": model_spec_id,
+        "source_manifest_hash": manifest_hash,
         "model_spec_registry_hash": registry_hash,
         "release_created": False,
         "backtest_run": False,
@@ -961,6 +1004,7 @@ def run_historical(root: Path, input_id: str, market_id: str, model_spec_id: str
         "cot_validation_eligible": mapping_eligibility["cot_validation_eligible"],
         "cot_mapping_blocking_codes": mapping_eligibility["blocking_codes"],
         "mapping_identity_hash": mapping_eligibility["mapping_identity_hash"],
+        **code_provenance(root, registry_hash),
         **safety_flags(),
     }
     write_json(out / "cta_run_receipt.json", receipt)
@@ -995,6 +1039,11 @@ def verify_cta_run(run_artifact: str) -> dict[str, Any]:
         if receipt.get(field) is not False:
             result["verification_status"] = "tampered"
             result.setdefault("failures", []).append({"relative_path": "cta_run_receipt.json", "reason": f"{field}_must_be_false"})
+    provenance_failures: list[dict[str, Any]] = []
+    require_provenance_fields(receipt, provenance_failures, "cta_run_receipt.json")
+    if provenance_failures:
+        result["verification_status"] = "tampered"
+        result.setdefault("failures", []).extend(provenance_failures)
     if (path / "cta_market_mapping_snapshot.json").exists():
         snapshot = load_json(path / "cta_market_mapping_snapshot.json")
         if "mapping_identity_hash" in snapshot:
@@ -1229,7 +1278,8 @@ def run_cot_validation(root: Path, cta_run_artifact: str, input_id: str, market_
     asof = cot_pairs_for_mode(daily, cot, map_row, cot_reporting_group, "as_of_ex_post_only")
     avail = cot_pairs_for_mode(daily, cot, map_row, cot_reporting_group, "availability_monitoring_only")
     pairs = pd.concat([asof, avail], ignore_index=True) if not asof.empty or not avail.empty else pd.DataFrame()
-    registry, _, registry_hash = get_model_spec(root, str(load_json(cta_artifact / "cta_run_receipt.json")["model_spec_id"]))
+    cta_receipt = load_json(cta_artifact / "cta_run_receipt.json")
+    registry, _, registry_hash = get_model_spec(root, str(cta_receipt["model_spec_id"]))
     minimum = int(registry.get("minimum_weekly_pairs_for_summary", 26))
     window = int(registry.get("turning_point_lag_window_weeks", 4))
     run_id = f"{utc_now_compact()}_{bytes_sha256((input_id + market_id + cot_reporting_group + str(uuid.uuid4())).encode())[:12]}"
@@ -1254,6 +1304,9 @@ def run_cot_validation(root: Path, cta_run_artifact: str, input_id: str, market_
         "mode": COT_VALIDATION_MODE,
         "cta_run_artifact": str(cta_artifact),
         "cot_reporting_group": cot_reporting_group,
+        "model_spec_id": str(cta_receipt["model_spec_id"]),
+        "source_manifest_hash": file_sha256(source_manifest_path(root, input_id)),
+        "price_to_cot_relation": current_mapping["price_to_cot_relation"],
         "model_spec_registry_hash": registry_hash,
         "minimum_weekly_pairs_for_summary": minimum,
         "mapping_identity_hash": current_mapping["mapping_identity_hash"],
@@ -1266,6 +1319,7 @@ def run_cot_validation(root: Path, cta_run_artifact: str, input_id: str, market_
         "phase1_3_readiness_run": False,
         "phase2_run": False,
         "ex_post_external_validation_only": True,
+        **code_provenance(root, registry_hash),
         **safety_flags(),
     }
     write_json(out / "cta_cot_validation_receipt.json", receipt)
@@ -1312,10 +1366,243 @@ def verify_cot_validation(validation_artifact: str) -> dict[str, Any]:
         if receipt.get(field) is not False:
             result["verification_status"] = "tampered"
             result.setdefault("failures", []).append({"relative_path": "cta_cot_validation_receipt.json", "reason": f"{field}_must_be_false"})
+    provenance_failures: list[dict[str, Any]] = []
+    require_provenance_fields(receipt, provenance_failures, "cta_cot_validation_receipt.json")
+    if provenance_failures:
+        result["verification_status"] = "tampered"
+        result.setdefault("failures", []).extend(provenance_failures)
     for field in ["mapping_snapshot_match", "cot_row_mapping_match_required", "cot_validation_eligible"]:
         if receipt.get(field) is not True:
             result["verification_status"] = "tampered"
             result.setdefault("failures", []).append({"relative_path": "cta_cot_validation_receipt.json", "reason": f"{field}_must_be_true"})
+    return result
+
+
+def load_robustness_specs(root: Path) -> tuple[dict[str, Any], str]:
+    path = robustness_config_path(root)
+    if not path.exists():
+        raise SystemExit(f"missing robustness spec registry: {path}")
+    payload = load_json(path)
+    return payload, file_sha256(path)
+
+
+def get_robustness_spec(root: Path, analysis_spec_id: str) -> tuple[dict[str, Any], dict[str, Any], str]:
+    registry, registry_hash = load_robustness_specs(root)
+    for spec in registry.get("analysis_specs", []):
+        if str(spec.get("analysis_spec_id")) == analysis_spec_id:
+            return registry, spec, registry_hash
+    raise SystemExit(f"unknown_analysis_spec_id:{analysis_spec_id}")
+
+
+def bounded_pairs_with_recomputed_changes(pairs: pd.DataFrame, window: dict[str, Any]) -> pd.DataFrame:
+    work = pairs.copy()
+    work["position_as_of_date"] = pd.to_datetime(work["position_as_of_date"], errors="coerce")
+    if window.get("start"):
+        work = work[work["position_as_of_date"].ge(pd.Timestamp(str(window["start"])))]
+    if window.get("end"):
+        work = work[work["position_as_of_date"].le(pd.Timestamp(str(window["end"])))]
+    work = work.sort_values("position_as_of_date").copy()
+    if work.empty:
+        return work
+    work["model_exposure_level"] = pd.to_numeric(work["model_exposure_level"], errors="coerce")
+    work["cot_net_open_interest_ratio"] = pd.to_numeric(work["cot_net_open_interest_ratio"], errors="coerce")
+    work["model_weekly_exposure_change"] = work["model_exposure_level"].diff()
+    work["cot_weekly_net_oi_ratio_change"] = work["cot_net_open_interest_ratio"].diff()
+    work.iloc[0, work.columns.get_loc("model_weekly_exposure_change")] = pd.NA
+    work.iloc[0, work.columns.get_loc("cot_weekly_net_oi_ratio_change")] = pd.NA
+    work["level_sign_agreement"] = [
+        "" if pd.isna(model) or pd.isna(cot) or model == 0 or cot == 0 else bool(sign(float(model)) == sign(float(cot)))
+        for model, cot in zip(work["model_exposure_level"], work["cot_net_open_interest_ratio"])
+    ]
+    work["change_sign_agreement"] = [
+        "" if pd.isna(model) or pd.isna(cot) or model == 0 or cot == 0 else bool(sign(float(model)) == sign(float(cot)))
+        for model, cot in zip(work["model_weekly_exposure_change"], work["cot_weekly_net_oi_ratio_change"])
+    ]
+    work["position_as_of_date"] = work["position_as_of_date"].dt.strftime("%Y-%m-%d")
+    return work
+
+
+def nonzero_sign_series(values: pd.Series) -> list[tuple[int, float]]:
+    signs: list[tuple[int, float]] = []
+    for idx, value in enumerate(pd.to_numeric(values, errors="coerce")):
+        if pd.notna(value) and float(value) != 0:
+            signs.append((idx, sign(float(value))))
+    return signs
+
+
+def nonzero_reversal_indices(values: pd.Series) -> list[int]:
+    signs = nonzero_sign_series(values)
+    reversals: list[int] = []
+    for prior, current in zip(signs, signs[1:]):
+        if prior[1] != current[1]:
+            reversals.append(current[0])
+    return reversals
+
+
+def nonzero_turning_point_metrics(model_changes: pd.Series, cot_changes: pd.Series, window: int) -> tuple[int, int, float | None, float | None]:
+    model_reversals = nonzero_reversal_indices(model_changes)
+    cot_reversals = nonzero_reversal_indices(cot_changes)
+    if not model_reversals or not cot_reversals:
+        return len(model_reversals), len(cot_reversals), None, None
+    lags: list[int] = []
+    for idx in model_reversals:
+        candidates = [cot_idx - idx for cot_idx in cot_reversals if abs(cot_idx - idx) <= window]
+        if candidates:
+            lags.append(min(candidates, key=lambda value: abs(value)))
+    if not lags:
+        return len(model_reversals), len(cot_reversals), 0.0, None
+    return len(model_reversals), len(cot_reversals), float(len(lags) / len(model_reversals)), float(pd.Series(lags).median())
+
+
+def bool_rate(values: pd.Series) -> float | None:
+    vals = [value for value in values if isinstance(value, bool)]
+    return None if not vals else float(sum(vals) / len(vals))
+
+
+def robustness_metric_row(model_spec_id: str, alignment_mode: str, analysis_window: dict[str, Any], group: pd.DataFrame, spec: dict[str, Any]) -> dict[str, Any]:
+    minimum = int(spec["minimum_weekly_pairs_for_metrics"])
+    thin_threshold = int(spec["thin_window_pair_threshold"])
+    turn_window = int(spec["turning_point_lag_window_weeks"])
+    enough = len(group) >= minimum
+    model_rev, cot_rev, turn_rate, turn_lag = nonzero_turning_point_metrics(group["model_weekly_exposure_change"], group["cot_weekly_net_oi_ratio_change"], turn_window) if enough else (0, 0, None, None)
+    return {
+        "model_spec_id": model_spec_id,
+        "alignment_mode": alignment_mode,
+        "analysis_window_id": analysis_window["analysis_window_id"],
+        "window_class": analysis_window["window_class"],
+        "weekly_pair_count": int(len(group)),
+        "metrics_available": bool(enough),
+        "metrics_unavailable_reason": "" if enough else f"weekly_pair_count_below_{minimum}",
+        "thin_window_flag": bool(len(group) < thin_threshold),
+        "coverage_start": "" if group.empty else group["position_as_of_date"].min(),
+        "coverage_end": "" if group.empty else group["position_as_of_date"].max(),
+        "level_pearson_correlation": "" if not enough else corr(group["model_exposure_level"], group["cot_net_open_interest_ratio"], "pearson"),
+        "level_spearman_correlation": "" if not enough else corr(group["model_exposure_level"], group["cot_net_open_interest_ratio"], "spearman"),
+        "change_pearson_correlation": "" if not enough else corr(group["model_weekly_exposure_change"], group["cot_weekly_net_oi_ratio_change"], "pearson"),
+        "change_spearman_correlation": "" if not enough else corr(group["model_weekly_exposure_change"], group["cot_weekly_net_oi_ratio_change"], "spearman"),
+        "level_sign_agreement_rate": "" if not enough else bool_rate(group["level_sign_agreement"]),
+        "change_sign_agreement_rate": "" if not enough else bool_rate(group["change_sign_agreement"]),
+        "model_nonzero_weekly_change_count": int(len(nonzero_sign_series(group["model_weekly_exposure_change"]))),
+        "cot_nonzero_weekly_change_count": int(len(nonzero_sign_series(group["cot_weekly_net_oi_ratio_change"]))),
+        "model_nonzero_sign_reversal_count": int(model_rev),
+        "cot_nonzero_sign_reversal_count": int(cot_rev),
+        "nonzero_turning_point_match_rate": "" if turn_rate is None else turn_rate,
+        "median_nonzero_turning_point_lag_weeks": "" if turn_lag is None else turn_lag,
+        "price_to_cot_relation": "" if group.empty else group["price_to_cot_relation"].iloc[0],
+        "reporting_group": "" if group.empty else group["reporting_group"].iloc[0],
+        "automatic_acceptance_threshold_applied": False,
+        "ranking_allowed": False,
+        "model_selection_allowed": False,
+    }
+
+
+def run_cot_robustness_analysis(root: Path, input_id: str, market_id: str, cot_reporting_group: str, analysis_spec_id: str, validation_artifacts: list[str]) -> dict[str, Any]:
+    if len(validation_artifacts) != 4:
+        raise SystemExit("cta_cot_robustness_requires_exactly_four_artifacts")
+    registry, spec, analysis_registry_hash = get_robustness_spec(root, analysis_spec_id)
+    required_specs = [str(value) for value in spec["required_model_specs"]]
+    receipts: list[dict[str, Any]] = []
+    refs: list[dict[str, Any]] = []
+    seen_specs: set[str] = set()
+    baseline: dict[str, Any] | None = None
+    for artifact in validation_artifacts:
+        path = Path(artifact).resolve()
+        verification = verify_cot_validation(str(path))
+        if verification["verification_status"] != "valid":
+            raise SystemExit("cta_cot_robustness_validation_artifact_invalid")
+        receipt = load_json(path / "cta_cot_validation_receipt.json")
+        model_spec_id = str(receipt.get("model_spec_id", ""))
+        if model_spec_id in seen_specs:
+            raise SystemExit("cta_cot_robustness_duplicate_model_spec")
+        seen_specs.add(model_spec_id)
+        if model_spec_id not in required_specs:
+            raise SystemExit("cta_cot_robustness_model_set_mismatch")
+        if str(receipt.get("input_id")) != input_id or str(receipt.get("market_id")) != market_id or str(receipt.get("cot_reporting_group")) != cot_reporting_group:
+            raise SystemExit("cta_cot_robustness_input_mismatch")
+        current = {
+            "mapping_identity_hash": receipt.get("mapping_identity_hash"),
+            "source_manifest_hash": receipt.get("source_manifest_hash"),
+            "price_to_cot_relation": receipt.get("price_to_cot_relation"),
+            "model_spec_registry_hash": receipt.get("model_spec_registry_hash"),
+            "repository_commit_sha": receipt.get("repository_commit_sha"),
+            "module_source_sha256": receipt.get("module_source_sha256"),
+        }
+        if not all(current.values()):
+            raise SystemExit("cta_cot_robustness_provenance_mismatch")
+        if baseline is None:
+            baseline = current
+        elif current != baseline:
+            if current.get("mapping_identity_hash") != baseline.get("mapping_identity_hash") or current.get("price_to_cot_relation") != baseline.get("price_to_cot_relation"):
+                raise SystemExit("cta_cot_robustness_mapping_mismatch")
+            if current.get("source_manifest_hash") != baseline.get("source_manifest_hash"):
+                raise SystemExit("cta_cot_robustness_source_manifest_mismatch")
+            raise SystemExit("cta_cot_robustness_provenance_mismatch")
+        receipts.append(receipt)
+        refs.append({"validation_artifact": str(path), "model_spec_id": model_spec_id, "verification_status": verification["verification_status"], "content_manifest_hash": file_sha256(path / "cta_cot_validation_content_manifest.json")})
+    if [str(value) for value in required_specs] != [receipt["model_spec_id"] for receipt in sorted(receipts, key=lambda item: required_specs.index(str(item["model_spec_id"])))]:
+        raise SystemExit("cta_cot_robustness_model_set_mismatch")
+    ordered_paths = {load_json(Path(path).resolve() / "cta_cot_validation_receipt.json")["model_spec_id"]: Path(path).resolve() for path in validation_artifacts}
+    rows: list[dict[str, Any]] = []
+    for model_spec_id in required_specs:
+        pairs = pd.read_csv(ordered_paths[model_spec_id] / "cta_cot_weekly_pairs.csv")
+        for alignment_mode in ["as_of_ex_post_only", "availability_monitoring_only"]:
+            mode_pairs = pairs[pairs["alignment_mode"].astype(str).eq(alignment_mode)].copy()
+            for window in spec["analysis_windows"]:
+                bounded = bounded_pairs_with_recomputed_changes(mode_pairs, window)
+                rows.append(robustness_metric_row(model_spec_id, alignment_mode, window, bounded, spec))
+    run_id = f"{utc_now_compact()}_{bytes_sha256((analysis_spec_id + input_id + market_id + str(uuid.uuid4())).encode())[:12]}"
+    out = robustness_run_dir(root, run_id)
+    if out.exists():
+        raise SystemExit("cta_cot_robustness_artifact_not_immutable")
+    out.mkdir(parents=True, exist_ok=False)
+    write_json(out / "cta_cot_robustness_analysis_spec_snapshot.json", {"registry": registry, "registry_content_sha256": analysis_registry_hash, "selected_analysis_spec": spec})
+    write_json(out / "cta_cot_robustness_validation_references.json", {"validation_artifacts": refs})
+    write_csv(out / "cta_cot_robustness_summary.csv", rows)
+    (out / "cta_cot_robustness_summary.md").write_text(f"# CTA COT Robustness Summary\n\nRows: `{len(rows)}`\n\nNo model ranking, selection, acceptance threshold, trading signal, or actionization is produced.\n", encoding="utf-8")
+    (out / "cta_cot_robustness_limitations.md").write_text("# CTA COT Robustness Limitations\n\nHistorical descriptive external consistency only. COT leveraged funds is not CTA ground truth. NDX is a cash-index proxy for a CFTC consolidated futures COT market. No strict PIT or Phase 2 claim.\n", encoding="utf-8")
+    model_registry_hash = str(baseline["model_spec_registry_hash"]) if baseline else ""
+    receipt = {
+        "artifact_version": ARTIFACT_VERSION,
+        "module_name": MODULE_NAME,
+        "run_id": run_id,
+        "analysis_spec_id": analysis_spec_id,
+        "input_id": input_id,
+        "market_id": market_id,
+        "cot_reporting_group": cot_reporting_group,
+        "validation_artifact_count": len(validation_artifacts),
+        "mapping_identity_hash": baseline.get("mapping_identity_hash") if baseline else "",
+        "source_manifest_hash": baseline.get("source_manifest_hash") if baseline else "",
+        "price_to_cot_relation": baseline.get("price_to_cot_relation") if baseline else "",
+        "automatic_acceptance_threshold_applied": False,
+        "ranking_allowed": False,
+        "model_selection_allowed": False,
+        "release_created": False,
+        "backtest_run": False,
+        "phase1_3_readiness_run": False,
+        "phase2_run": False,
+        **code_provenance(root, model_registry_hash, analysis_registry_hash),
+        **safety_flags(),
+    }
+    write_json(out / "cta_cot_robustness_receipt.json", receipt)
+    write_json(out / "cta_cot_robustness_content_manifest.json", build_content_manifest(out, "cta_cot_robustness_content_manifest.json", run_id))
+    return {"analysis_status": "completed", "analysis_artifact": str(out), **receipt}
+
+
+def verify_cot_robustness_analysis(analysis_artifact: str) -> dict[str, Any]:
+    path = Path(analysis_artifact).resolve()
+    result = verify_manifested_dir(path, "cta_cot_robustness_content_manifest.json")
+    receipt = load_json(path / "cta_cot_robustness_receipt.json")
+    for field in ["actionization_allowed", "predictive_pit_eligible", "phase2_eligible", "phase1_3_readiness_run", "phase2_run", "release_created", "backtest_run", "automatic_acceptance_threshold_applied", "ranking_allowed", "model_selection_allowed"]:
+        if receipt.get(field) is not False:
+            result["verification_status"] = "tampered"
+            result.setdefault("failures", []).append({"relative_path": "cta_cot_robustness_receipt.json", "reason": f"{field}_must_be_false"})
+    provenance_failures: list[dict[str, Any]] = []
+    require_provenance_fields(receipt, provenance_failures, "cta_cot_robustness_receipt.json")
+    if not receipt.get("analysis_spec_registry_hash"):
+        provenance_failures.append({"relative_path": "cta_cot_robustness_receipt.json", "reason": "analysis_spec_registry_hash_missing"})
+    if provenance_failures:
+        result["verification_status"] = "tampered"
+        result.setdefault("failures", []).extend(provenance_failures)
     return result
 
 
@@ -1343,6 +1630,14 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--input-id", required=True)
     p.add_argument("--market-id", required=True)
     p.add_argument("--cot-reporting-group", required=True)
+    p = sub.add_parser("run-cta-cot-robustness-analysis")
+    p.add_argument("--input-id", required=True)
+    p.add_argument("--market-id", required=True)
+    p.add_argument("--cot-reporting-group", required=True)
+    p.add_argument("--analysis-spec-id", required=True)
+    p.add_argument("--validation-artifact", action="append", required=True)
+    p = sub.add_parser("verify-cta-cot-robustness-analysis")
+    p.add_argument("--analysis-artifact", required=True)
     p = sub.add_parser("run-cta-cot-weekly-external-validation")
     p.add_argument("--cta-run-artifact", required=True)
     p.add_argument("--input-id", required=True)
@@ -1372,6 +1667,10 @@ def main(argv: list[str] | None = None) -> int:
         result = inspect_cot_validation_input(root, args.input_id)
     elif args.command == "validate-cta-cot-intake":
         result = validate_cta_cot_intake(root, args.input_id, args.market_id, args.cot_reporting_group)
+    elif args.command == "run-cta-cot-robustness-analysis":
+        result = run_cot_robustness_analysis(root, args.input_id, args.market_id, args.cot_reporting_group, args.analysis_spec_id, args.validation_artifact)
+    elif args.command == "verify-cta-cot-robustness-analysis":
+        result = verify_cot_robustness_analysis(args.analysis_artifact)
     elif args.command == "run-cta-cot-weekly-external-validation":
         result = run_cot_validation(root, args.cta_run_artifact, args.input_id, args.market_id, args.cot_reporting_group)
     elif args.command == "verify-cta-cot-validation":

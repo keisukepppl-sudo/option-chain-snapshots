@@ -1,0 +1,74 @@
+{
+  "registry_version": "cta_cot_robustness_specs_1_0_0",
+  "module_name": "cta_transparent_trend_replication_v1",
+  "research_only": true,
+  "actionization_allowed": false,
+  "ranking_allowed": false,
+  "model_selection_allowed": false,
+  "analysis_specs": [
+    {
+      "analysis_spec_id": "cta_cot_ndx_leveraged_funds_robustness_v1",
+      "analysis_mode": "historical_descriptive_external_consistency",
+      "input_id": "manual_cta_ndx_cot_tff_20260702",
+      "market_id": "ndx_cash_proxy_to_nasdaq_100_consolidated_tff",
+      "price_to_cot_relation": "cash_index_proxy_for_futures_cot",
+      "reporting_group": "leveraged_funds",
+      "required_model_specs": [
+        "cta_ts_20d_binary_v1",
+        "cta_ts_60d_binary_v1",
+        "cta_ts_120d_binary_v1",
+        "cta_ts_20_60_120_equal_weight_v1"
+      ],
+      "minimum_weekly_pairs_for_metrics": 26,
+      "thin_window_pair_threshold": 40,
+      "turning_point_lag_window_weeks": 4,
+      "automatic_acceptance_threshold_applied": false,
+      "ranking_allowed": false,
+      "model_selection_allowed": false,
+      "analysis_windows": [
+        {
+          "analysis_window_id": "full_covered_period",
+          "start": null,
+          "end": null,
+          "window_class": "primary_full_sample"
+        },
+        {
+          "analysis_window_id": "pre_2025",
+          "start": "2023-07-03",
+          "end": "2024-12-31",
+          "window_class": "primary_nonoverlapping_subperiod"
+        },
+        {
+          "analysis_window_id": "from_2025",
+          "start": "2025-01-01",
+          "end": "2026-06-23",
+          "window_class": "primary_nonoverlapping_subperiod"
+        },
+        {
+          "analysis_window_id": "calendar_2024",
+          "start": "2024-01-01",
+          "end": "2024-12-31",
+          "window_class": "secondary_calendar_year"
+        },
+        {
+          "analysis_window_id": "calendar_2025",
+          "start": "2025-01-01",
+          "end": "2025-12-31",
+          "window_class": "secondary_calendar_year"
+        },
+        {
+          "analysis_window_id": "calendar_2023_h2",
+          "start": "2023-07-03",
+          "end": "2023-12-31",
+          "window_class": "diagnostic_thin_history"
+        },
+        {
+          "analysis_window_id": "calendar_2026_ytd",
+          "start": "2026-01-01",
+          "end": "2026-06-23",
+          "window_class": "diagnostic_short_history"
+        }
+      ]
+    }
+  ]
+}

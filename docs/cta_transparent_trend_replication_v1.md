@@ -72,3 +72,9 @@ Proxy labels remain visible in outputs. A proxy price is never represented as a 
 CTA baseline generation and COT-validation eligibility are separate. A market can produce valid no-COT CTA trend-state baselines while its COT mapping remains unresolved.
 
 Unresolved or placeholder COT identifiers make `cot_validation_eligible=false`. They do not invalidate the CTA trend artifact, but they prevent COT validation. Once a confirmed mapping is manually staged, new CTA artifacts must be created so the mapping identity is bound into the artifact snapshot.
+
+## Provenance And Confirmed NDX Mapping
+
+New-generation CTA artifacts record repository commit, module source hash, source manifest hash, and model registry hash. Legacy artifacts remain verifiable under their legacy compatibility behavior.
+
+The confirmed NDX study uses NDX as a cash-index proxy for the CFTC TFF Futures Only `NASDAQ-100 Consolidated - CHICAGO MERCANTILE EXCHANGE` market, preserving literal CFTC Contract Market Code `20974+`. This mapping remains historical descriptive only and carries `manual_operator_confirmation_required=true` in the source evidence.

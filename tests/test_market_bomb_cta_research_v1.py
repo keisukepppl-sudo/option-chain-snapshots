@@ -24,6 +24,9 @@ def _copy_config(root: Path) -> None:
     dst = root / "config" / "cta_research_v1"
     dst.mkdir(parents=True, exist_ok=True)
     shutil.copyfile(REPO_ROOT / "config" / "cta_research_v1" / "model_specs.json", dst / "model_specs.json")
+    robustness = REPO_ROOT / "config" / "cta_research_v1" / "cot_robustness_specs.json"
+    if robustness.exists():
+        shutil.copyfile(robustness, dst / "cot_robustness_specs.json")
 
 
 def _prices(count: int = 150, market_id: str = "NQ", instrument: str = "NQ_FUT", basis: str = "raw") -> list[dict[str, object]]:
@@ -577,3 +580,46 @@ def test_isolation_safety_no_forbidden_imports_and_ignored_root() -> None:
     assert "market_bomb_history/cta_research_v1/" in (REPO_ROOT / ".gitignore").read_text()
     assert cta.ACTIONIZATION_ALLOWED is False
     assert not cta.tracked_cta_history(REPO_ROOT)
+
+
+def test_new_cta_and_cot_validation_receipts_include_provenance(tmp_path: Path) -> None:
+    _stage(tmp_path, cot_rows=_cot_rows(30))
+    result, _ = _run(tmp_path, SPEC_20)
+    run_artifact = Path(str(result["run_artifact"]))
+    receipt = json.loads((run_artifact / "cta_run_receipt.json").read_text())
+    for field in ["source_manifest_hash", "repository_commit_sha", "repository_commit_status", "module_source_sha256", "model_spec_registry_hash"]:
+        assert receipt[field]
+    validation = cta.run_cot_validation(tmp_path, str(run_artifact), "fixture_cta", "NQ", "leveraged_funds")
+    validation_receipt = json.loads((Path(str(validation["validation_artifact"])) / "cta_cot_validation_receipt.json").read_text())
+    for field in ["source_manifest_hash", "repository_commit_sha", "repository_commit_status", "module_source_sha256", "model_spec_registry_hash", "model_spec_id", "price_to_cot_relation"]:
+        assert validation_receipt[field]
+
+
+def test_cta_robustness_requires_exactly_four_and_no_artifact(tmp_path: Path) -> None:
+    _stage(tmp_path, cot_rows=_cot_rows(30))
+    result, _ = _run(tmp_path, SPEC_20)
+    validation = cta.run_cot_validation(tmp_path, str(result["run_artifact"]), "fixture_cta", "NQ", "leveraged_funds")
+    before = set((tmp_path / "market_bomb_history" / "cta_research_v1").glob("cot_robustness_runs/*"))
+    with pytest.raises(SystemExit, match="cta_cot_robustness_requires_exactly_four_artifacts"):
+        cta.run_cot_robustness_analysis(tmp_path, "fixture_cta", "NQ", "leveraged_funds", "cta_cot_ndx_leveraged_funds_robustness_v1", [str(validation["validation_artifact"])])
+    after = set((tmp_path / "market_bomb_history" / "cta_research_v1").glob("cot_robustness_runs/*"))
+    assert before == after
+
+
+def test_cta_robustness_runs_all_windows_and_verifies(tmp_path: Path) -> None:
+    _stage(tmp_path, cot_rows=_cot_rows(32))
+    artifacts = []
+    for spec_id in [SPEC_20, SPEC_60, SPEC_120, SPEC_COMP]:
+        run = cta.run_historical(tmp_path, "fixture_cta", "NQ", spec_id)
+        validation = cta.run_cot_validation(tmp_path, str(run["run_artifact"]), "fixture_cta", "NQ", "leveraged_funds")
+        artifacts.append(str(validation["validation_artifact"]))
+    analysis = cta.run_cot_robustness_analysis(tmp_path, "fixture_cta", "NQ", "leveraged_funds", "cta_cot_ndx_leveraged_funds_robustness_v1", artifacts)
+    artifact = Path(str(analysis["analysis_artifact"]))
+    assert cta.verify_cot_robustness_analysis(str(artifact))["verification_status"] == "valid"
+    summary = pd.read_csv(artifact / "cta_cot_robustness_summary.csv")
+    assert set(summary["alignment_mode"]) == {"as_of_ex_post_only", "availability_monitoring_only"}
+    assert list(summary["analysis_window_id"].drop_duplicates()) == ["full_covered_period", "pre_2025", "from_2025", "calendar_2024", "calendar_2025", "calendar_2023_h2", "calendar_2026_ytd"]
+    assert {"ranking_allowed", "model_selection_allowed"} <= set(summary.columns)
+    assert not {"winner", "best_model", "pass_fail", "trade_eligible"} & set(summary.columns)
+    (artifact / "cta_cot_robustness_summary.md").write_text("tampered", encoding="utf-8")
+    assert cta.verify_cot_robustness_analysis(str(artifact))["verification_status"] == "tampered"
