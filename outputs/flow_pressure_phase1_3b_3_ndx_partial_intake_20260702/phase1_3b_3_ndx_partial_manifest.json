@@ -1,0 +1,37 @@
+{
+  "phase": "flow_pressure_phase1_3b_3_ndx_partial_intake",
+  "main_outcome": "manual_raw_source_inputs_incomplete",
+  "forward_collection_outcome": "forward_snapshot_not_started",
+  "input_id": "manual_free_proxy_ndx_20260702",
+  "normalization_run_id": "norm_20260702T113715Z_c5b6788c",
+  "raw_file_name": "EODHist_20230703-20260702_NDX.xlsx",
+  "raw_file_sha256": "8ea462ee5448d2f1f2cbab7a19dfa8934d41204ca963b0ef9712b50f80fb52e1",
+  "raw_data_committed": false,
+  "network_used": false,
+  "normalization_attempted": true,
+  "normalized_canonical_files": [
+    "sources/benchmark_prices.csv"
+  ],
+  "normalized_ndx_rows": 752,
+  "excluded_rows": 1,
+  "coverage_start": "2023-07-03",
+  "coverage_end": "2026-07-01",
+  "validation_status": "blocked",
+  "test_result": "41 passed",
+  "blocking_reason": "missing_required_dataset:benchmark_mapping",
+  "historical_descriptive_run_created": false,
+  "forward_snapshot_created": false,
+  "strict_phase1_3_run": false,
+  "phase2_run": false,
+  "release_run": false,
+  "backtest_run": false,
+  "notification_run": false,
+  "trading_ranking_sizing_execution_actionization": false,
+  "actionization_allowed": false,
+  "outputs": [
+    "outputs/flow_pressure_phase1_3b_3_ndx_partial_intake_20260702/ndx_partial_intake_inventory.csv",
+    "outputs/flow_pressure_phase1_3b_3_ndx_partial_intake_20260702/phase1_3b_3_ndx_partial_report.md",
+    "outputs/flow_pressure_phase1_3b_3_ndx_partial_intake_20260702/phase1_3b_3_ndx_partial_chatgpt_bundle.md",
+    "outputs/flow_pressure_phase1_3b_3_ndx_partial_intake_20260702/phase1_3b_3_ndx_partial_manifest.json"
+  ]
+}
