@@ -1,0 +1,93 @@
+{
+  "registry_version": "vol_control_research_v1_model_specs_1_0_0",
+  "module_name": "vol_control_transparent_replication_v1",
+  "research_only": true,
+  "parameter_fitting_allowed": false,
+  "actionization_allowed": false,
+  "model_specs": [
+    {
+      "model_spec_id": "vc_daily_20d_target10_cap100_v1",
+      "frequency": "daily",
+      "return_method": "close_to_close_simple_return",
+      "volatility_estimator": "rolling_sample_std_annualized",
+      "annualization_factor": 252,
+      "target_volatility": 0.1,
+      "trailing_window_sessions": 20,
+      "exposure_floor": 0.0,
+      "exposure_cap": 1.0,
+      "rebalance_rule": "daily_eod_full_rebalance_to_target",
+      "execution_assumption": "next_eligible_session",
+      "unchanged_tolerance": 1e-12
+    },
+    {
+      "model_spec_id": "vc_daily_40d_target10_cap100_v1",
+      "frequency": "daily",
+      "return_method": "close_to_close_simple_return",
+      "volatility_estimator": "rolling_sample_std_annualized",
+      "annualization_factor": 252,
+      "target_volatility": 0.1,
+      "trailing_window_sessions": 40,
+      "exposure_floor": 0.0,
+      "exposure_cap": 1.0,
+      "rebalance_rule": "daily_eod_full_rebalance_to_target",
+      "execution_assumption": "next_eligible_session",
+      "unchanged_tolerance": 1e-12
+    },
+    {
+      "model_spec_id": "vc_daily_60d_target10_cap100_v1",
+      "frequency": "daily",
+      "return_method": "close_to_close_simple_return",
+      "volatility_estimator": "rolling_sample_std_annualized",
+      "annualization_factor": 252,
+      "target_volatility": 0.1,
+      "trailing_window_sessions": 60,
+      "exposure_floor": 0.0,
+      "exposure_cap": 1.0,
+      "rebalance_rule": "daily_eod_full_rebalance_to_target",
+      "execution_assumption": "next_eligible_session",
+      "unchanged_tolerance": 1e-12
+    },
+    {
+      "model_spec_id": "vc_daily_20d_target12_cap100_v1",
+      "frequency": "daily",
+      "return_method": "close_to_close_simple_return",
+      "volatility_estimator": "rolling_sample_std_annualized",
+      "annualization_factor": 252,
+      "target_volatility": 0.12,
+      "trailing_window_sessions": 20,
+      "exposure_floor": 0.0,
+      "exposure_cap": 1.0,
+      "rebalance_rule": "daily_eod_full_rebalance_to_target",
+      "execution_assumption": "next_eligible_session",
+      "unchanged_tolerance": 1e-12
+    },
+    {
+      "model_spec_id": "vc_daily_40d_target12_cap100_v1",
+      "frequency": "daily",
+      "return_method": "close_to_close_simple_return",
+      "volatility_estimator": "rolling_sample_std_annualized",
+      "annualization_factor": 252,
+      "target_volatility": 0.12,
+      "trailing_window_sessions": 40,
+      "exposure_floor": 0.0,
+      "exposure_cap": 1.0,
+      "rebalance_rule": "daily_eod_full_rebalance_to_target",
+      "execution_assumption": "next_eligible_session",
+      "unchanged_tolerance": 1e-12
+    },
+    {
+      "model_spec_id": "vc_daily_60d_target12_cap100_v1",
+      "frequency": "daily",
+      "return_method": "close_to_close_simple_return",
+      "volatility_estimator": "rolling_sample_std_annualized",
+      "annualization_factor": 252,
+      "target_volatility": 0.12,
+      "trailing_window_sessions": 60,
+      "exposure_floor": 0.0,
+      "exposure_cap": 1.0,
+      "rebalance_rule": "daily_eod_full_rebalance_to_target",
+      "execution_assumption": "next_eligible_session",
+      "unchanged_tolerance": 1e-12
+    }
+  ]
+}
