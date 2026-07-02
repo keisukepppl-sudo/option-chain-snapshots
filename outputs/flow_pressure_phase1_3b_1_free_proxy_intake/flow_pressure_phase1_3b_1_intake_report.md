@@ -31,9 +31,9 @@ This template is intentionally ignored by git and contains no market data rows.
 | `sources/split_history.csv` | 0 | template only |
 | `sources/leveraged_etf_prices.csv` | 0 | template only |
 
-## Missing files for the instruction package
+## Deprecated planning-name files from the instruction package
 
-The instruction package expects these manually supplied files before a real first run:
+Phase 1.3B.1 reported the older instruction package names below. They are now explicitly deprecated planning names, not active input filenames. Use the normalized template documented in `docs/leveraged_etf_free_proxy_canonical_input_contract_v1.md`.
 
 | Required file | Status |
 |---|---|
@@ -48,7 +48,7 @@ The instruction package expects these manually supplied files before a real firs
 | `sources/sqqq_splits.csv` | missing |
 | `sources/benchmark_mapping.csv` | template only, 0 rows |
 
-Minimum files for NDX exact direction output are still incomplete:
+The old minimum planning names for NDX exact output are also deprecated:
 
 | Minimum file | Status |
 |---|---|

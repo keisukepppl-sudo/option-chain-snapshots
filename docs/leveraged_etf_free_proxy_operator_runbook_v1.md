@@ -10,6 +10,11 @@ market_bomb_history/
     input/<opaque_input_id>/
       source_manifest.json
       sources/
+        benchmark_prices.csv
+        benchmark_mapping.csv
+        aum_or_capital.csv
+        split_history.csv
+        leveraged_etf_prices.csv
     historical_runs/<run_id>/
     forward_ledger/
       snapshots/
@@ -25,6 +30,25 @@ python market_bomb_leveraged_etf_free_proxy_v1.py build-leveraged-etf-free-proxy
 ```
 
 Populate the generated CSVs manually and update `source_manifest.json` with hashes and descriptive-only qualification.
+
+The normalized generated files are the active contract. Legacy per-ticker names such as `ndx_daily.csv`, `tqqq_daily.csv`, or `tqqq_aum_nav.csv` are deprecated planning names and are not supported active input filenames.
+
+## Inspect the Contract
+
+```powershell
+python market_bomb_leveraged_etf_free_proxy_v1.py inspect-leveraged-etf-free-proxy-input-contract --input-id <opaque_input_id>
+```
+
+This command is local-only and read-only. It creates no proxy run, no forward ledger, no strict readiness artifact, and no actionization artifact.
+
+It reports:
+
+- expected, present, and missing normalized files;
+- found headers and missing required headers;
+- manifest entries and SHA-256 hash status;
+- detected instruments and coverage;
+- descriptive-only status;
+- whether the package supports NDX exact direction, QQQ proxy-only direction, AUM scale, split diagnostics, and forward PIT-lite snapshot ingestion.
 
 ## Validate Inputs
 
@@ -83,3 +107,9 @@ not_a_trading_signal=true
 not_market_impact_estimate=true
 not_dealer_inventory_estimate=true
 ```
+
+## Reference Docs
+
+- `docs/leveraged_etf_free_proxy_canonical_input_contract_v1.md`
+- `docs/leveraged_etf_free_proxy_manual_data_prep_v1.md`
+- `docs/leveraged_etf_free_proxy_contract_migration_v1.md`

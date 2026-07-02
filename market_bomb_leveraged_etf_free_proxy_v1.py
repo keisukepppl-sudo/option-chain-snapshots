@@ -70,6 +70,38 @@ PRICE_COLUMNS = ["date", "instrument", "raw_close", "raw_or_adjusted"]
 AUM_COLUMNS = ["date", "instrument", "aum_usd", "shares_outstanding", "nav_per_share", "unit"]
 SPLIT_COLUMNS = ["instrument", "effective_date", "split_ratio", "source_authority"]
 MAPPING_COLUMNS = MAPPING_FIELDS
+CANONICAL_SOURCE_FILES = {
+    "benchmark_prices": {
+        "relative_path": "sources/benchmark_prices.csv",
+        "required": True,
+        "columns": PRICE_COLUMNS,
+        "purpose": "NDX exact or QQQ proxy benchmark prices",
+    },
+    "benchmark_mapping": {
+        "relative_path": "sources/benchmark_mapping.csv",
+        "required": True,
+        "columns": MAPPING_COLUMNS,
+        "purpose": "TQQQ/SQQQ target benchmark and QQQ proxy mapping",
+    },
+    "leveraged_etf_prices": {
+        "relative_path": "sources/leveraged_etf_prices.csv",
+        "required": False,
+        "columns": PRICE_COLUMNS,
+        "purpose": "TQQQ/SQQQ price reconciliation",
+    },
+    "aum_or_capital": {
+        "relative_path": "sources/aum_or_capital.csv",
+        "required": False,
+        "columns": AUM_COLUMNS,
+        "purpose": "AUM or shares times NAV rough scale",
+    },
+    "split_history": {
+        "relative_path": "sources/split_history.csv",
+        "required": False,
+        "columns": SPLIT_COLUMNS,
+        "purpose": "TQQQ/SQQQ split diagnostics",
+    },
+}
 
 
 def utc_now_compact() -> str:
@@ -270,6 +302,233 @@ def build_template(root: Path, input_id: str) -> dict[str, Any]:
         }
         write_json(manifest_path, manifest)
     return {"template_status": "created_or_existing", "input_id": input_id, "template_root": str(base)}
+
+
+def csv_contract_status(path: Path, expected_columns: list[str]) -> dict[str, Any]:
+    if not path.exists():
+        return {
+            "present": False,
+            "columns": [],
+            "missing_required_headers": expected_columns,
+            "extra_headers": [],
+            "row_count": 0,
+            "read_status": "missing",
+        }
+    try:
+        df = pd.read_csv(path)
+    except Exception as exc:
+        return {
+            "present": True,
+            "columns": [],
+            "missing_required_headers": expected_columns,
+            "extra_headers": [],
+            "row_count": 0,
+            "read_status": "blocked",
+            "read_error": str(exc),
+        }
+    columns = [str(col) for col in df.columns]
+    return {
+        "present": True,
+        "columns": columns,
+        "missing_required_headers": sorted(set(expected_columns) - set(columns)),
+        "extra_headers": sorted(set(columns) - set(expected_columns)),
+        "row_count": int(len(df)),
+        "read_status": "readable",
+    }
+
+
+def detected_instruments(path: Path, date_column: str = "date") -> list[dict[str, Any]]:
+    if not path.exists():
+        return []
+    try:
+        df = pd.read_csv(path)
+    except Exception:
+        return []
+    if "instrument" not in df.columns:
+        return []
+    rows: list[dict[str, Any]] = []
+    for instrument, group in df.groupby(df["instrument"].astype(str).str.upper(), dropna=False):
+        rows.append({
+            "instrument": instrument,
+            "rows": int(len(group)),
+            "coverage_start": "" if date_column not in group.columns or group.empty else str(group[date_column].min()),
+            "coverage_end": "" if date_column not in group.columns or group.empty else str(group[date_column].max()),
+        })
+    return rows
+
+
+def manifest_entry_status(root: Path, input_id: str, source: dict[str, Any]) -> dict[str, Any]:
+    rel = str(source.get("relative_path", ""))
+    row = {
+        "dataset_type": source.get("dataset_type", ""),
+        "instrument": source.get("instrument", ""),
+        "relative_path": rel,
+        "declared_sha256": source.get("content_sha256", ""),
+        "actual_sha256": "",
+        "hash_status": "missing_source_file",
+        "source_qualification_status": source.get("source_qualification_status", ""),
+        "predictive_pit_eligible": False,
+        "phase2_eligible": False,
+        "historical_vintage_available": truthy(source.get("historical_vintage_available")),
+        "publication_timestamp_available": truthy(source.get("publication_timestamp_available")),
+        "revision_history_available": truthy(source.get("revision_history_available")),
+        "requires_human_provenance_completion": False,
+    }
+    if rel:
+        try:
+            path = safe_rel(input_dir(root, input_id), rel)
+            if path.exists():
+                actual = file_sha256(path)
+                row["actual_sha256"] = actual
+                row["hash_status"] = "match" if str(source.get("content_sha256")) == actual else "mismatch"
+        except SystemExit:
+            row["hash_status"] = "unsafe_relative_path"
+    missing = ensure_required_source_fields(source)
+    if missing:
+        row["requires_human_provenance_completion"] = True
+        row["missing_manifest_fields"] = ",".join(missing)
+    return row
+
+
+def mapping_mode_possible(mapping_path: Path, benchmark_mode: str) -> bool:
+    if not mapping_path.exists():
+        return False
+    try:
+        mapping = pd.read_csv(mapping_path)
+    except Exception:
+        return False
+    if set(MAPPING_COLUMNS) - set(mapping.columns):
+        return False
+    validations = validate_all_mappings(mapping, benchmark_mode)
+    required_etfs = {"TQQQ", "SQQQ"}
+    if validations.empty:
+        return False
+    valid = validations[validations["mapping_status"].astype(str).eq("valid")]
+    return required_etfs.issubset(set(valid["leveraged_etf"].astype(str).str.upper()))
+
+
+def has_price_instrument(price_path: Path, instrument: str) -> bool:
+    if not price_path.exists():
+        return False
+    try:
+        prices = pd.read_csv(price_path)
+    except Exception:
+        return False
+    if set(PRICE_COLUMNS) - set(prices.columns):
+        return False
+    return prices["instrument"].astype(str).str.upper().eq(instrument.upper()).any()
+
+
+def manifest_descriptive_only(manifest_entries: list[dict[str, Any]]) -> bool:
+    if not manifest_entries:
+        return False
+    for entry in manifest_entries:
+        if str(entry.get("source_qualification_status")) != HISTORICAL_CONFIDENCE:
+            return False
+        if entry.get("historical_vintage_available") or entry.get("publication_timestamp_available") or entry.get("revision_history_available"):
+            return False
+        if entry.get("hash_status") != "match":
+            return False
+    return True
+
+
+def inspect_input_contract(root: Path, input_id: str) -> dict[str, Any]:
+    base = input_dir(root, input_id)
+    files: list[dict[str, Any]] = []
+    instruments: dict[str, list[dict[str, Any]]] = {}
+    for dataset_type, spec in CANONICAL_SOURCE_FILES.items():
+        rel = str(spec["relative_path"])
+        path = base / rel
+        status = csv_contract_status(path, list(spec["columns"]))
+        files.append({
+            "dataset_type": dataset_type,
+            "relative_path": rel,
+            "required": spec["required"],
+            "purpose": spec["purpose"],
+            **status,
+        })
+        date_col = "effective_date" if dataset_type == "split_history" else "date"
+        instruments[dataset_type] = detected_instruments(path, date_col)
+    manifest_path = source_manifest_path(root, input_id)
+    manifest_entries: list[dict[str, Any]] = []
+    manifest_status = "missing"
+    manifest_required_fields_missing: list[str] = []
+    if manifest_path.exists():
+        try:
+            manifest = load_json(manifest_path)
+            manifest_status = "readable"
+            for source in manifest_sources(manifest):
+                manifest_entries.append(manifest_entry_status(root, input_id, source))
+            for field in ["artifact_version", "module_name", "input_id", "sources"]:
+                if field not in manifest:
+                    manifest_required_fields_missing.append(field)
+        except Exception as exc:
+            manifest_status = "blocked"
+            manifest_required_fields_missing.append(str(exc))
+    by_dataset = {row["dataset_type"]: row for row in files}
+    price_path = base / "sources" / "benchmark_prices.csv"
+    mapping_path = base / "sources" / "benchmark_mapping.csv"
+    aum_path = base / "sources" / "aum_or_capital.csv"
+    split_path = base / "sources" / "split_history.csv"
+    descriptive_ok = manifest_descriptive_only(manifest_entries)
+    try:
+        validation = validate_input(root, input_id)
+        validation_status = validation.get("validation_status", "blocked")
+    except SystemExit as exc:
+        validation_status = "blocked"
+        validation = {"diagnostics": [{"status": "blocked", "code": str(exc)}]}
+    capabilities = {
+        "ndx_exact_direction_possible": bool(
+            descriptive_ok
+            and validation_status == "valid"
+            and has_price_instrument(price_path, "NDX")
+            and mapping_mode_possible(mapping_path, "ndx_exact")
+        ),
+        "qqq_proxy_only_direction_possible": bool(
+            descriptive_ok
+            and validation_status == "valid"
+            and has_price_instrument(price_path, "QQQ")
+            and mapping_mode_possible(mapping_path, "qqq_proxy_only_descriptive")
+        ),
+        "aum_scaled_possible": bool(
+            descriptive_ok
+            and by_dataset["aum_or_capital"]["present"]
+            and not by_dataset["aum_or_capital"]["missing_required_headers"]
+            and any(row["instrument"] == "TQQQ" for row in instruments["aum_or_capital"])
+            and any(row["instrument"] == "SQQQ" for row in instruments["aum_or_capital"])
+        ),
+        "split_diagnostics_possible": bool(
+            by_dataset["split_history"]["present"]
+            and not by_dataset["split_history"]["missing_required_headers"]
+            and by_dataset["split_history"]["row_count"] > 0
+        ),
+        "forward_snapshot_ingestion_possible": bool(descriptive_ok and validation_status == "valid"),
+    }
+    return {
+        "artifact_version": ARTIFACT_VERSION,
+        "module_name": MODULE_NAME,
+        "input_id": input_id,
+        "inspection_status": "completed",
+        "canonical_layout": "market_bomb_history/leveraged_etf_free_proxy_v1/input/<input_id>/{source_manifest.json,sources/*.csv}",
+        "actionization_allowed": ACTIONIZATION_ALLOWED,
+        "predictive_pit_eligible": False,
+        "phase2_eligible": False,
+        "creates_run_artifact": False,
+        "legacy_per_ticker_filenames_supported": False,
+        "files": files,
+        "manifest": {
+            "relative_path": "source_manifest.json",
+            "present": manifest_path.exists(),
+            "read_status": manifest_status,
+            "missing_top_level_fields": manifest_required_fields_missing,
+            "entries": manifest_entries,
+            "descriptive_only_status": "valid" if descriptive_ok else "incomplete_or_blocked",
+        },
+        "detected_instruments": instruments,
+        "validation_status": validation_status,
+        "validation_diagnostics": validation.get("diagnostics", []),
+        "capabilities": capabilities,
+    }
 
 
 def ensure_required_source_fields(source: dict[str, Any]) -> list[str]:
@@ -802,6 +1061,8 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--input-id", required=True)
     p = sub.add_parser("validate-leveraged-etf-free-proxy-input")
     p.add_argument("--input-id", required=True)
+    p = sub.add_parser("inspect-leveraged-etf-free-proxy-input-contract")
+    p.add_argument("--input-id", required=True)
     p = sub.add_parser("run-leveraged-etf-free-proxy-historical")
     p.add_argument("--input-id", required=True)
     p.add_argument("--benchmark-mode", choices=["ndx_exact", "qqq_proxy_only_descriptive"], required=True)
@@ -825,6 +1086,8 @@ def main(argv: list[str] | None = None) -> int:
         result = build_template(root, args.input_id)
     elif args.command == "validate-leveraged-etf-free-proxy-input":
         result = validate_input(root, args.input_id)
+    elif args.command == "inspect-leveraged-etf-free-proxy-input-contract":
+        result = inspect_input_contract(root, args.input_id)
     elif args.command == "run-leveraged-etf-free-proxy-historical":
         result = run_historical(root, args.input_id, args.benchmark_mode)
     elif args.command == "ingest-leveraged-etf-free-proxy-forward-snapshot":

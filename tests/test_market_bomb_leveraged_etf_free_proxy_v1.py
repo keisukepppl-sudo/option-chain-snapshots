@@ -386,3 +386,68 @@ def test_template_creates_header_only_files_without_provider_fetch(tmp_path: Pat
     for name in ["benchmark_prices.csv", "benchmark_mapping.csv", "aum_or_capital.csv", "split_history.csv"]:
         text = (template_root / "sources" / name).read_text(encoding="utf-8")
         assert len(text.strip().splitlines()) == 1
+
+
+def test_contract_inspect_empty_template_is_incomplete(tmp_path: Path) -> None:
+    root = tmp_path / "repo"
+    m.build_template(root, "template_fixture")
+    result = m.inspect_input_contract(root, "template_fixture")
+    assert result["creates_run_artifact"] is False
+    assert result["capabilities"]["ndx_exact_direction_possible"] is False
+    assert result["manifest"]["descriptive_only_status"] == "incomplete_or_blocked"
+
+
+def test_contract_inspect_reports_missing_normalized_file(tmp_path: Path) -> None:
+    root = tmp_path / "repo"
+    m.build_template(root, "template_fixture")
+    (m.input_dir(root, "template_fixture") / "sources" / "benchmark_prices.csv").unlink()
+    result = m.inspect_input_contract(root, "template_fixture")
+    missing = [row for row in result["files"] if row["relative_path"] == "sources/benchmark_prices.csv"][0]
+    assert missing["present"] is False
+    assert missing["read_status"] == "missing"
+
+
+def test_contract_inspect_reports_header_mismatch(tmp_path: Path) -> None:
+    root = tmp_path / "repo"
+    m.build_template(root, "template_fixture")
+    path = m.input_dir(root, "template_fixture") / "sources" / "benchmark_prices.csv"
+    path.write_text("date,instrument,raw_or_adjusted\n2020-01-02,NDX,raw\n", encoding="utf-8")
+    result = m.inspect_input_contract(root, "template_fixture")
+    price = [row for row in result["files"] if row["dataset_type"] == "benchmark_prices"][0]
+    assert "raw_close" in price["missing_required_headers"]
+
+
+def test_contract_inspect_reports_manifest_hash_mismatch(tmp_path: Path) -> None:
+    root = _stage(tmp_path)
+    price_path = m.input_dir(root, "fixture_free") / "sources" / "benchmark_prices.csv"
+    price_path.write_text(price_path.read_text(encoding="utf-8") + "\n", encoding="utf-8")
+    result = m.inspect_input_contract(root, "fixture_free")
+    price_entry = [row for row in result["manifest"]["entries"] if row["dataset_type"] == "benchmark_prices"][0]
+    assert price_entry["hash_status"] == "mismatch"
+    assert result["capabilities"]["ndx_exact_direction_possible"] is False
+
+
+def test_contract_inspect_valid_synthetic_ndx_package_capabilities(tmp_path: Path) -> None:
+    root = _stage(tmp_path)
+    result = m.inspect_input_contract(root, "fixture_free")
+    assert result["capabilities"]["ndx_exact_direction_possible"] is True
+    assert result["capabilities"]["qqq_proxy_only_direction_possible"] is False
+    assert result["capabilities"]["aum_scaled_possible"] is True
+    assert result["capabilities"]["split_diagnostics_possible"] is True
+    assert result["capabilities"]["forward_snapshot_ingestion_possible"] is True
+    assert not m.historical_run_dir(root, "unused").parent.exists()
+
+
+def test_contract_inspect_valid_synthetic_proxy_package_capabilities(tmp_path: Path) -> None:
+    root = _stage(tmp_path, proxy=True)
+    result = m.inspect_input_contract(root, "fixture_free")
+    assert result["capabilities"]["ndx_exact_direction_possible"] is False
+    assert result["capabilities"]["qqq_proxy_only_direction_possible"] is True
+
+
+def test_contract_inspect_cannot_alter_strict_flags(tmp_path: Path) -> None:
+    root = _stage(tmp_path)
+    result = m.inspect_input_contract(root, "fixture_free")
+    assert result["actionization_allowed"] is False
+    assert result["predictive_pit_eligible"] is False
+    assert result["phase2_eligible"] is False

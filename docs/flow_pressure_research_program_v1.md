@@ -126,3 +126,23 @@ See:
 
 - `docs/leveraged_etf_free_directional_proxy_v1.md`
 - `docs/leveraged_etf_free_proxy_operator_runbook_v1.md`
+- `docs/leveraged_etf_free_proxy_canonical_input_contract_v1.md`
+- `docs/leveraged_etf_free_proxy_manual_data_prep_v1.md`
+- `docs/leveraged_etf_free_proxy_contract_migration_v1.md`
+
+Phase 1.3B.2 locks the executable generated template as the canonical manual input contract. The active layout is:
+
+```text
+source_manifest.json
+sources/benchmark_prices.csv
+sources/benchmark_mapping.csv
+sources/aum_or_capital.csv
+sources/split_history.csv
+sources/leveraged_etf_prices.csv
+```
+
+Older one-file-per-ticker planning names are deprecated and are not active input filenames. Operators should inspect a staged package with:
+
+```powershell
+python market_bomb_leveraged_etf_free_proxy_v1.py inspect-leveraged-etf-free-proxy-input-contract --input-id <opaque_input_id>
+```

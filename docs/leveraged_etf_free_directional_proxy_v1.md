@@ -57,6 +57,23 @@ sum(L_i * (L_i - 1) * A_i * r)
 
 AUM is never forward-filled, interpolated, or invented. If exact permitted lagged capital is missing, the AUM-scaled output is unavailable.
 
+## Canonical Manual Input Contract
+
+The generated template is the active input contract:
+
+```text
+source_manifest.json
+sources/benchmark_prices.csv
+sources/benchmark_mapping.csv
+sources/aum_or_capital.csv
+sources/split_history.csv
+sources/leveraged_etf_prices.csv
+```
+
+`benchmark_prices.csv` may contain NDX and QQQ rows. `leveraged_etf_prices.csv` may contain TQQQ and SQQQ rows. AUM or shares-times-NAV rows belong in `aum_or_capital.csv`.
+
+Legacy per-ticker filenames are deprecated planning names and are not active input filenames. See `docs/leveraged_etf_free_proxy_canonical_input_contract_v1.md`.
+
 ## Neutral Threshold
 
 Frozen policy:

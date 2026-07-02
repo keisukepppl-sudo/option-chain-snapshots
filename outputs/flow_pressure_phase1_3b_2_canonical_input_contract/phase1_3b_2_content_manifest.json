@@ -1,0 +1,37 @@
+{
+  "phase": "flow_pressure_phase1_3b_2_canonical_input_contract",
+  "start_commit": "08e80427cfd4f4f8055f28429a9cdc3eea6c49fe",
+  "canonical_contract_locked": true,
+  "helper_added": "inspect-leveraged-etf-free-proxy-input-contract",
+  "raw_data_fetched": false,
+  "raw_data_committed": false,
+  "historical_descriptive_run_executed": false,
+  "template_only_run_executed": false,
+  "strict_phase1_3_run": false,
+  "phase2_run": false,
+  "release_run": false,
+  "backtest_run": false,
+  "notification_run": false,
+  "trading_or_actionization": false,
+  "actionization_allowed": false,
+  "validation": {
+    "focused_free_proxy_tests": "41 passed",
+    "full_suite_file_by_file": "373 passed, 2 skipped",
+    "py_compile": "passed"
+  },
+  "docs_added": [
+    "docs/leveraged_etf_free_proxy_canonical_input_contract_v1.md",
+    "docs/leveraged_etf_free_proxy_manual_data_prep_v1.md",
+    "docs/leveraged_etf_free_proxy_contract_migration_v1.md"
+  ],
+  "docs_updated": [
+    "docs/leveraged_etf_free_directional_proxy_v1.md",
+    "docs/leveraged_etf_free_proxy_operator_runbook_v1.md",
+    "docs/flow_pressure_research_program_v1.md"
+  ],
+  "outputs": [
+    "outputs/flow_pressure_phase1_3b_2_canonical_input_contract/phase1_3b_2_report.md",
+    "outputs/flow_pressure_phase1_3b_2_canonical_input_contract/phase1_3b_2_chatgpt_bundle.md",
+    "outputs/flow_pressure_phase1_3b_2_canonical_input_contract/phase1_3b_2_content_manifest.json"
+  ]
+}

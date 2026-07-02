@@ -43,9 +43,9 @@ The template is ignored by git and must not be interpreted as real market data.
 | `sources/split_history.csv` | 0 | template only |
 | `sources/leveraged_etf_prices.csv` | 0 | template only |
 
-## Missing Instruction-Level Inputs
+## Deprecated Planning-Name Inputs
 
-The attached instruction expects these manually supplied files:
+Phase 1.3B.1 reported these older instruction-level names. They are now explicitly deprecated planning names, not active input filenames:
 
 | File | Status |
 |---|---|
@@ -60,7 +60,7 @@ The attached instruction expects these manually supplied files:
 | `sources/sqqq_splits.csv` | missing |
 | `sources/benchmark_mapping.csv` | template only, 0 rows |
 
-Minimum NDX exact output is also incomplete because `ndx_daily.csv`, `tqqq_daily.csv`, `sqqq_daily.csv`, and populated `benchmark_mapping.csv` are absent.
+The old minimum NDX exact planning names are also deprecated. The active contract uses `benchmark_prices.csv` and `benchmark_mapping.csv`.
 
 ## Implemented Normalized Contract
 
