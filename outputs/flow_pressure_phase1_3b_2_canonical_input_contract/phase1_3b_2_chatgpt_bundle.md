@@ -9,6 +9,11 @@ Lock the actual implemented manual input contract for the free leveraged ETF dir
 The executable generated template is now documented as canonical:
 
 ```text
+start_commit=08e80427cfd4f4f8055f28429a9cdc3eea6c49fe
+implementation_commit=0a59cbe49425821fca6a3fafd21ee2f32a3eab27
+```
+
+```text
 market_bomb_history/
   leveraged_etf_free_proxy_v1/
     input/
@@ -133,4 +138,3 @@ python market_bomb_leveraged_etf_free_proxy_v1.py validate-leveraged-etf-free-pr
 ```
 
 Only after validation should a descriptive run be considered.
-

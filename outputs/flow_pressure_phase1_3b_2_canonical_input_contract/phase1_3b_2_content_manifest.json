@@ -1,6 +1,7 @@
 {
   "phase": "flow_pressure_phase1_3b_2_canonical_input_contract",
   "start_commit": "08e80427cfd4f4f8055f28429a9cdc3eea6c49fe",
+  "implementation_commit": "0a59cbe49425821fca6a3fafd21ee2f32a3eab27",
   "canonical_contract_locked": true,
   "helper_added": "inspect-leveraged-etf-free-proxy-input-contract",
   "raw_data_fetched": false,

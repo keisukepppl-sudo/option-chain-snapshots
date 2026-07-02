@@ -5,6 +5,7 @@
 Phase 1.3B.2 locked the executable generated template as the canonical manual input contract for `leveraged_etf_free_directional_proxy_v1`.
 
 - Start commit: `08e80427cfd4f4f8055f28429a9cdc3eea6c49fe`
+- Implementation commit: `0a59cbe49425821fca6a3fafd21ee2f32a3eab27`
 - Raw data fetched: no
 - Raw data committed: no
 - Historical descriptive run against template-only data: no
@@ -131,4 +132,3 @@ market_bomb_leveraged_etf_free_proxy_v1.py compiled successfully
 - Strict predictive gates are unchanged.
 
 No output is a trade signal, alpha claim, market-impact conclusion, or permission to move to Phase 2.
-
