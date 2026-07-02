@@ -1,0 +1,69 @@
+{
+  "registry_version": "cta_research_v1_model_specs_1_0_0",
+  "module_name": "cta_transparent_trend_replication_v1",
+  "research_only": true,
+  "parameter_fitting_allowed": false,
+  "model_selection_allowed": false,
+  "actionization_allowed": false,
+  "minimum_weekly_pairs_for_summary": 26,
+  "turning_point_lag_window_weeks": 4,
+  "model_specs": [
+    {
+      "model_spec_id": "cta_ts_20d_binary_v1",
+      "frequency": "daily",
+      "return_method": "close_to_close_simple_return",
+      "signal_family": "time_series_momentum",
+      "horizons": [20],
+      "combination_method": "single_horizon_binary",
+      "exposure_floor": -1.0,
+      "exposure_cap": 1.0,
+      "neutral_band": 0.0,
+      "rebalance_rule": "daily_eod_full_rebalance_to_target",
+      "execution_assumption": "next_eligible_session",
+      "parameter_selection_status": "predeclared_not_fitted"
+    },
+    {
+      "model_spec_id": "cta_ts_60d_binary_v1",
+      "frequency": "daily",
+      "return_method": "close_to_close_simple_return",
+      "signal_family": "time_series_momentum",
+      "horizons": [60],
+      "combination_method": "single_horizon_binary",
+      "exposure_floor": -1.0,
+      "exposure_cap": 1.0,
+      "neutral_band": 0.0,
+      "rebalance_rule": "daily_eod_full_rebalance_to_target",
+      "execution_assumption": "next_eligible_session",
+      "parameter_selection_status": "predeclared_not_fitted"
+    },
+    {
+      "model_spec_id": "cta_ts_120d_binary_v1",
+      "frequency": "daily",
+      "return_method": "close_to_close_simple_return",
+      "signal_family": "time_series_momentum",
+      "horizons": [120],
+      "combination_method": "single_horizon_binary",
+      "exposure_floor": -1.0,
+      "exposure_cap": 1.0,
+      "neutral_band": 0.0,
+      "rebalance_rule": "daily_eod_full_rebalance_to_target",
+      "execution_assumption": "next_eligible_session",
+      "parameter_selection_status": "predeclared_not_fitted"
+    },
+    {
+      "model_spec_id": "cta_ts_20_60_120_equal_weight_v1",
+      "frequency": "daily",
+      "return_method": "close_to_close_simple_return",
+      "signal_family": "time_series_momentum",
+      "horizons": [20, 60, 120],
+      "combination_method": "equal_weight_binary_components",
+      "component_weights": {"20": 0.3333333333333333, "60": 0.3333333333333333, "120": 0.3333333333333333},
+      "exposure_floor": -1.0,
+      "exposure_cap": 1.0,
+      "neutral_band": 0.0,
+      "rebalance_rule": "daily_eod_full_rebalance_to_target",
+      "execution_assumption": "next_eligible_session",
+      "parameter_selection_status": "predeclared_not_fitted"
+    }
+  ]
+}
