@@ -41,3 +41,10 @@ No automatic acceptance threshold is applied. A high in-sample correlation can b
 
 COT never enters CTA daily signal construction. There is no daily COT interpolation, no model selection, no auto-promotion, no release, no backtest, no alert, and no trading instruction.
 
+## Mapping Gate
+
+COT validation cannot run until the selected mapping has manually evidenced, non-placeholder `cot_market_name` and `cftc_market_code` values. Pending identifiers are valid for no-COT baseline generation but hard-block validation before an artifact directory is created.
+
+The current mapping must match the CTA run artifact mapping snapshot exactly, including the mapping identity hash. Legacy CTA artifacts without the mapping-eligibility snapshot remain valid CTA baselines, but they must be rerun after confirmed mapping is staged before COT validation can proceed.
+
+COT rows must match the mapped market name and CFTC code. `market_id` alone is not sufficient. Proxy relations remain visible in validation outputs.

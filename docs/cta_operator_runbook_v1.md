@@ -53,3 +53,6 @@ python market_bomb_cta_research_v1.py verify-cta-cot-validation --validation-art
 
 COT validation is ex post external validation only. It is not ground truth and cannot alter the CTA model path.
 
+Before running validation, inspect mapping eligibility. Placeholder COT market names or CFTC codes block validation. The CTA artifact must have been created after the confirmed mapping was staged, because the current mapping identity must match the artifact mapping snapshot.
+
+Do not use a legacy baseline artifact for COT validation. Legacy baselines can remain valid CTA trend artifacts, but COT validation requires a fresh CTA run with confirmed mapping metadata.

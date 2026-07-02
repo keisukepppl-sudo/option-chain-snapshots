@@ -25,6 +25,28 @@ REDUCE_LABEL = "reduce_risk"
 UNCHANGED_LABEL = "unchanged"
 UNAVAILABLE_LABEL = "input_unavailable"
 ALLOWED_PRICE_TO_COT_RELATIONS = {"direct_futures_match", "cash_index_proxy_for_futures_cot", "etf_proxy_for_futures_cot"}
+PLACEHOLDER_COT_IDENTIFIERS = {
+    "",
+    "blank",
+    "empty",
+    "none",
+    "null",
+    "nan",
+    "na",
+    "n/a",
+    "not_known",
+    "not_available",
+    "not_applicable",
+    "pending",
+    "pending_manual_cot_identification",
+    "placeholder",
+    "manual_identification_required",
+    "tbd",
+    "to_be_determined",
+    "unknown",
+    "unresolved",
+}
+PLACEHOLDER_COT_PREFIXES = ("pending_", "unknown_", "tbd_", "placeholder_", "unresolved_")
 FORBIDDEN_STRICT_STATUSES = {
     "gold_point_in_time_eligible",
     "silver_documented_schedule_eligible",
@@ -136,6 +158,53 @@ def sign(value: float) -> float:
     if value < 0:
         return -1.0
     return 0.0
+
+
+def normalize_identifier(value: Any) -> str:
+    if value is None:
+        return ""
+    text = " ".join(str(value).strip().casefold().split())
+    return text
+
+
+def is_placeholder_cot_identifier(value: object) -> bool:
+    normalized = normalize_identifier(value)
+    underscore = normalized.replace(" ", "_")
+    return underscore in PLACEHOLDER_COT_IDENTIFIERS or any(underscore.startswith(prefix) for prefix in PLACEHOLDER_COT_PREFIXES)
+
+
+def mapping_identity_payload(mapping_row: pd.Series | dict[str, Any]) -> dict[str, str]:
+    get = mapping_row.get
+    return {
+        "market_id": str(get("market_id", "")),
+        "price_instrument": str(get("price_instrument", "")),
+        "cot_market_name": str(get("cot_market_name", "")),
+        "cftc_market_code": str(get("cftc_market_code", "")),
+        "price_to_cot_relation": str(get("price_to_cot_relation", "")),
+    }
+
+
+def mapping_identity_hash(mapping_row: pd.Series | dict[str, Any]) -> str:
+    return bytes_sha256(json_dumps(mapping_identity_payload(mapping_row)).encode("utf-8"))
+
+
+def evaluate_cot_mapping_eligibility(mapping_row: pd.Series | dict[str, Any]) -> dict[str, Any]:
+    payload = mapping_identity_payload(mapping_row)
+    blocking_codes: list[str] = []
+    if is_placeholder_cot_identifier(payload["cot_market_name"]):
+        blocking_codes.append("cot_market_name_placeholder")
+    if is_placeholder_cot_identifier(payload["cftc_market_code"]):
+        blocking_codes.append("cftc_market_code_placeholder")
+    if payload["price_to_cot_relation"] not in ALLOWED_PRICE_TO_COT_RELATIONS:
+        blocking_codes.append("invalid_price_to_cot_relation")
+    status = "cot_validation_mapping_eligible" if not blocking_codes else "cot_mapping_unresolved"
+    return {
+        **payload,
+        "cot_mapping_status": status,
+        "cot_validation_eligible": not blocking_codes,
+        "blocking_codes": blocking_codes,
+        "mapping_identity_hash": mapping_identity_hash(mapping_row),
+    }
 
 
 def cta_root(root: Path) -> Path:
@@ -335,7 +404,18 @@ def inspect_input_contract(root: Path, input_id: str) -> dict[str, Any]:
 def inspect_cot_validation_input(root: Path, input_id: str) -> dict[str, Any]:
     path = input_dir(root, input_id) / "sources" / "cot_weekly.csv"
     status = csv_status(path, COT_COLUMNS)
+    mapping_path = input_dir(root, input_id) / "sources" / "market_mapping.csv"
+    mapping_rows: list[dict[str, Any]] = []
+    if mapping_path.exists():
+        try:
+            mapping_df = pd.read_csv(mapping_path)
+            if set(MAPPING_COLUMNS) <= set(mapping_df.columns):
+                for _, mapping_row in mapping_df.iterrows():
+                    mapping_rows.append(evaluate_cot_mapping_eligibility(mapping_row))
+        except Exception:
+            mapping_rows = []
     rows = []
+    cot_summary: list[dict[str, Any]] = []
     if status["present"] and status["read_status"] == "readable":
         df = pd.read_csv(path)
         for _, row in df.iterrows():
@@ -352,6 +432,28 @@ def inspect_cot_validation_input(root: Path, input_id: str) -> dict[str, Any]:
                     "cot_is_not_cta_ground_truth": True,
                 }
             )
+        for mapping in mapping_rows:
+            if df.empty:
+                cot_summary.append({**mapping, "cot_source_status": "absent_or_header_only", "cot_rows_total": 0, "cot_rows_market_name_match": 0, "cot_rows_cftc_code_match": 0, "cot_rows_full_mapping_match": 0, "cot_rows_mismatch_count": 0, "reporting_groups_observed": []})
+                continue
+            selected = df[df["market_id"].astype(str).eq(str(mapping["market_id"]))].copy()
+            market_match = selected["market_name"].map(normalize_identifier).eq(normalize_identifier(mapping["cot_market_name"])) if "market_name" in selected else pd.Series(dtype=bool)
+            code_match = selected["cftc_market_code"].map(normalize_identifier).eq(normalize_identifier(mapping["cftc_market_code"])) if "cftc_market_code" in selected else pd.Series(dtype=bool)
+            full_match = market_match & code_match
+            cot_summary.append(
+                {
+                    **mapping,
+                    "cot_source_status": "present",
+                    "cot_rows_total": int(len(selected)),
+                    "cot_rows_market_name_match": int(market_match.sum()) if len(selected) else 0,
+                    "cot_rows_cftc_code_match": int(code_match.sum()) if len(selected) else 0,
+                    "cot_rows_full_mapping_match": int(full_match.sum()) if len(selected) else 0,
+                    "cot_rows_mismatch_count": int(len(selected) - full_match.sum()) if len(selected) else 0,
+                    "reporting_groups_observed": sorted(selected["reporting_group"].dropna().astype(str).unique().tolist()) if "reporting_group" in selected else [],
+                }
+            )
+    elif mapping_rows:
+        cot_summary = [{**mapping, "cot_source_status": "absent_or_header_only", "cot_rows_total": 0, "cot_rows_market_name_match": 0, "cot_rows_cftc_code_match": 0, "cot_rows_full_mapping_match": 0, "cot_rows_mismatch_count": 0, "reporting_groups_observed": []} for mapping in mapping_rows]
     return {
         "artifact_version": ARTIFACT_VERSION,
         "module_name": MODULE_NAME,
@@ -361,6 +463,8 @@ def inspect_cot_validation_input(root: Path, input_id: str) -> dict[str, Any]:
         "ex_post_external_validation_only": True,
         **safety_flags(),
         "file": status,
+        "mapping_rows": mapping_rows,
+        "cot_mapping_summary": cot_summary,
         "rows": rows,
     }
 
@@ -706,6 +810,7 @@ def run_historical(root: Path, input_id: str, market_id: str, model_spec_id: str
     if str(spec.get("parameter_selection_status")) != "predeclared_not_fitted":
         raise SystemExit("cta_model_spec_must_be_predeclared")
     prices, map_row, schedule = selected_market_frames(root, input_id, market_id)
+    mapping_eligibility = evaluate_cot_mapping_eligibility(map_row)
     run_id = f"{utc_now_compact()}_{bytes_sha256((input_id + market_id + model_spec_id + str(uuid.uuid4())).encode())[:12]}"
     out = historical_run_dir(root, run_id)
     if out.exists():
@@ -716,7 +821,15 @@ def run_historical(root: Path, input_id: str, market_id: str, model_spec_id: str
     timing = daily[["market_id", "observation_date", "decision_timestamp_utc", "effective_session", "feature_cutoff_date", "decision_timing_status"]].copy()
     write_json(out / "cta_input_validation_report.json", validation)
     write_json(out / "cta_model_spec_snapshot.json", {"registry": registry, "registry_content_sha256": registry_hash, "selected_model_spec": spec, "selected_model_spec_content_sha256": model_spec_hash(spec)})
-    write_json(out / "cta_market_mapping_snapshot.json", {"market_id": market_id, "mapping": map_row.to_dict(), "price_to_cot_relation": map_row["price_to_cot_relation"]})
+    write_json(
+        out / "cta_market_mapping_snapshot.json",
+        {
+            "market_id": market_id,
+            "mapping": map_row.to_dict(),
+            "price_to_cot_relation": map_row["price_to_cot_relation"],
+            **mapping_eligibility,
+        },
+    )
     write_csv(out / "cta_decision_timing_audit.csv", timing.to_dict("records"))
     write_csv(out / "cta_daily_exposure.csv", daily.to_dict("records"))
     (out / "cta_summary.md").write_text(cta_summary_md(run_id, input_id, market_id, model_spec_id, daily), encoding="utf-8")
@@ -734,6 +847,10 @@ def run_historical(root: Path, input_id: str, market_id: str, model_spec_id: str
         "backtest_run": False,
         "phase1_3_readiness_run": False,
         "phase2_run": False,
+        "cot_mapping_status": mapping_eligibility["cot_mapping_status"],
+        "cot_validation_eligible": mapping_eligibility["cot_validation_eligible"],
+        "cot_mapping_blocking_codes": mapping_eligibility["blocking_codes"],
+        "mapping_identity_hash": mapping_eligibility["mapping_identity_hash"],
         **safety_flags(),
     }
     write_json(out / "cta_run_receipt.json", receipt)
@@ -768,6 +885,17 @@ def verify_cta_run(run_artifact: str) -> dict[str, Any]:
         if receipt.get(field) is not False:
             result["verification_status"] = "tampered"
             result.setdefault("failures", []).append({"relative_path": "cta_run_receipt.json", "reason": f"{field}_must_be_false"})
+    if (path / "cta_market_mapping_snapshot.json").exists():
+        snapshot = load_json(path / "cta_market_mapping_snapshot.json")
+        if "mapping_identity_hash" in snapshot:
+            expected = mapping_identity_hash(snapshot.get("mapping", snapshot))
+            if snapshot.get("mapping_identity_hash") != expected:
+                result["verification_status"] = "tampered"
+                result.setdefault("failures", []).append({"relative_path": "cta_market_mapping_snapshot.json", "reason": "mapping_identity_hash_mismatch"})
+            for field in ["cot_mapping_status", "cot_validation_eligible", "mapping_identity_hash"]:
+                if field not in receipt:
+                    result["verification_status"] = "tampered"
+                    result.setdefault("failures", []).append({"relative_path": "cta_run_receipt.json", "reason": f"{field}_missing"})
     return result
 
 
@@ -922,6 +1050,62 @@ def validation_summary_rows(pairs: pd.DataFrame, minimum_pairs: int, window: int
     return rows
 
 
+def assert_cta_cot_mapping_preflight(root: Path, input_id: str, market_id: str, cot_reporting_group: str, cta_artifact: Path) -> tuple[pd.Series, dict[str, Any], pd.DataFrame, dict[str, Any]]:
+    _, map_row, _ = selected_market_frames(root, input_id, market_id)
+    current = evaluate_cot_mapping_eligibility(map_row)
+    if not current["cot_validation_eligible"]:
+        raise SystemExit("cta_cot_mapping_placeholder_blocked")
+
+    snapshot_path = cta_artifact / "cta_market_mapping_snapshot.json"
+    receipt_path = cta_artifact / "cta_run_receipt.json"
+    if not snapshot_path.exists() or not receipt_path.exists():
+        raise SystemExit("cta_run_mapping_snapshot_mismatch")
+    snapshot = load_json(snapshot_path)
+    receipt = load_json(receipt_path)
+    legacy_required = ["cot_validation_eligible", "mapping_identity_hash", "cot_mapping_status"]
+    if any(field not in snapshot for field in legacy_required) or any(field not in receipt for field in legacy_required):
+        raise SystemExit("cta_run_mapping_snapshot_mismatch")
+    if str(receipt.get("market_id")) != market_id or str(snapshot.get("market_id")) != market_id:
+        raise SystemExit("cta_run_mapping_snapshot_mismatch")
+    if snapshot.get("cot_validation_eligible") is not True or receipt.get("cot_validation_eligible") is not True:
+        raise SystemExit("cta_run_mapping_snapshot_mismatch")
+    if snapshot.get("mapping_identity_hash") != current["mapping_identity_hash"] or receipt.get("mapping_identity_hash") != current["mapping_identity_hash"]:
+        raise SystemExit("cta_run_mapping_snapshot_mismatch")
+    snap_payload = mapping_identity_payload(snapshot.get("mapping", snapshot))
+    for key in ["market_id", "price_instrument", "cot_market_name", "cftc_market_code", "price_to_cot_relation"]:
+        if normalize_identifier(snap_payload.get(key)) != normalize_identifier(current.get(key)):
+            raise SystemExit("cta_run_mapping_snapshot_mismatch")
+
+    manifest = load_source_manifest(root, input_id)
+    cot_source = source_by_dataset(manifest_sources(manifest), "cot_weekly")
+    if cot_source is None:
+        raise SystemExit("missing_cot_weekly")
+    cot = read_source_csv(root, input_id, cot_source)
+    selected = cot[cot["market_id"].astype(str).eq(market_id) & cot["reporting_group"].astype(str).eq(cot_reporting_group)].copy()
+    if selected.empty:
+        raise SystemExit("cot_reporting_group_not_found_for_confirmed_mapping")
+    market_match = selected["market_name"].map(normalize_identifier).eq(normalize_identifier(current["cot_market_name"]))
+    code_match = selected["cftc_market_code"].map(normalize_identifier).eq(normalize_identifier(current["cftc_market_code"]))
+    full_match = market_match & code_match
+    if not bool(full_match.all()):
+        raise SystemExit("cot_row_market_mapping_mismatch")
+    eligibility_snapshot = {
+        "current_mapping_identity_hash": current["mapping_identity_hash"],
+        "cta_run_mapping_identity_hash": snapshot["mapping_identity_hash"],
+        "mapping_snapshot_match": True,
+        "cot_row_mapping_match_required": True,
+        "cot_rows_checked": int(len(selected)),
+        "cot_rows_full_mapping_match": int(full_match.sum()),
+        "cot_validation_eligible": True,
+        "cot_mapping_status": current["cot_mapping_status"],
+        "price_to_cot_relation": current["price_to_cot_relation"],
+        "ex_post_external_validation_only": True,
+        "cot_is_not_cta_ground_truth": True,
+        "cot_is_not_parameter_tuning_target": True,
+    }
+    return map_row, current, cot, eligibility_snapshot
+
+
 def run_cot_validation(root: Path, cta_run_artifact: str, input_id: str, market_id: str, cot_reporting_group: str) -> dict[str, Any]:
     validation = validate_input(root, input_id, require_cot=True)
     if validation["validation_status"] != "valid":
@@ -930,13 +1114,8 @@ def run_cot_validation(root: Path, cta_run_artifact: str, input_id: str, market_
     cta_verify = verify_cta_run(str(cta_artifact))
     if cta_verify["verification_status"] != "valid":
         raise SystemExit("cta_run_artifact_invalid")
+    map_row, current_mapping, cot, eligibility_snapshot = assert_cta_cot_mapping_preflight(root, input_id, market_id, cot_reporting_group, cta_artifact)
     daily = pd.read_csv(cta_artifact / "cta_daily_exposure.csv")
-    manifest = load_source_manifest(root, input_id)
-    cot_source = source_by_dataset(manifest_sources(manifest), "cot_weekly")
-    if cot_source is None:
-        raise SystemExit("missing_cot_weekly")
-    cot = read_source_csv(root, input_id, cot_source)
-    _, map_row, _ = selected_market_frames(root, input_id, market_id)
     asof = cot_pairs_for_mode(daily, cot, map_row, cot_reporting_group, "as_of_ex_post_only")
     avail = cot_pairs_for_mode(daily, cot, map_row, cot_reporting_group, "availability_monitoring_only")
     pairs = pd.concat([asof, avail], ignore_index=True) if not asof.empty or not avail.empty else pd.DataFrame()
@@ -950,6 +1129,7 @@ def run_cot_validation(root: Path, cta_run_artifact: str, input_id: str, market_
     out.mkdir(parents=True, exist_ok=False)
     write_json(out / "cta_cot_input_validation_report.json", validation)
     write_json(out / "cta_cot_model_run_reference.json", {"cta_run_artifact": str(cta_artifact), "cta_run_verification": cta_verify})
+    write_json(out / "cta_cot_mapping_eligibility_snapshot.json", eligibility_snapshot)
     write_csv(out / "cta_cot_weekly_pairs.csv", pairs.to_dict("records") if not pairs.empty else [], list(pairs.columns) if not pairs.empty else [])
     summary = validation_summary_rows(pairs, minimum, window)
     write_csv(out / "cta_cot_validation_summary.csv", summary)
@@ -966,6 +1146,11 @@ def run_cot_validation(root: Path, cta_run_artifact: str, input_id: str, market_
         "cot_reporting_group": cot_reporting_group,
         "model_spec_registry_hash": registry_hash,
         "minimum_weekly_pairs_for_summary": minimum,
+        "mapping_identity_hash": current_mapping["mapping_identity_hash"],
+        "cot_mapping_status": current_mapping["cot_mapping_status"],
+        "cot_validation_eligible": True,
+        "mapping_snapshot_match": True,
+        "cot_row_mapping_match_required": True,
         "release_created": False,
         "backtest_run": False,
         "phase1_3_readiness_run": False,
@@ -1003,10 +1188,24 @@ def verify_cot_validation(validation_artifact: str) -> dict[str, Any]:
     path = Path(validation_artifact).resolve()
     result = verify_manifested_dir(path, "cta_cot_validation_content_manifest.json")
     receipt = load_json(path / "cta_cot_validation_receipt.json")
+    snapshot_path = path / "cta_cot_mapping_eligibility_snapshot.json"
+    if not snapshot_path.exists():
+        result["verification_status"] = "tampered"
+        result.setdefault("failures", []).append({"relative_path": "cta_cot_mapping_eligibility_snapshot.json", "reason": "missing"})
+    else:
+        snapshot = load_json(snapshot_path)
+        for field in ["mapping_snapshot_match", "cot_row_mapping_match_required", "cot_validation_eligible"]:
+            if snapshot.get(field) is not True:
+                result["verification_status"] = "tampered"
+                result.setdefault("failures", []).append({"relative_path": "cta_cot_mapping_eligibility_snapshot.json", "reason": f"{field}_must_be_true"})
     for field in ["actionization_allowed", "predictive_pit_eligible", "phase2_eligible", "phase1_3_readiness_run", "phase2_run", "release_created", "backtest_run"]:
         if receipt.get(field) is not False:
             result["verification_status"] = "tampered"
             result.setdefault("failures", []).append({"relative_path": "cta_cot_validation_receipt.json", "reason": f"{field}_must_be_false"})
+    for field in ["mapping_snapshot_match", "cot_row_mapping_match_required", "cot_validation_eligible"]:
+        if receipt.get(field) is not True:
+            result["verification_status"] = "tampered"
+            result.setdefault("failures", []).append({"relative_path": "cta_cot_validation_receipt.json", "reason": f"{field}_must_be_true"})
     return result
 
 

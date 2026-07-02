@@ -67,3 +67,8 @@ Every market mapping must explicitly state one of:
 
 Proxy labels remain visible in outputs. A proxy price is never represented as a direct futures price.
 
+## COT Eligibility Boundary
+
+CTA baseline generation and COT-validation eligibility are separate. A market can produce valid no-COT CTA trend-state baselines while its COT mapping remains unresolved.
+
+Unresolved or placeholder COT identifiers make `cot_validation_eligible=false`. They do not invalidate the CTA trend artifact, but they prevent COT validation. Once a confirmed mapping is manually staged, new CTA artifacts must be created so the mapping identity is bound into the artifact snapshot.
