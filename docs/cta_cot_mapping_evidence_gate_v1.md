@@ -70,3 +70,19 @@ COT validation must not rely on `market_id` alone. Every selected COT row must m
 ## Non-Claims
 
 This gate does not acquire COT data, perform CFTC lookup, calculate correlations, select models, tune parameters, create market-impact evidence, or authorize trading.
+
+## Read-Only Intake Gate
+
+`validate-cta-cot-intake` validates a staged canonical COT input before CTA artifacts are created. It is intentionally separate from `run-cta-cot-weekly-external-validation`.
+
+The intake gate requires:
+
+- manifest hash validity;
+- confirmed non-placeholder mapping;
+- selected COT rows matching mapped market name and CFTC code;
+- exact requested reporting group;
+- unique `market_id + position_as_of_date + reporting_group` keys;
+- valid timestamps with `available_timestamp_utc >= publication_timestamp_utc`;
+- positive open interest.
+
+It does not read historical CTA artifacts and does not compute COT comparison statistics.

@@ -632,6 +632,116 @@ def validate_cot(df: pd.DataFrame) -> list[dict[str, Any]]:
     return diagnostics
 
 
+def validate_cta_cot_intake(root: Path, input_id: str, market_id: str, cot_reporting_group: str) -> dict[str, Any]:
+    diagnostics: list[dict[str, Any]] = []
+    base = validate_input(root, input_id, raise_on_missing=False, require_cot=True)
+    diagnostics.extend(base.get("diagnostics", []))
+    coverage: dict[str, Any] = {
+        "cot_source_row_count": 0,
+        "selected_cot_row_count": 0,
+        "cot_coverage_start": "",
+        "cot_coverage_end": "",
+        "missing_calendar_week_count": None,
+        "missing_calendar_weeks": [],
+    }
+    mapping_eligibility: dict[str, Any] | None = None
+
+    try:
+        manifest = load_source_manifest(root, input_id)
+        sources = manifest_sources(manifest)
+        mapping_source = source_by_dataset(sources, "market_mapping")
+        cot_source = source_by_dataset(sources, "cot_weekly")
+        if mapping_source is None:
+            diagnostics.append({"status": "blocked", "code": "missing_required_dataset", "dataset_type": "market_mapping"})
+            mapping = pd.DataFrame(columns=MAPPING_COLUMNS)
+        else:
+            mapping = read_source_csv(root, input_id, mapping_source)
+        if cot_source is None:
+            diagnostics.append({"status": "blocked", "code": "missing_required_dataset", "dataset_type": "cot_weekly"})
+            cot = pd.DataFrame(columns=COT_COLUMNS)
+        else:
+            cot = read_source_csv(root, input_id, cot_source)
+    except SystemExit as exc:
+        diagnostics.append({"status": "blocked", "code": str(exc)})
+        mapping = pd.DataFrame(columns=MAPPING_COLUMNS)
+        cot = pd.DataFrame(columns=COT_COLUMNS)
+
+    if set(MAPPING_COLUMNS) <= set(mapping.columns):
+        mapping_rows = mapping[mapping["market_id"].astype(str).eq(market_id)]
+        if len(mapping_rows) != 1:
+            diagnostics.append({"status": "blocked", "code": "missing_or_duplicate_market_mapping", "market_id": market_id})
+        else:
+            map_row = mapping_rows.iloc[0]
+            mapping_eligibility = evaluate_cot_mapping_eligibility(map_row)
+            if not mapping_eligibility["cot_validation_eligible"]:
+                diagnostics.append({"status": "blocked", "code": "cot_mapping_placeholder_blocked", "blocking_codes": ",".join(mapping_eligibility["blocking_codes"])})
+    else:
+        diagnostics.append({"status": "blocked", "code": "market_mapping_missing_columns"})
+
+    if not (set(COT_COLUMNS) <= set(cot.columns)):
+        diagnostics.append({"status": "blocked", "code": "cot_weekly_missing_columns"})
+    elif cot.empty:
+        diagnostics.append({"status": "blocked", "code": "cot_weekly_header_only"})
+    else:
+        coverage["cot_source_row_count"] = int(len(cot))
+        selected_market = cot[cot["market_id"].astype(str).eq(market_id)].copy()
+        selected = selected_market[selected_market["reporting_group"].astype(str).eq(cot_reporting_group)].copy()
+        if selected.empty:
+            diagnostics.append({"status": "blocked", "code": "cot_reporting_group_not_found_for_confirmed_mapping", "market_id": market_id, "cot_reporting_group": cot_reporting_group})
+        else:
+            coverage["selected_cot_row_count"] = int(len(selected))
+            if selected.duplicated(["market_id", "position_as_of_date", "reporting_group"]).any():
+                diagnostics.append({"status": "blocked", "code": "duplicate_cot_weekly_key"})
+            if mapping_eligibility is not None:
+                market_match = selected["market_name"].map(normalize_identifier).eq(normalize_identifier(mapping_eligibility["cot_market_name"]))
+                code_match = selected["cftc_market_code"].map(normalize_identifier).eq(normalize_identifier(mapping_eligibility["cftc_market_code"]))
+                if not bool((market_match & code_match).all()):
+                    diagnostics.append({"status": "blocked", "code": "cot_row_market_mapping_mismatch"})
+            pos = pd.to_datetime(selected["position_as_of_date"], errors="coerce")
+            if pos.isna().any():
+                diagnostics.append({"status": "blocked", "code": "cot_timing_fields_invalid"})
+            else:
+                dates = sorted(pos.dt.strftime("%Y-%m-%d").tolist())
+                coverage["cot_coverage_start"] = dates[0]
+                coverage["cot_coverage_end"] = dates[-1]
+                observed_weeks = {(int(row.year), int(row.week)) for row in pos.dt.isocalendar().itertuples(index=False)}
+                expected_weeks = {
+                    (int(row.year), int(row.week))
+                    for row in pd.date_range(pd.Timestamp(dates[0]), pd.Timestamp(dates[-1]), freq="W-TUE").to_series().dt.isocalendar().itertuples(index=False)
+                }
+                missing = [f"{year}-W{week:02d}" for year, week in sorted(expected_weeks - observed_weeks)]
+                coverage["missing_calendar_week_count"] = int(len(missing))
+                coverage["missing_calendar_weeks"] = missing[:20]
+            pub = pd.to_datetime(selected["publication_timestamp_utc"], utc=True, errors="coerce")
+            avail = pd.to_datetime(selected["available_timestamp_utc"], utc=True, errors="coerce")
+            if pub.isna().any() or avail.isna().any():
+                diagnostics.append({"status": "blocked", "code": "cot_timing_fields_invalid"})
+            elif (avail < pub).any():
+                diagnostics.append({"status": "blocked", "code": "cot_available_before_publication"})
+            numeric_cols = ["long_contracts", "short_contracts", "spreading_contracts", "open_interest_contracts"]
+            numeric = selected[numeric_cols].apply(pd.to_numeric, errors="coerce")
+            if numeric.isna().any().any() or numeric["open_interest_contracts"].le(0).any():
+                diagnostics.append({"status": "blocked", "code": "cot_numeric_fields_invalid"})
+
+    return {
+        "artifact_version": ARTIFACT_VERSION,
+        "module_name": MODULE_NAME,
+        "input_id": input_id,
+        "market_id": market_id,
+        "cot_reporting_group": cot_reporting_group,
+        "cot_intake_validation_status": "blocked" if diagnostics else "valid",
+        "diagnostics": diagnostics,
+        "mapping_eligibility": mapping_eligibility,
+        "coverage": coverage,
+        "creates_run_artifact": False,
+        "reads_cta_historical_artifact": False,
+        "calculates_correlation": False,
+        "calculates_sign_agreement": False,
+        "calculates_lag": False,
+        **safety_flags(),
+    }
+
+
 def load_model_specs(root: Path) -> tuple[dict[str, Any], str]:
     path = config_path(root)
     if not path.exists():
@@ -1229,6 +1339,10 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--input-id", required=True)
     p = sub.add_parser("inspect-cta-cot-validation-input")
     p.add_argument("--input-id", required=True)
+    p = sub.add_parser("validate-cta-cot-intake")
+    p.add_argument("--input-id", required=True)
+    p.add_argument("--market-id", required=True)
+    p.add_argument("--cot-reporting-group", required=True)
     p = sub.add_parser("run-cta-cot-weekly-external-validation")
     p.add_argument("--cta-run-artifact", required=True)
     p.add_argument("--input-id", required=True)
@@ -1256,6 +1370,8 @@ def main(argv: list[str] | None = None) -> int:
         result = build_cot_validation_template(root, args.input_id)
     elif args.command == "inspect-cta-cot-validation-input":
         result = inspect_cot_validation_input(root, args.input_id)
+    elif args.command == "validate-cta-cot-intake":
+        result = validate_cta_cot_intake(root, args.input_id, args.market_id, args.cot_reporting_group)
     elif args.command == "run-cta-cot-weekly-external-validation":
         result = run_cot_validation(root, args.cta_run_artifact, args.input_id, args.market_id, args.cot_reporting_group)
     elif args.command == "verify-cta-cot-validation":

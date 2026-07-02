@@ -428,6 +428,96 @@ def test_absent_requested_reporting_group_blocks(tmp_path: Path) -> None:
         cta.run_cot_validation(tmp_path, str(result["run_artifact"]), "fixture_cta", "NQ", "leveraged_funds")
 
 
+def test_cot_intake_valid_synthetic_confirmed_mapping(tmp_path: Path) -> None:
+    _stage(tmp_path, cot_rows=_cot_rows(6))
+    result = cta.validate_cta_cot_intake(tmp_path, "fixture_cta", "NQ", "leveraged_funds")
+    assert result["cot_intake_validation_status"] == "valid"
+    assert result["mapping_eligibility"]["cot_mapping_status"] == "cot_validation_mapping_eligible"
+    assert result["coverage"]["selected_cot_row_count"] == 6
+    assert result["creates_run_artifact"] is False
+    assert result["reads_cta_historical_artifact"] is False
+    assert result["calculates_correlation"] is False
+    assert result["calculates_sign_agreement"] is False
+    assert result["calculates_lag"] is False
+    assert result["actionization_allowed"] is False
+
+
+def test_cot_intake_placeholder_mapping_blocks(tmp_path: Path) -> None:
+    _stage(tmp_path, mapping=_pending_mapping(), cot_rows=_cot_rows(4))
+    result = cta.validate_cta_cot_intake(tmp_path, "fixture_cta", "NQ", "leveraged_funds")
+    codes = {d["code"] for d in result["diagnostics"]}
+    assert result["cot_intake_validation_status"] == "blocked"
+    assert "cot_mapping_placeholder_blocked" in codes
+
+
+def test_cot_intake_absent_manifest_entry_blocks(tmp_path: Path) -> None:
+    _stage(tmp_path)
+    result = cta.validate_cta_cot_intake(tmp_path, "fixture_cta", "NQ", "leveraged_funds")
+    codes = {d["code"] for d in result["diagnostics"]}
+    assert "missing_required_dataset" in codes
+
+
+def test_cot_intake_missing_required_cot_columns_blocks(tmp_path: Path) -> None:
+    base = _stage(tmp_path, cot_rows=_cot_rows(4))
+    cot_path = base / "sources" / "cot_weekly.csv"
+    df = pd.read_csv(cot_path).drop(columns=["market_name"])
+    df.to_csv(cot_path, index=False)
+    _rewrite_manifest_hash(base, "cot_weekly", "sources/cot_weekly.csv")
+    result = cta.validate_cta_cot_intake(tmp_path, "fixture_cta", "NQ", "leveraged_funds")
+    codes = {d["code"] for d in result["diagnostics"]}
+    assert "cot_weekly_missing_columns" in codes
+
+
+def test_cot_intake_wrong_market_name_code_and_mixed_rows_block(tmp_path: Path) -> None:
+    rows = _cot_rows(4)
+    rows[0]["market_name"] = "DIFFERENT"
+    _stage(tmp_path, cot_rows=rows)
+    result = cta.validate_cta_cot_intake(tmp_path, "fixture_cta", "NQ", "leveraged_funds")
+    assert "cot_row_market_mapping_mismatch" in {d["code"] for d in result["diagnostics"]}
+
+    rows = _cot_rows(4)
+    rows[0]["cftc_market_code"] = "DIFFERENT"
+    _stage(tmp_path / "code", cot_rows=rows)
+    result = cta.validate_cta_cot_intake(tmp_path / "code", "fixture_cta", "NQ", "leveraged_funds")
+    assert "cot_row_market_mapping_mismatch" in {d["code"] for d in result["diagnostics"]}
+
+
+def test_cot_intake_wrong_reporting_group_blocks(tmp_path: Path) -> None:
+    _stage(tmp_path, cot_rows=_cot_rows(4, group="asset_manager"))
+    result = cta.validate_cta_cot_intake(tmp_path, "fixture_cta", "NQ", "leveraged_funds")
+    assert "cot_reporting_group_not_found_for_confirmed_mapping" in {d["code"] for d in result["diagnostics"]}
+
+
+def test_cot_intake_duplicate_weekly_key_blocks(tmp_path: Path) -> None:
+    rows = _cot_rows(4)
+    rows.append(dict(rows[-1]))
+    _stage(tmp_path, cot_rows=rows)
+    result = cta.validate_cta_cot_intake(tmp_path, "fixture_cta", "NQ", "leveraged_funds")
+    assert "duplicate_cot_weekly_key" in {d["code"] for d in result["diagnostics"]}
+
+
+def test_cot_intake_invalid_open_interest_and_availability_blocks(tmp_path: Path) -> None:
+    rows = _cot_rows(4)
+    rows[0]["open_interest_contracts"] = 0
+    rows[1]["available_timestamp_utc"] = "2025-04-04T19:30:00Z"
+    _stage(tmp_path, cot_rows=rows)
+    result = cta.validate_cta_cot_intake(tmp_path, "fixture_cta", "NQ", "leveraged_funds")
+    codes = {d["code"] for d in result["diagnostics"]}
+    assert {"cot_numeric_fields_invalid", "cot_available_before_publication"} <= codes
+
+
+def test_cot_intake_header_only_blocks_and_creates_no_artifact(tmp_path: Path) -> None:
+    _stage(tmp_path, cot_rows=[])
+    before_runs = set((tmp_path / "market_bomb_history" / "cta_research_v1").glob("historical_runs/*"))
+    before_validations = set((tmp_path / "market_bomb_history" / "cta_research_v1").glob("cot_validation_runs/*"))
+    result = cta.validate_cta_cot_intake(tmp_path, "fixture_cta", "NQ", "leveraged_funds")
+    after_runs = set((tmp_path / "market_bomb_history" / "cta_research_v1").glob("historical_runs/*"))
+    after_validations = set((tmp_path / "market_bomb_history" / "cta_research_v1").glob("cot_validation_runs/*"))
+    assert "cot_weekly_header_only" in {d["code"] for d in result["diagnostics"]}
+    assert before_runs == after_runs
+    assert before_validations == after_validations
+
+
 def test_unavailable_cot_rows_do_not_enter_availability_validation(tmp_path: Path) -> None:
     cot_rows = _cot_rows(4)
     cot_rows[1]["available_timestamp_utc"] = "2030-01-01T20:31:00Z"

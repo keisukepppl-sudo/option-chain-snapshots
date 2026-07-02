@@ -48,3 +48,16 @@ COT validation cannot run until the selected mapping has manually evidenced, non
 The current mapping must match the CTA run artifact mapping snapshot exactly, including the mapping identity hash. Legacy CTA artifacts without the mapping-eligibility snapshot remain valid CTA baselines, but they must be rerun after confirmed mapping is staged before COT validation can proceed.
 
 COT rows must match the mapped market name and CFTC code. `market_id` alone is not sufficient. Proxy relations remain visible in validation outputs.
+
+## Intake Validation
+
+Use `validate-cta-cot-intake` before creating any CTA run artifact for a newly staged COT source:
+
+```powershell
+python market_bomb_cta_research_v1.py validate-cta-cot-intake `
+  --input-id <input_id> `
+  --market-id <market_id> `
+  --cot-reporting-group <reporting_group>
+```
+
+This command is read-only. It creates no CTA artifact, reads no CTA artifact, computes no correlation, computes no sign agreement, computes no lag, and performs no model selection. It checks manifest hashes, mapping eligibility, exact COT row mapping identity, requested reporting group, unique weekly keys, positive open interest, and publication/availability timestamp ordering.
