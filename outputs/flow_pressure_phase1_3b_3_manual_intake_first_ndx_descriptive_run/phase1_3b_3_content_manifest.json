@@ -1,0 +1,35 @@
+{
+  "phase": "flow_pressure_phase1_3b_3_manual_intake_first_ndx_descriptive_run",
+  "start_commit": "e9843629150ff08c8e46d6292fd7f6255966cdcd",
+  "main_outcome": "manual_raw_source_inputs_absent",
+  "forward_collection_outcome": "forward_snapshot_not_started",
+  "input_id_inspected": "manual_free_proxy_intake_20260701_template",
+  "raw_source_files_existed": false,
+  "manual_source_archive_existed": false,
+  "normalization_attempted": false,
+  "validation_attempted": false,
+  "historical_descriptive_run_created": false,
+  "run_artifact": null,
+  "forward_snapshot_created": false,
+  "network_used": false,
+  "raw_data_committed": false,
+  "strict_phase1_3_run": false,
+  "phase2_run": false,
+  "release_run": false,
+  "backtest_run": false,
+  "notification_run": false,
+  "trading_ranking_sizing_execution_actionization": false,
+  "cta_scope": "out_of_scope",
+  "dealer_scope": "out_of_scope",
+  "actionization_allowed": false,
+  "validation": {
+    "code_changed": false,
+    "focused_free_proxy_tests": "41 passed"
+  },
+  "outputs": [
+    "outputs/flow_pressure_phase1_3b_3_manual_intake_first_ndx_descriptive_run/local_source_inventory.csv",
+    "outputs/flow_pressure_phase1_3b_3_manual_intake_first_ndx_descriptive_run/phase1_3b_3_report.md",
+    "outputs/flow_pressure_phase1_3b_3_manual_intake_first_ndx_descriptive_run/phase1_3b_3_chatgpt_bundle.md",
+    "outputs/flow_pressure_phase1_3b_3_manual_intake_first_ndx_descriptive_run/phase1_3b_3_content_manifest.json"
+  ]
+}

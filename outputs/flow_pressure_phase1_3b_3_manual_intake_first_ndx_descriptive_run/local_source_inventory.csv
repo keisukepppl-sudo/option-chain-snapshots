@@ -1,0 +1,11 @@
+category,path_or_input_id,status,bytes_or_count,notes
+manual_source_archive,market_bomb_history/leveraged_etf_free_proxy_v1/manual_source_archive,absent,0,"No local manual raw source archive exists for Phase 1.3B.3."
+canonical_input,manual_free_proxy_intake_20260701_template,present_template_only,6,"Header-only template created in a prior phase; not a real source package."
+canonical_file,sources/benchmark_prices.csv,header_only,0,"No NDX rows. NDX exact direction is impossible."
+canonical_file,sources/benchmark_mapping.csv,header_only,0,"No TQQQ/SQQQ -> NDX mapping evidence rows."
+canonical_file,sources/aum_or_capital.csv,header_only,0,"No AUM/NAV/shares rows. AUM scale unavailable."
+canonical_file,sources/split_history.csv,header_only,0,"No split rows. Split diagnostics unavailable."
+canonical_file,sources/leveraged_etf_prices.csv,header_only,0,"No TQQQ/SQQQ price rows."
+downloads_candidate,C:/Users/keisu/Downloads/flow_pressure_phase1_3b_3_manual_intake_first_ndx_descriptive_run_codex_instruction.md,instruction_only,16870,"Instruction file only; not a market source."
+downloads_candidate,C:/Users/keisu/Downloads/flow_pressure_phase1_qqq_tqqq_sqqq_readiness_codex_instruction.md,instruction_only,17156,"Older instruction file only; not a market source."
+downloads_candidate,C:/Users/keisu/Downloads/github_actions_daily_flow_engine_v2_aum.zip,not_used,, "Zip exists but is not an explicit Phase 1.3B.3 manual NDX source package and cannot satisfy NDX price or mapping evidence without operator provenance."
