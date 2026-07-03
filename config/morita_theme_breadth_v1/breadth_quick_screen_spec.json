@@ -1,0 +1,37 @@
+{
+  "artifact_version": "morita_theme_breadth_quick_screen_v1",
+  "research_status": "ex_post_descriptive_only",
+  "actionization_allowed": false,
+  "predictive_claim_allowed": false,
+  "live_filter_allowed": false,
+  "score_or_rank_change_allowed": false,
+  "option_analysis_allowed": false,
+  "minimum_valid_member_count": 12,
+  "minimum_complete_signals_per_state": 20,
+  "concentration_guard_largest_ticker_share_max": 0.25,
+  "material_binary_rate_difference_pp": 10.0,
+  "basket_membership_status": "static_research_basket_proxy",
+  "metric_state_policy": {
+    "pct_above_20d_ma": "low_middle_high_by_full_decision_date_p25_p75",
+    "pct_above_50d_ma": "low_middle_high_by_full_decision_date_p25_p75",
+    "pct_at_65d_high": "low_middle_high_by_full_decision_date_p25_p75",
+    "median_return_20d": "low_middle_high_by_full_decision_date_p25_p75",
+    "cross_sectional_dispersion_20d": "low_middle_high_dispersion_by_full_decision_date_p25_p75"
+  },
+  "binary_denominator_policy": "outcome_status_equals_complete_only",
+  "primary_scopes": [
+    "semiconductor_signals",
+    "ai_infrastructure_signals"
+  ],
+  "secondary_scopes": [
+    "all_signals_semiconductor_core",
+    "all_signals_ai_infrastructure_extended"
+  ],
+  "rank_policy": "S_A_B_separate_all_rank_secondary_only",
+  "labels": [
+    "no_visible_relationship",
+    "inconsistent_relationship",
+    "potentially_material_relationship",
+    "insufficient_sample"
+  ]
+}
