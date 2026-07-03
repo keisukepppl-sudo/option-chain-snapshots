@@ -1,0 +1,44 @@
+{
+  "registry_version": "phase1_5f_cta_vol_interpretation_specs_v1_0_0",
+  "specs": [
+    {
+      "interpretation_spec_id": "phase1_5f_cta_vol_descriptive_atlas_v1",
+      "mode": "historical_descriptive_artifact_review",
+      "research_only": true,
+      "actionization_allowed": false,
+      "not_a_trading_signal": true,
+      "predictive_pit_eligible": false,
+      "phase2_eligible": false,
+      "ranking_allowed": false,
+      "model_selection_allowed": false,
+      "returns_analysis_allowed": false,
+      "cross_module_metrics_computed": false,
+      "cross_module_integration_performed": false,
+      "cta_top_divergence_observation_count": 20,
+      "vol_top_dispersion_observation_count": 20,
+      "analysis_windows": [
+        "full_covered_period",
+        "pre_2025",
+        "from_2025",
+        "calendar_2024",
+        "calendar_2025",
+        "calendar_2023_h2",
+        "calendar_2026_ytd"
+      ],
+      "required_cta_model_specs": [
+        "cta_ts_20d_binary_v1",
+        "cta_ts_60d_binary_v1",
+        "cta_ts_120d_binary_v1",
+        "cta_ts_20_60_120_equal_weight_v1"
+      ],
+      "required_vol_model_specs": [
+        "vc_daily_20d_target10_cap100_v1",
+        "vc_daily_40d_target10_cap100_v1",
+        "vc_daily_60d_target10_cap100_v1",
+        "vc_daily_20d_target12_cap100_v1",
+        "vc_daily_40d_target12_cap100_v1",
+        "vc_daily_60d_target12_cap100_v1"
+      ]
+    }
+  ]
+}
