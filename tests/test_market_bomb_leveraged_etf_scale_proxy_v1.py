@@ -416,7 +416,7 @@ def test_module_has_no_network_provider_code() -> None:
 
 
 def test_history_archive_input_remain_ignored_untracked() -> None:
-    ignored = subprocess.run(["git", "check-ignore", "market_bomb_history/leveraged_etf_scale_proxy_v1"], cwd=REPO_ROOT, text=True, capture_output=True)
+    ignored = subprocess.run(["git", "check-ignore", "market_bomb_history/leveraged_etf_scale_proxy_v1/placeholder.txt"], cwd=REPO_ROOT, text=True, capture_output=True)
     assert ignored.returncode == 0
     tracked = subprocess.check_output(["git", "ls-files", "market_bomb_history"], cwd=REPO_ROOT, text=True)
     assert "leveraged_etf_scale_proxy_v1" not in tracked
