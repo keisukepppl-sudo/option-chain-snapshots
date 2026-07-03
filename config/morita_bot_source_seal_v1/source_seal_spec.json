@@ -1,0 +1,61 @@
+{
+  "spec_id": "morita_bot_source_seal_v1",
+  "artifact_version": "morita_bot_source_seal_v1_0_0",
+  "mode": "source_materialization_and_sealing_only",
+  "allowed_paths": [
+    "existing_run_export",
+    "frozen_deterministic_materialization"
+  ],
+  "required_signal_columns": [
+    "signal_id",
+    "signal_decision_date",
+    "signal_decision_timestamp_utc",
+    "entry_session",
+    "underlying_symbol",
+    "signal_rank",
+    "strategy_family",
+    "theme",
+    "source_rule_version",
+    "source_rule_config_hash",
+    "source_run_id",
+    "source_manifest_hash"
+  ],
+  "required_outcome_columns": [
+    "signal_id",
+    "outcome_status",
+    "breakout_day_low_breach_before_timeout",
+    "timeout_10_sessions_under_threshold",
+    "reached_plus_5pct_within_10_sessions",
+    "holding_sessions_at_exit_or_timeout",
+    "exit_event_category",
+    "outcome_observed_through_session",
+    "outcome_rule_version",
+    "outcome_rule_config_hash"
+  ],
+  "allowed_ranks": [
+    "S",
+    "A",
+    "B"
+  ],
+  "allowed_exit_event_categories": [
+    "profit_target",
+    "hard_stop",
+    "breakout_day_low_breach",
+    "timeout_10_sessions_under_threshold",
+    "other_predeclared_rule",
+    "unavailable"
+  ],
+  "artifact_root": "market_bomb_history/morita_bot_source_seal_v1/source_artifacts",
+  "inventory_root": "market_bomb_history/morita_bot_source_seal_v1/inventory",
+  "research_only": true,
+  "actionization_allowed": false,
+  "not_a_trading_signal": true,
+  "not_a_trade_execution_system": true,
+  "not_a_new_strategy_backtest": true,
+  "not_a_parameter_optimization": true,
+  "not_a_model_selection_study": true,
+  "not_a_predictive_model": true,
+  "predictive_pit_eligible": false,
+  "phase2_eligible": false,
+  "release_created": false
+}
