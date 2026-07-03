@@ -518,6 +518,8 @@ def corr_or_blank(df: pd.DataFrame, feature: str, outcome: str, min_pairs: int) 
     pair_count = len(work)
     if pair_count < min_pairs:
         return {"pair_count": pair_count, "metrics_available": False, "reason": "pair_count_below_60"}
+    if work[feature].nunique(dropna=True) < 2 or work[outcome].nunique(dropna=True) < 2:
+        return {"pair_count": pair_count, "metrics_available": False, "reason": "constant_input"}
     return {
         "pair_count": pair_count,
         "metrics_available": True,
