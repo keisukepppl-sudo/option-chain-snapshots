@@ -1,0 +1,19 @@
+{
+  "execution_policy_id": "morita_execution_fidelity_policy_v1",
+  "policy_version": "v1",
+  "research_only": true,
+  "actionization_allowed": false,
+  "live_order_submission_enabled": false,
+  "not_a_trading_signal": true,
+  "not_a_trade_execution_system": true,
+  "not_a_broker_of_record": true,
+  "not_tax_advice": true,
+  "not_investment_advice": true,
+  "predictive_pit_eligible": false,
+  "phase2_eligible": false,
+  "manual_execution_confirmation_required": true,
+  "candidate_link_time_window_hours": 48,
+  "candidate_links_are_never_exact": true,
+  "future_outcome_exit_judgment_allowed": false,
+  "advisory_only": true
+}

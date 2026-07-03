@@ -1,0 +1,30 @@
+{
+  "regime_context_profile_id": "phase1_6b_context_snapshot_v1",
+  "source_output_dir": "outputs/phase1_6b_cross_module_downside",
+  "required_receipt_status": "phase1_6b_cross_module_downside_completed",
+  "allowed_fields": [
+    "observation_date",
+    "next_effective_session",
+    "cta_consensus_category",
+    "vol_change_consensus_category",
+    "combined_mechanical_sensitivity_ex_post_quartile",
+    "combined_scale_status"
+  ],
+  "normalized_etf_field": "etf_scale_context_category",
+  "may_change_rank": false,
+  "may_change_dte": false,
+  "may_change_eligibility": false,
+  "may_change_position_size": false,
+  "may_change_exit_plan": false,
+  "may_change_risk_policy_status": false,
+  "research_only": true,
+  "actionization_allowed": false,
+  "live_order_submission_enabled": false,
+  "not_a_trading_signal": true,
+  "not_a_trade_execution_system": true,
+  "not_a_broker_of_record": true,
+  "not_tax_advice": true,
+  "not_investment_advice": true,
+  "predictive_pit_eligible": false,
+  "phase2_eligible": false
+}

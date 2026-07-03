@@ -1,0 +1,20 @@
+{
+  "outcome_policy_id": "morita_outcome_distribution_policy_v1",
+  "policy_version": "v1",
+  "research_only": true,
+  "actionization_allowed": false,
+  "live_order_submission_enabled": false,
+  "not_a_trading_signal": true,
+  "not_a_trade_execution_system": true,
+  "not_a_broker_of_record": true,
+  "not_tax_advice": true,
+  "not_investment_advice": true,
+  "predictive_pit_eligible": false,
+  "phase2_eligible": false,
+  "minimum_closed_monitoring_lots_for_aggregate_metrics": 30,
+  "minimum_closed_monitoring_lots_per_rank_for_rank_metrics": 15,
+  "minimum_closed_monitoring_lots_per_strategy_for_strategy_metrics": 15,
+  "sharpe_calculation_allowed": false,
+  "future_expectancy_claim_allowed": false,
+  "advisory_only": true
+}

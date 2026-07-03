@@ -1,0 +1,23 @@
+{
+  "profile_id": "LOCAL_PROFILE_ID_PLACEHOLDER",
+  "official_api_base_url_placeholder": "OFFICIAL_WEBULL_BASE_URL_PLACEHOLDER",
+  "official_sdk_package_placeholder": "OFFICIAL_WEBULL_SDK_PACKAGE_PLACEHOLDER",
+  "auth_mode_placeholder": "OFFICIAL_AUTH_MODE_PLACEHOLDER",
+  "app_key_env_var_name": "WEBULL_APP_KEY",
+  "app_secret_env_var_name": "WEBULL_APP_SECRET",
+  "access_token_env_var_name": "WEBULL_ACCESS_TOKEN",
+  "refresh_token_env_var_name": "WEBULL_REFRESH_TOKEN",
+  "account_identifier_env_var_name": "WEBULL_ACCOUNT_IDENTIFIER",
+  "expected_environment_placeholder": "OFFICIAL_ENVIRONMENT_PLACEHOLDER",
+  "read_only_mode": true,
+  "research_only": true,
+  "actionization_allowed": false,
+  "live_order_submission_enabled": false,
+  "not_a_trading_signal": true,
+  "not_a_trade_execution_system": true,
+  "not_a_broker_of_record": true,
+  "not_tax_advice": true,
+  "not_investment_advice": true,
+  "predictive_pit_eligible": false,
+  "phase2_eligible": false
+}

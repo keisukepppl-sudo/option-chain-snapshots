@@ -1,0 +1,29 @@
+{
+  "risk_policy_id": "morita_survival_risk_policy_v1",
+  "policy_version": "v1",
+  "research_only": true,
+  "actionization_allowed": false,
+  "live_order_submission_enabled": false,
+  "not_a_trading_signal": true,
+  "not_a_trade_execution_system": true,
+  "not_a_broker_of_record": true,
+  "not_tax_advice": true,
+  "not_investment_advice": true,
+  "predictive_pit_eligible": false,
+  "phase2_eligible": false,
+  "rank_reference_allocation": {
+    "S": 40,
+    "A": 15,
+    "B": 10
+  },
+  "rank_reference_unit": "UNSET_REQUIRED",
+  "rank_allocation_status": "unconfigured_reference_unit",
+  "total_premium_risk_watch_fraction_of_nav": 0.25,
+  "single_position_watch_fraction_of_nav": 0.08,
+  "single_underlying_watch_fraction_of_nav": 0.15,
+  "single_theme_watch_fraction_of_nav": 0.20,
+  "same_expiry_week_watch_fraction_of_nav": 0.25,
+  "drawdown_watch_fraction": 0.15,
+  "drawdown_critical_fraction": 0.30,
+  "advisory_only": true
+}
