@@ -44,6 +44,7 @@
         "tests/test_market_bomb_flow_pressure_source_qualification_v1.py",
         "tests/test_market_bomb_flow_pressure_statistical_backtest_v1.py",
         "tests/test_market_bomb_leveraged_etf_free_proxy_v1.py",
+        "tests/test_market_bomb_leveraged_etf_scale_proxy_v1.py",
         "tests/test_market_bomb_phase3_2_cta_vol_proxy.py",
         "tests/test_market_bomb_phase3_2b_morita_history_reconstruction.py"
       ],

@@ -1,0 +1,28 @@
+{
+  "registry_version": "leveraged_etf_scale_proxy_v1_model_specs_1_0_0",
+  "models": [
+    {
+      "model_spec_id": "tqqq_sqqq_static_daily_reset_scale_v1",
+      "mode": "historical_descriptive_capital_scaled_proxy",
+      "benchmark_mode": "ndx_exact",
+      "benchmark_instrument": "NDX",
+      "capital_lag_rule": "prior_observed_benchmark_session_exact_capital_match_only",
+      "capital_forward_fill_allowed": false,
+      "capital_interpolation_allowed": false,
+      "tqqq_target_leverage": 3.0,
+      "sqqq_target_leverage": -3.0,
+      "notional_formula": "leverage_times_leverage_minus_one_times_prior_capital_times_benchmark_return",
+      "minimum_absolute_benchmark_return_for_direction": 0.001,
+      "max_relative_aum_reconciliation_gap": 0.005,
+      "minimum_tqqq_lagged_capital_coverage_ratio": 0.9,
+      "minimum_sqqq_lagged_capital_coverage_ratio": 0.9,
+      "minimum_combined_overlap_coverage_ratio": 0.9,
+      "historical_vintage_required": false,
+      "predictive_pit_eligible": false,
+      "phase2_eligible": false,
+      "ranking_allowed": false,
+      "model_selection_allowed": false,
+      "returns_analysis_allowed": false
+    }
+  ]
+}
