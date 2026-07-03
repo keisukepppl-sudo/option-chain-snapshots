@@ -1,0 +1,87 @@
+{
+  "registry_version": "full_regression_shards_v1_0_0",
+  "purpose": "Deterministic pytest full-regression coverage shards. No deselection, ignore, xfail, allow-failure, or market-data access.",
+  "canonical_collection_command": [
+    "python",
+    "-m",
+    "pytest",
+    "--collect-only",
+    "-q"
+  ],
+  "shards": [
+    {
+      "shard_id": "flow_pressure_core",
+      "description": "Flow-pressure v0 provider contract, real-data study, and QQQ Phase 1 readiness tests.",
+      "pytest_targets": [
+        "tests/test_market_bomb_flow_pressure_research_v0.py"
+      ],
+      "platform_scope": "primary",
+      "expected_runtime_class": "long_windows_path_sensitive"
+    },
+    {
+      "shard_id": "fragility",
+      "description": "Fragility data release and score tests with bounded but slower fixture/runtime behavior.",
+      "pytest_targets": [
+        "tests/test_market_bomb_fragility_data_release_v0.py",
+        "tests/test_market_bomb_fragility_score_v0.py"
+      ],
+      "platform_scope": "primary",
+      "expected_runtime_class": "long"
+    },
+    {
+      "shard_id": "market_impact",
+      "description": "Market-impact backtest integrity, calendar, lineage, selector, and OOS tests.",
+      "pytest_targets": [
+        "tests/test_market_bomb_market_impact_backtest_v1.py"
+      ],
+      "platform_scope": "primary",
+      "expected_runtime_class": "medium"
+    },
+    {
+      "shard_id": "flow_pressure_adjacent",
+      "description": "Flow-pressure source qualification, statistical backtest, leveraged ETF proxy, CTA/Vol proxy, and Morita reconstruction tests.",
+      "pytest_targets": [
+        "tests/test_market_bomb_flow_pressure_source_qualification_v1.py",
+        "tests/test_market_bomb_flow_pressure_statistical_backtest_v1.py",
+        "tests/test_market_bomb_leveraged_etf_free_proxy_v1.py",
+        "tests/test_market_bomb_phase3_2_cta_vol_proxy.py",
+        "tests/test_market_bomb_phase3_2b_morita_history_reconstruction.py"
+      ],
+      "platform_scope": "primary",
+      "expected_runtime_class": "medium"
+    },
+    {
+      "shard_id": "cta_vol_environment_notifications",
+      "description": "CTA, Vol-control, market environment, notifications, and AWS/Pushover tests.",
+      "pytest_targets": [
+        "tests/test_aws_pushover_healthcheck.py",
+        "tests/test_market_bomb_cta_research_v1.py",
+        "tests/test_market_bomb_vol_control_research_v1.py",
+        "tests/test_market_environment_score_v0.py",
+        "tests/test_notifications.py",
+        "tests/test_regression_ci_quality_gate_v1.py"
+      ],
+      "platform_scope": "primary",
+      "expected_runtime_class": "short"
+    }
+  ],
+  "path_regression": {
+    "shard_id": "windows_path_regression",
+    "description": "Original Windows QQQ Phase 1 readiness nodes that fail under deep pytest tmp_path roots and pass under unique short basetemp roots.",
+    "platform_scope": "windows",
+    "expected_runtime_class": "medium",
+    "pytest_targets": [
+      "tests/test_market_bomb_flow_pressure_research_v0.py::test_qqq_phase1_readiness_valid_path_outputs_report_and_no_release",
+      "tests/test_market_bomb_flow_pressure_research_v0.py::test_qqq_phase1_duplicate_schedule_row_blocks_readiness",
+      "tests/test_market_bomb_flow_pressure_research_v0.py::test_qqq_phase1_readiness_runs_are_append_only",
+      "tests/test_market_bomb_flow_pressure_research_v0.py::test_qqq_phase1_phase2_admission_requires_explicit_artifact_and_rejects_synthetic",
+      "tests/test_market_bomb_flow_pressure_research_v0.py::test_qqq_phase1_candidate_audit_tags_later_revision",
+      "tests/test_market_bomb_flow_pressure_research_v0.py::test_qqq_phase1_missing_tqqq_mapping_blocks_mapping",
+      "tests/test_market_bomb_flow_pressure_research_v0.py::test_qqq_phase1_stale_aum_blocks_timing",
+      "tests/test_market_bomb_flow_pressure_research_v0.py::test_qqq_phase1_invalid_ohlc_blocks_data_quality",
+      "tests/test_market_bomb_flow_pressure_research_v0.py::test_qqq_phase1_short_return_history_is_insufficient_coverage",
+      "tests/test_market_bomb_flow_pressure_research_v0.py::test_qqq_phase1_aum_shares_nav_disagreement_is_surfaced",
+      "tests/test_market_bomb_flow_pressure_research_v0.py::test_qqq_phase1_readiness_manifest_detects_tamper"
+    ]
+  }
+}

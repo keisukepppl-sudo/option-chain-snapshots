@@ -8,9 +8,9 @@ permissions:
   contents: read
 
 jobs:
-  tests:
+  setup-syntax:
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 10
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -25,7 +25,7 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements-dev.txt
 
-      - name: Compile core modules
+      - name: Compile core modules and quality scripts
         run: |
           python -m py_compile \
             market_bomb_flow_pressure_research_v0.py \
@@ -34,19 +34,119 @@ jobs:
             market_bomb_fragility_data_release_v0.py \
             market_bomb_fragility_score_v0.py \
             market_bomb_phase3_2_cta_vol_proxy.py \
+            market_bomb_cta_research_v1.py \
+            market_bomb_vol_control_research_v1.py \
+            market_bomb_market_impact_backtest_v1.py \
             discord_alert.py \
-            scanner/pushover_notify.py
+            scanner/pushover_notify.py \
+            scripts/test_quality_v1.py \
+            scripts/verify_pytest_collection_coverage.py \
+            scripts/run_full_regression.py
 
-      - name: Run targeted safety suites
+  collection-coverage:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    needs: setup-syntax
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dev dependencies
         run: |
-          python -m pytest \
-            tests/test_notifications.py \
-            tests/test_market_bomb_flow_pressure_research_v0.py \
-            tests/test_market_bomb_leveraged_etf_free_proxy_v1.py \
-            tests/test_market_bomb_flow_pressure_statistical_backtest_v1.py \
-            tests/test_market_bomb_phase3_2_cta_vol_proxy.py \
-            -q
+          python -m pip install --upgrade pip
+          pip install -r requirements-dev.txt
 
-      - name: Run full test suite
-        timeout-minutes: 25
-        run: python -m pytest -q --durations=20
+      - name: Verify exact pytest collection coverage
+        run: python scripts/run_full_regression.py --audit-only --artifacts-dir outputs/test_quality_v1
+
+      - name: Upload test-quality audit
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: collection-coverage
+          path: outputs/test_quality_v1/**
+          if-no-files-found: warn
+
+  regression-shards:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    needs: collection-coverage
+    strategy:
+      fail-fast: false
+      matrix:
+        shard:
+          - flow_pressure_core
+          - fragility
+          - market_impact
+          - flow_pressure_adjacent
+          - cta_vol_environment_notifications
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dev dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements-dev.txt
+
+      - name: Run deterministic regression shard
+        run: python scripts/run_full_regression.py --shard ${{ matrix.shard }} --artifacts-dir outputs/test_quality_v1
+
+      - name: Upload shard summary
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: shard-${{ matrix.shard }}
+          path: outputs/test_quality_v1/**
+          if-no-files-found: warn
+
+  windows-path-regression:
+    runs-on: windows-latest
+    timeout-minutes: 15
+    needs: collection-coverage
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dev dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements-dev.txt
+
+      - name: Run Windows path-regression shard
+        run: python scripts/run_full_regression.py --windows-path-regression --artifacts-dir outputs/test_quality_v1
+
+      - name: Upload Windows path summary
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-path-regression
+          path: outputs/test_quality_v1/**
+          if-no-files-found: warn
+
+  completion-summary:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    needs:
+      - setup-syntax
+      - collection-coverage
+      - regression-shards
+      - windows-path-regression
+    steps:
+      - name: Confirm quality gate completion
+        run: echo "Regression CI quality gate completed."
