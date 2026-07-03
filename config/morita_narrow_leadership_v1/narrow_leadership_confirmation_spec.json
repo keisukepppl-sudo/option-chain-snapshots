@@ -1,0 +1,21 @@
+{
+  "artifact_version": "morita_narrow_leadership_confirmation_v1",
+  "baseline_run_id": "morita_baseline_20260703T123912Z_4994e3744ffa",
+  "dispersion_artifact_version": "morita_realized_dispersion_quick_screen_v1",
+  "rank": "S",
+  "complete_status": "complete",
+  "dispersion_metric": "broad_russell1000_cross_sectional_dispersion_20d",
+  "leadership_metric": "broad_russell1000_qqq_minus_eqw_return_20d",
+  "state_source": "completed_realized_dispersion_quick_screen",
+  "state_definition": "fixed_full_sample_ex_post_tercile_states",
+  "full_sample_min_per_side": 20,
+  "chronological_half_min_per_side": 10,
+  "concentration_largest_single_ticker_share_max": 0.3,
+  "main_plus5_adverse_threshold_pp": -10.0,
+  "main_breach_adverse_threshold_pp": 10.0,
+  "component_threshold_pp": 7.5,
+  "not_live_thresholds": true,
+  "not_predictive_thresholds": true,
+  "research_only": true,
+  "actionization_allowed": false
+}

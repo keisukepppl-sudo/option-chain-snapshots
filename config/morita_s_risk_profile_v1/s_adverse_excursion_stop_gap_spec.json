@@ -1,0 +1,22 @@
+{
+  "artifact_version": "morita_s_risk_profile_v1",
+  "baseline_run_id": "morita_baseline_20260703T123912Z_4994e3744ffa",
+  "baseline_entry_price_field": "entry_price",
+  "baseline_entry_session_field": "entry_session",
+  "baseline_stop_reference_field": "breakout_day_low",
+  "baseline_terminal_session_field": "outcome_observed_through_session",
+  "primary_rank": "S",
+  "complete_status": "complete",
+  "collision_status": "ambiguous_intraday_order",
+  "incomplete_status": "incomplete_horizon",
+  "fixed_horizon_sessions": [1, 5, 10, 20],
+  "mae_thresholds": [-0.05, -0.1, -0.15, -0.2],
+  "stop_distance_thresholds": [-0.03, -0.05, -0.08, -0.1],
+  "stop_overshoot_thresholds": [-0.02, -0.05, -0.1, -0.15],
+  "post_breach_horizons": [5, 10],
+  "recovery_horizons": [5, 10],
+  "percentile_method": "pandas_linear_interpolation",
+  "execution_label": "daily_bar_execution_proxy_only",
+  "research_only": true,
+  "actionization_allowed": false
+}
