@@ -1,0 +1,39 @@
+{
+  "artifact_version": "morita_realized_dispersion_quick_screen_v1",
+  "research_status": "ex_post_descriptive_only",
+  "data_policy": "verified_baseline_lineage_local_ohlcv_only",
+  "actionization_allowed": false,
+  "new_data_allowed": false,
+  "option_or_implied_correlation_analysis_allowed": false,
+  "parameter_optimization_allowed": false,
+  "realized_window_sessions": 20,
+  "annualization_sessions": 252,
+  "minimum_valid_members": {
+    "broad_russell1000_local_proxy": 100,
+    "semiconductor_core": 12,
+    "ai_infrastructure_extended": 12
+  },
+  "benchmark_exclusions": [
+    "QQQ",
+    "SPY",
+    "DIA",
+    "IWM",
+    "TQQQ",
+    "SQQQ",
+    "SOXX",
+    "SMH"
+  ],
+  "minimum_complete_signals_per_high_or_low_state": 15,
+  "concentration_guard_largest_ticker_share_max": 0.30,
+  "material_binary_rate_difference_pp": 10.0,
+  "state_construction": "unique_complete_signal_date_ex_post_terciles",
+  "not_predictive_thresholds": true,
+  "not_live_filters": true,
+  "basket_membership_status": "static_research_basket_proxy",
+  "labels": [
+    "no_visible_relationship",
+    "inconsistent_relationship",
+    "potentially_material_relationship",
+    "insufficient_sample"
+  ]
+}
