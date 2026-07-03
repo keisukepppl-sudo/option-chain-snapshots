@@ -1,0 +1,16 @@
+{
+  "spec_id": "morita_bot_historical_baseline_v1",
+  "baseline_type": "formal_historical_baseline_v1",
+  "observation_start": "2023-07-03",
+  "observation_end": "2026-07-02",
+  "existing_history_cutoff": "2026-06-12",
+  "tail_overlap_start": "2026-06-01",
+  "tail_fetch_end": "2026-07-02",
+  "universe_pit_status": "static_historical_proxy",
+  "data_source_status": "stitched_local_history_plus_authorized_tail",
+  "strategy_family": "current_morita_bot_formal_historical_baseline_v1",
+  "research_only": true,
+  "actionization_allowed": false,
+  "predictive_pit_eligible": false,
+  "phase2_eligible": false
+}

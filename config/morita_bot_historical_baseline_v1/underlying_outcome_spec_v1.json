@@ -1,0 +1,10 @@
+{
+  "outcome_spec_id": "morita_underlying_outcome_v1",
+  "entry_convention": "next_eligible_session_open",
+  "breakout_day_low": "observation_date_low",
+  "target_return": 0.05,
+  "outcome_window_sessions": 10,
+  "same_session_barrier_collision": "ambiguous_intraday_order",
+  "research_only": true,
+  "actionization_allowed": false
+}

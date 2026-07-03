@@ -237,14 +237,14 @@ def load_json(path: Path) -> dict[str, Any]:
 
 def write_json(path: Path, payload: dict[str, Any]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(payload, indent=2, ensure_ascii=False), encoding="utf-8")
+    platform_path(path).write_text(json.dumps(payload, indent=2, ensure_ascii=False), encoding="utf-8")
 
 
 def write_csv(df: pd.DataFrame, path: Path, columns: list[str] | None = None) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     if columns is not None:
         df = pd.DataFrame(df, columns=columns)
-    df.to_csv(path, index=False)
+    df.to_csv(platform_path(path), index=False)
 
 
 def platform_path(path: Path) -> Path:
@@ -2201,7 +2201,7 @@ def latest_readiness_run_pointer(root: Path, staging_id: str) -> Path:
 
 def new_readiness_run_id(staging_id: str) -> str:
     now = utc_now()
-    return f"{now.strftime('%Y%m%dT%H%M%SZ')}_{bytes_sha256((staging_id + '|' + str(uuid.uuid4())).encode('utf-8'))[:12]}"
+    return f"r_{bytes_sha256((staging_id + '|' + now.isoformat() + '|' + str(uuid.uuid4())).encode('utf-8'))[:12]}"
 
 
 def resolve_readiness_artifact_path(root: Path, staging_id: str | None = None, readiness_artifact: str | None = None) -> Path:
@@ -2761,8 +2761,8 @@ def run_qqq_phase1_readiness(
     write_csv(component_table, out_dir / "qqq_phase1_component_status.csv")
     write_csv(mapping, out_dir / "mapping_validation.csv")
     write_csv(aum_summary, out_dir / "aum_freshness_summary.csv")
-    (out_dir / "research_timing_eligibility_summary.md").write_text(research_timing_eligibility_summary_md(timing_summary, coverage_dataset), encoding="utf-8")
-    (out_dir / "real_data_readiness_report.md").write_text(report, encoding="utf-8")
+    platform_path(out_dir / "research_timing_eligibility_summary.md").write_text(research_timing_eligibility_summary_md(timing_summary, coverage_dataset), encoding="utf-8")
+    platform_path(out_dir / "real_data_readiness_report.md").write_text(report, encoding="utf-8")
     summary = {
         "artifact_version": QQQ_PHASE1_READINESS_VERSION,
         "hardening_version": QQQ_PHASE1_HARDENING_VERSION,

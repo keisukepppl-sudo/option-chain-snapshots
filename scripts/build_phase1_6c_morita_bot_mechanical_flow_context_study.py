@@ -29,6 +29,7 @@ MORITA_MANIFEST_NAMES = [
     "content_manifest.json",
 ]
 MORITA_RECEIPT_NAMES = [
+    "source_receipt.json",
     "morita_bot_source_receipt.json",
     "morita_run_receipt.json",
     "run_receipt.json",
@@ -419,7 +420,7 @@ def validate_morita_bot_run_artifact(path: Path) -> dict[str, Any]:
     schema = load_json(schema_path_for_artifact(path))
     if not receipt.get("repository_commit_sha"):
         raise SystemExit("morita_bot_source_receipt_missing")
-    if not (receipt.get("run_status") or receipt.get("source_run_status")):
+    if not (receipt.get("run_status") or receipt.get("source_run_status") or receipt.get("status")):
         raise SystemExit("morita_bot_source_receipt_missing")
     if not (receipt.get("source_rule_version") or receipt.get("rule_version") or schema.get("source_rule_version")):
         raise SystemExit("morita_bot_rule_version_missing")
