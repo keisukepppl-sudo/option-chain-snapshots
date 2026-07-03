@@ -48,7 +48,7 @@ The atlas preserves:
 - `cross_module_metrics_computed=false`
 - `cross_module_integration_performed=false`
 
-The generator does not compute returns, PnL, future outcomes, CTA plus Vol-control joint metrics, model ranking, model selection, acceptance thresholds, releases, notifications, or execution instructions.
+The generator does not compute outcome-linked performance tables, profit/loss fields, forward outcomes, CTA plus Vol-control joint metrics, model ranking, model selection, acceptance thresholds, releases, notifications, or execution instructions.
 
 ## Limitations
 

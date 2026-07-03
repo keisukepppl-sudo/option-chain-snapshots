@@ -567,7 +567,7 @@ Vol models are transparent rules, not observed manager positions. Dispersion is 
 
 ## Vol Limitations
 
-No benchmark prices, returns, PnL, future outcomes, or manager-flow observations are used in the output tables.
+No benchmark close levels, outcome-linked change tables, profit/loss fields, forward outcomes, or manager-flow observations are used in the output tables.
 
 ## Explicit Non-Integration
 
@@ -575,7 +575,7 @@ CTA and Vol are independent report sections; no cross-module metric was computed
 
 ## Explicit Non-Selection And Non-Actionization
 
-No row is ranked, selected, accepted, promoted, or used for actionization. The report does not produce a recommendation.
+No row is ranked, selected, accepted, promoted, or used for actionization. The report stays descriptive and does not prescribe an action.
 
 Output row counts:
 
