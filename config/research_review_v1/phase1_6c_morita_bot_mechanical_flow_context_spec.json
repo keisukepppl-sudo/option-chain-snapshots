@@ -1,0 +1,99 @@
+{
+  "registry_version": "phase1_6c_morita_bot_mechanical_flow_context_spec_registry_v1_0_0",
+  "specs": [
+    {
+      "study_spec_id": "phase1_6c_morita_bot_mechanical_flow_context_v1",
+      "mode": "historical_ex_post_morita_bot_context_descriptive",
+      "underlying_scope": "morita_bot_source_artifact_only",
+      "source_artifacts_manifest_verified_required": true,
+      "context_source": "phase1_6b_cross_module_downside",
+      "outcome_linked_descriptive_analysis_only": true,
+      "ranking_allowed": false,
+      "model_selection_allowed": false,
+      "actionization_allowed": false,
+      "predictive_pit_eligible": false,
+      "phase2_eligible": false,
+      "release_created": false,
+      "minimum_signal_context_alignment_ratio": 0.9,
+      "minimum_signal_count_for_all_rank_summary": 30,
+      "minimum_signal_count_for_single_rank_summary": 15,
+      "minimum_signal_count_for_single_context_summary": 20,
+      "minimum_signal_count_for_joint_context_summary": 20,
+      "minimum_signal_count_for_symbol_concentration_diagnostic": 10,
+      "context_categories": {
+        "cta": [
+          "cta_all_risk_on",
+          "cta_all_risk_off",
+          "cta_mixed",
+          "cta_incomplete"
+        ],
+        "vol": [
+          "vol_all_increase_risk",
+          "vol_all_reduce_risk",
+          "vol_mixed_or_unchanged",
+          "vol_incomplete"
+        ],
+        "etf": [
+          "etf_sensitivity_q1_to_q3",
+          "etf_sensitivity_q4_ex_post",
+          "etf_sensitivity_unavailable"
+        ]
+      },
+      "analysis_windows": [
+        {
+          "analysis_window_id": "full_covered_period",
+          "start": null,
+          "end": null,
+          "window_class": "primary_full_sample"
+        },
+        {
+          "analysis_window_id": "pre_2025",
+          "start": "2023-07-03",
+          "end": "2024-12-31",
+          "window_class": "primary_nonoverlapping_subperiod"
+        },
+        {
+          "analysis_window_id": "from_2025",
+          "start": "2025-01-01",
+          "end": "2026-07-02",
+          "window_class": "primary_nonoverlapping_subperiod"
+        },
+        {
+          "analysis_window_id": "calendar_2024",
+          "start": "2024-01-01",
+          "end": "2024-12-31",
+          "window_class": "secondary_calendar_year"
+        },
+        {
+          "analysis_window_id": "calendar_2025",
+          "start": "2025-01-01",
+          "end": "2025-12-31",
+          "window_class": "secondary_calendar_year"
+        },
+        {
+          "analysis_window_id": "calendar_2023_h2",
+          "start": "2023-07-03",
+          "end": "2023-12-31",
+          "window_class": "diagnostic_thin_history"
+        },
+        {
+          "analysis_window_id": "calendar_2026_ytd",
+          "start": "2026-01-01",
+          "end": "2026-07-02",
+          "window_class": "diagnostic_short_history"
+        }
+      ],
+      "research_only": true,
+      "not_a_trading_signal": true,
+      "not_a_trade_execution_system": true,
+      "not_a_model_selection_study": true,
+      "not_a_predictive_model": true,
+      "not_a_causal_study": true,
+      "not_an_actual_cta_position_estimate": true,
+      "not_an_actual_cta_flow_estimate": true,
+      "not_an_actual_manager_flow_estimate": true,
+      "not_an_actual_etf_flow_estimate": true,
+      "not_an_actual_market_impact_estimate": true
+    }
+  ]
+}
