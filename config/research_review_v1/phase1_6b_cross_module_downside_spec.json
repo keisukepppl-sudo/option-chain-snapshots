@@ -1,0 +1,73 @@
+{
+  "registry_version": "phase1_6b_cross_module_downside_spec_registry_v1_0_0",
+  "specs": [
+    {
+      "study_spec_id": "phase1_6b_ndx_cross_module_downside_v1",
+      "mode": "historical_ex_post_cross_module_downside_descriptive",
+      "underlying": "NDX",
+      "source_artifacts_manifest_verified_required": true,
+      "outcome_linked_descriptive_analysis_only": true,
+      "cross_module_composite_score_created": false,
+      "ranking_allowed": false,
+      "model_selection_allowed": false,
+      "actionization_allowed": false,
+      "predictive_pit_eligible": false,
+      "phase2_eligible": false,
+      "minimum_pair_count_for_correlation": 60,
+      "minimum_condition_count": 20,
+      "minimum_joint_cell_count": 20,
+      "minimum_cross_module_next_session_alignment_ratio": 0.9,
+      "same_day_down_1pct_threshold": -0.01,
+      "same_day_down_2pct_threshold": -0.02,
+      "next_session_down_1pct_threshold": -0.01,
+      "next_session_down_2pct_threshold": -0.02,
+      "forward_5_session_drawdown_threshold": -0.03,
+      "etf_sensitivity_high_quantile": 0.75,
+      "etf_sensitivity_quantile_basis": "ex_post_full_sample_quantile",
+      "analysis_windows": [
+        {
+          "analysis_window_id": "full_covered_period",
+          "start": null,
+          "end": null,
+          "window_class": "primary_full_sample"
+        },
+        {
+          "analysis_window_id": "pre_2025",
+          "start": "2023-07-03",
+          "end": "2024-12-31",
+          "window_class": "primary_nonoverlapping_subperiod"
+        },
+        {
+          "analysis_window_id": "from_2025",
+          "start": "2025-01-01",
+          "end": "2026-07-02",
+          "window_class": "primary_nonoverlapping_subperiod"
+        },
+        {
+          "analysis_window_id": "calendar_2024",
+          "start": "2024-01-01",
+          "end": "2024-12-31",
+          "window_class": "secondary_calendar_year"
+        },
+        {
+          "analysis_window_id": "calendar_2025",
+          "start": "2025-01-01",
+          "end": "2025-12-31",
+          "window_class": "secondary_calendar_year"
+        },
+        {
+          "analysis_window_id": "calendar_2023_h2",
+          "start": "2023-07-03",
+          "end": "2023-12-31",
+          "window_class": "diagnostic_thin_history"
+        },
+        {
+          "analysis_window_id": "calendar_2026_ytd",
+          "start": "2026-01-01",
+          "end": "2026-07-02",
+          "window_class": "diagnostic_short_history"
+        }
+      ]
+    }
+  ]
+}
