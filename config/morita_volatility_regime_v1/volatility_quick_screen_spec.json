@@ -1,0 +1,33 @@
+{
+  "artifact_version": "morita_volatility_regime_quick_screen_v1",
+  "research_status": "ex_post_descriptive_only",
+  "authorized_external_symbol": "^VXN",
+  "authorized_external_provider": "Yahoo Finance chart daily history",
+  "authorized_start_date": "2023-06-01",
+  "authorized_end_date": "2026-07-02",
+  "authorized_interval": "1d",
+  "auto_adjust": false,
+  "actions": false,
+  "actionization_allowed": false,
+  "predictive_claim_allowed": false,
+  "live_filter_allowed": false,
+  "score_or_rank_change_allowed": false,
+  "option_chain_or_skew_analysis_allowed": false,
+  "parameter_optimization_allowed": false,
+  "minimum_valid_member_count": 12,
+  "realized_vol_window_sessions": 20,
+  "vxn_change_window_sessions": 5,
+  "annualization_sessions": 252,
+  "state_cutoff_policy": "unique_complete_signal_decision_dates_p33_p67",
+  "minimum_complete_signals_per_high_low_state": 15,
+  "concentration_guard_largest_ticker_share_max": 0.30,
+  "material_binary_rate_difference_pp": 10.0,
+  "basket_membership_status": "static_research_basket_proxy",
+  "binary_denominator_policy": "outcome_status_equals_complete_only",
+  "labels": [
+    "no_visible_relationship",
+    "inconsistent_relationship",
+    "potentially_material_relationship",
+    "insufficient_sample"
+  ]
+}
