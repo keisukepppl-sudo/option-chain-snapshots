@@ -52,6 +52,7 @@
         "tests/test_morita_bot_historical_baseline_v1.py",
         "tests/test_morita_bot_source_seal_v1.py",
         "tests/test_morita_portfolio_ledger_v1.py",
+        "tests/test_morita_put_skew_quick_screen_v1.py",
         "tests/test_morita_theme_breadth_quick_screen_v1.py",
         "tests/test_morita_volatility_regime_quick_screen_v1.py",
         "tests/test_phase1_6c_morita_bot_mechanical_flow_context_study.py",
