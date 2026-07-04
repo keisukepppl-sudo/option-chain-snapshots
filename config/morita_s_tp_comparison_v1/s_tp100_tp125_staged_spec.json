@@ -1,0 +1,28 @@
+{
+  "spec_id": "morita_s_tp_comparison_v1",
+  "purpose": "Fixed S-rank single-call TP100 vs TP125 vs 50/50 staged descriptive comparison.",
+  "research_only": true,
+  "actionization_allowed": false,
+  "rank_scope": ["S"],
+  "target_levels_pct": {
+    "TP100": 100.0,
+    "TP125": 125.0
+  },
+  "staged_policy": {
+    "policy_name": "STAGED_100_125",
+    "first_exit_target_pct": 100.0,
+    "first_exit_weight": 0.5,
+    "second_exit_target_pct": 125.0,
+    "second_exit_weight": 0.5
+  },
+  "required_formal_baseline_run_id": "morita_baseline_20260703T123912Z_4994e3744ffa",
+  "required_formal_baseline_path": "market_bomb_history/morita_bot_historical_baseline_v1/historical_runs/morita_baseline_20260703T123912Z_4994e3744ffa",
+  "canonical_model_policy": {
+    "reuse_required": true,
+    "do_not_substitute_underlying_only_returns": true,
+    "do_not_download_new_data": true,
+    "do_not_optimize_targets_or_stops": true,
+    "fail_closed_status": "canonical_single_call_model_not_reproducible_on_formal_S_baseline"
+  },
+  "blocked_runtime_status": "canonical_single_call_model_not_reproducible_on_formal_S_baseline"
+}
