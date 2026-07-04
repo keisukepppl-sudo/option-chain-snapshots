@@ -1,0 +1,40 @@
+{
+  "spec_id": "morita_current_s_notification_quality_audit_v0_1",
+  "research_only": true,
+  "raw_current_s_stream_immutable": true,
+  "no_new_data_downloaded": true,
+  "no_web_or_provider_api": true,
+  "no_broker_or_webull_access": true,
+  "no_live_notification_or_order_change": true,
+  "no_parameter_sweep": true,
+  "no_pf_targeting": true,
+  "no_future_data_in_classification": true,
+  "no_portfolio_simulation": true,
+  "no_portfolio_dd_study": true,
+  "source_population": {
+    "formal_event_stream_rank": "S",
+    "expected_raw_s_events": 328,
+    "baseline_run_id": "morita_baseline_20260703T123912Z_4994e3744ffa"
+  },
+  "classification_hierarchy": [
+    "CURRENT_S_INITIAL_BREAKOUT",
+    "CURRENT_S_REBREAKOUT",
+    "CURRENT_S_EXTENDED_FOMO",
+    "CURRENT_S_UNRESOLVED",
+    "OUTSIDE_SOURCE_COVERAGE"
+  ],
+  "native_first": true,
+  "proxy_fallback": {
+    "first_same_ticker_raw_s": "CURRENT_S_INITIAL_BREAKOUT",
+    "same_ticker_raw_s_within_20_eligible_sessions": "CURRENT_S_EXTENDED_FOMO",
+    "same_ticker_raw_s_after_20_sessions_without_native_new_base": "CURRENT_S_UNRESOLVED",
+    "gap_alone_never_creates_rebreakout": true
+  },
+  "underlying_outcome_horizons_sessions": [5, 10, 20],
+  "fixed_iv_reference": {
+    "reuse_existing_engine_only": true,
+    "synthetic_fixed_iv_reference_only": true,
+    "not_historical_option_fill_reconstruction": true,
+    "not_final_live_exit_policy": true
+  }
+}
