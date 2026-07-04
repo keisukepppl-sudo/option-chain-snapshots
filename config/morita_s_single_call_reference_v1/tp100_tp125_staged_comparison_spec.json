@@ -1,0 +1,21 @@
+{
+  "comparison_id": "morita_s_tp_comparison_v2",
+  "reference_model_id": "morita_s_single_call_fixed_iv_reference_v1",
+  "synthetic_fixed_iv_reference_model": true,
+  "not_historical_option_fill_reconstruction": true,
+  "not_live_execution_estimate": true,
+  "research_only": true,
+  "actionization_allowed": false,
+  "rank_scope": ["S"],
+  "policies": {
+    "TP100": {"target_net_return_pct": 100.0, "position_weight": 1.0},
+    "TP125": {"target_net_return_pct": 125.0, "position_weight": 1.0},
+    "STAGED": {
+      "first_target_net_return_pct": 100.0,
+      "first_weight": 0.5,
+      "second_target_net_return_pct": 125.0,
+      "second_weight": 0.5
+    }
+  },
+  "insufficient_path_coverage_threshold": 0.8
+}
