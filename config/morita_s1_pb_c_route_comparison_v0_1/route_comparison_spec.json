@@ -1,0 +1,45 @@
+{
+  "spec_id": "morita_s1_pb_c_route_comparison_v0_1",
+  "research_only": true,
+  "no_new_data_downloaded": true,
+  "no_web_or_provider_api": true,
+  "no_broker_or_webull_access": true,
+  "no_live_order_or_alert_action": true,
+  "no_parameter_sweep": true,
+  "no_pf_targeting": true,
+  "no_future_data_in_route_assignment": true,
+  "no_portfolio_simulation": true,
+  "no_sizing_or_dd_research": true,
+  "source_layer": "Morita S1/A-B Candidate Layer v0.1",
+  "routes": {
+    "S1": "first raw S in each streaming same-ticker raw-S cluster proxy",
+    "PB": "first same-ticker raw A/B within 1 to 20 eligible sessions after cluster S1 with accumulation_score >= 50",
+    "C": "first subsequent raw S in the same raw-S cluster proxy"
+  },
+  "cluster_gap_eligible_sessions": 20,
+  "underlying_horizons_sessions": [5, 10, 20],
+  "fixed_iv_reference": {
+    "enabled_if_reusable": true,
+    "initial_calendar_dte": 60,
+    "target_entry_delta": 0.6,
+    "annualized_implied_volatility": 0.6,
+    "entry_markup": 0.05,
+    "exit_haircut": 0.05,
+    "tp125_full_exit": true,
+    "day10_plus5_not_reached_exit": true,
+    "max_holding_sessions": 30,
+    "uniform_reference_exit_for_comparison_only": true,
+    "not_final_route_exit_policy": true
+  },
+  "excluded": [
+    "legacy_pf4_archaeology",
+    "base_id_implementation",
+    "notification_or_pushover_change",
+    "broker_or_order_access",
+    "portfolio_replay_or_dd",
+    "sizing",
+    "nlr_cta_volcon_leveraged_etf_overlays",
+    "ab_exit_policy_design",
+    "raw_event_definition_change"
+  ]
+}
