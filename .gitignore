@@ -10,3 +10,8 @@ market_bomb_history/cta_research_v1/
 market_bomb_history/morita_portfolio_ledger_v1/
 market_bomb_history/morita_bot_source_seal_v1/
 market_bomb_history/morita_bot_historical_baseline_v1/
+data/live_setup_registry.jsonl
+data/ab_pullback_candidate_registry.jsonl
+data/live_alert_events.jsonl
+data/manual_exit_acknowledgements.jsonl
+outputs/notification_audit/

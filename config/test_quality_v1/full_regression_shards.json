@@ -51,6 +51,7 @@
         "tests/test_fetch_morita_vxn_history_v1.py",
         "tests/test_morita_bot_historical_baseline_v1.py",
         "tests/test_morita_bot_source_seal_v1.py",
+        "tests/test_ab_pullback_and_time_stop_notification_v2.py",
         "tests/test_morita_portfolio_ledger_v1.py",
         "tests/test_morita_narrow_leadership_confirmation_v1.py",
         "tests/test_morita_put_skew_quick_screen_v1.py",

@@ -1,0 +1,53 @@
+{
+  "artifact_version": "morita_notification_v2_0_0",
+  "notification_only": true,
+  "actionization_allowed": false,
+  "broker_write_allowed": false,
+  "baseline_timeout_convention_source": "config/morita_bot_historical_baseline_v1/underlying_outcome_spec_v1.json",
+  "baseline_required": {
+    "entry_convention": "next_eligible_session_open",
+    "target_return": 0.05,
+    "outcome_window_sessions": 10,
+    "same_session_barrier_collision": "ambiguous_intraday_order"
+  },
+  "frozen_setup": {
+    "progress_target_multiplier": 1.05,
+    "max_holding_sessions": 10,
+    "time_stop_rule_label": "ten_eligible_sessions_without_plus_5pct_progress",
+    "session_count_convention_source": "formal_baseline_timeout_convention"
+  },
+  "ab_pullback": {
+    "rule_source_status": "unresolved_committed_source_missing",
+    "fail_closed_status": "A_B_PULLBACK_RULE_UNRESOLVED",
+    "eligible_ranks": ["A", "B"],
+    "minimum_accumulation_score": 50,
+    "eligible_post_breakout_sessions": 20,
+    "suggested_premium_sleeve_pct": 10,
+    "one_alert_per_base_breakout": true
+  },
+  "s_breakout": {
+    "standard_suggested_premium_sleeve_pct": 30,
+    "fifty_pct_exception_allowed_when_narrow_leadership_on": false,
+    "breakout_low_breach_alert_type": "RISK_ALERT_ONLY"
+  },
+  "time_stop": {
+    "reminder_sessions": [8, 9, 10],
+    "exit_today_session": 10,
+    "max_escalation_reminders": 5,
+    "missing_market_data_status": "unknown_market_data"
+  },
+  "manual_ack_allowed_reasons": [
+    "time_stop",
+    "manual_close",
+    "partial_reduce",
+    "broker_sync_unavailable",
+    "other_documented"
+  ],
+  "local_state": {
+    "setup_registry": "data/live_setup_registry.jsonl",
+    "ab_candidate_registry": "data/ab_pullback_candidate_registry.jsonl",
+    "alert_events": "data/live_alert_events.jsonl",
+    "manual_acknowledgements": "data/manual_exit_acknowledgements.jsonl",
+    "audit_output_dir": "outputs/notification_audit"
+  }
+}
