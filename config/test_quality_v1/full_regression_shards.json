@@ -61,6 +61,8 @@
         "tests/test_morita_s_single_call_reference_v1.py",
         "tests/test_morita_s_tp_comparison_v1.py",
         "tests/test_morita_s_tp_comparison_v2.py",
+        "tests/test_morita_s_behavioral_discipline_atlas_v1.py",
+        "tests/test_morita_call_bot_pause_research_v1.py",
         "tests/test_morita_theme_breadth_quick_screen_v1.py",
         "tests/test_morita_volatility_regime_quick_screen_v1.py",
         "tests/test_phase1_6c_morita_bot_mechanical_flow_context_study.py",

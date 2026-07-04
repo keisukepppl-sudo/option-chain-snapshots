@@ -1,0 +1,32 @@
+{
+  "spec_id": "morita_s_behavioral_discipline_v1",
+  "research_scope": "S rank fixed-IV single-call behavioral counterfactuals",
+  "model_id": "morita_s_single_call_fixed_iv_reference_v1",
+  "synthetic_fixed_iv_reference_model": true,
+  "not_historical_option_fill_reconstruction": true,
+  "not_live_execution_estimate": true,
+  "research_only_no_live_strategy_change": true,
+  "primary_denominator": "rank S, complete outcome, valid fixed-IV reference path",
+  "option_assumptions": {
+    "option_side": "call",
+    "initial_calendar_dte": 60,
+    "target_entry_delta": 0.6,
+    "annualized_implied_volatility": 0.6,
+    "risk_free_rate": 0.0,
+    "continuous_dividend_yield": 0.0,
+    "entry_markup": 0.05,
+    "exit_haircut": 0.05,
+    "strike_representation": "continuous_theoretical_delta_matched"
+  },
+  "policies": [
+    "BASELINE_TP125",
+    "FEAR_TP100",
+    "COMPROMISE_STAGED_100_125",
+    "PANIC_OPTION_STOP_25_NEXT_OPEN",
+    "PANIC_OPTION_STOP_50_NEXT_OPEN",
+    "BREAKOUT_LOW_RISK_ALERT_TO_EXIT_NEXT_OPEN",
+    "GREED_IGNORE_TP125_HOLD_TO_INDEPENDENT_TERMINAL"
+  ],
+  "actionization_allowed": false
+}
+

@@ -1,0 +1,27 @@
+{
+  "spec_id": "morita_call_bot_pause_v1",
+  "research_scope": "predeclared S-call pause-state descriptive study",
+  "model_id": "morita_s_single_call_fixed_iv_reference_v1",
+  "synthetic_fixed_iv_reference_model": true,
+  "not_historical_option_fill_reconstruction": true,
+  "not_live_execution_estimate": true,
+  "research_only_no_live_pause_action": true,
+  "not_a_top_prediction_model": true,
+  "not_a_short_signal": true,
+  "primary_denominator": "rank S, complete outcome, valid fixed-IV reference path",
+  "state_definitions": {
+    "NARROW_LEADERSHIP_ON": "existing broad high cross-sectional dispersion and high QQQ minus broad equal-weight return state",
+    "CTA_RISK_OFF": "cta_all_risk_off",
+    "VOL_ALL_REDUCE": "vol_all_reduce_risk",
+    "QQQ_TREND_BREAK_ON": "QQQ close < 50-session SMA and QQQ 20-session SMA < 50-session SMA using decision-day close"
+  },
+  "states": [
+    "STATE_0_BASELINE",
+    "STATE_1_NARROW_LEADERSHIP_ONLY",
+    "STATE_2_TREND_BREAK_ONLY",
+    "STATE_3_CASCADE",
+    "STATE_4_FULL_CASCADE"
+  ],
+  "actionization_allowed": false
+}
+
