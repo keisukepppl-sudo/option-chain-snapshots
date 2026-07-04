@@ -1,0 +1,15 @@
+{
+  "spec_id": "morita_s_reconciliation_audit_v1",
+  "research_only": true,
+  "no_new_data_downloaded": true,
+  "no_web_or_provider_api": true,
+  "no_live_order_or_alert_action": true,
+  "no_parameter_sweep": true,
+  "no_performance_selection_tuning": true,
+  "formal_baseline_run_id": "morita_baseline_20260703T123912Z_4994e3744ffa",
+  "fixed_iv_reference_model_id": "morita_s_single_call_fixed_iv_reference_v1",
+  "cooldown_sessions": 20,
+  "legacy_pf_claim_threshold": 3.0,
+  "actionization_allowed": false
+}
+
