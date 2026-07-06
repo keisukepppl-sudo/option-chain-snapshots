@@ -9,6 +9,7 @@ from typing import Any
 import pandas as pd
 
 import scanner_notify as sn
+from scanner.catalyst_routing import catalyst_route_for
 
 
 PRE_CLOSE_SCAN_SCHEDULES = {
@@ -149,6 +150,30 @@ def _exclusion_reason(row: dict[str, Any]) -> str:
     return ""
 
 
+def _catalyst_routing_config() -> dict[str, Any]:
+    path = Path(os.environ.get("SCANNER_CONFIG_PATH", "config.yaml"))
+    try:
+        config = sn.load_config(path)
+        routing = sn.production_config(config).get("catalyst_routing", {}) or {}
+        return dict(routing) if isinstance(routing, dict) else {}
+    except Exception:
+        return {}
+
+
+def _not_evaluated_catalyst(reason: str) -> dict[str, Any]:
+    return {
+        "catalyst_type": "NOT_EVALUATED",
+        "catalyst_confidence": "not_evaluated",
+        "catalyst_source": "",
+        "catalyst_headline": "",
+        "catalyst_timestamp_utc": "",
+        "catalyst_url": "",
+        "catalyst_fetch_status": reason,
+        "action_route": "DISCORD_ONLY",
+        "action_reason": reason,
+    }
+
+
 def _scan_time_token() -> str:
     return pd.Timestamp.now(tz="Asia/Tokyo").strftime("%Y%m%d_%H%M")
 
@@ -219,6 +244,7 @@ def _patched_select_candidates(*args: Any, **kwargs: Any) -> pd.DataFrame:
     out = ORIGINAL_SELECT_CANDIDATES(*args, **kwargs)
     if out.empty:
         return out
+    routing_config = _catalyst_routing_config()
     rows = []
     for _, original in out.iterrows():
         row = original.to_dict()
@@ -233,10 +259,22 @@ def _patched_select_candidates(*args: Any, **kwargs: Any) -> pd.DataFrame:
         row["volume_penalty"] = penalty
         row["alert_rank"] = rank
         row["production_rank"] = rank
-        row["suggested_size"] = _size(rank)
+        row["raw_suggested_size"] = _size(rank)
         row["conviction_tier"] = f"{rank} Tier"
         row["exclusion_reason"] = _exclusion_reason(row)
         row["option_liquidity_warning"] = "" if bool(row.get("option_liquidity_ok", False)) else str(row.get("option_liquidity_reason", "Option liquidity warning"))
+
+        if row["exclusion_reason"] == "" and rank in {"S", "A", "B"}:
+            row.update(catalyst_route_for(str(row.get("ticker", "")), routing_config))
+        else:
+            reason = row["exclusion_reason"] or f"rank_{rank}_not_actionable"
+            row.update(_not_evaluated_catalyst(reason))
+
+        row["suggested_size"] = (
+            "WATCH_ONLY"
+            if row.get("action_route") == "NEWS_SPIKE_WATCH_ONLY"
+            else row["raw_suggested_size"]
+        )
         rows.append(row)
     scored = pd.DataFrame(rows)
     order = {"S": 0, "A": 1, "B": 2, "C": 3, "D": 4}
@@ -272,16 +310,29 @@ def _patched_schedule_kind(schedule_utc: str) -> str:
 
 def _patched_candidate_block(row: pd.Series) -> str:
     price = row.get("latest_price", row.get("close", math.nan))
+    action = row.get("action_route") or (
+        "WAKE_AND_CHECK" if row.get("alert_rank") in {"S", "A", "B"} else "DISCORD_ONLY"
+    )
+    headline = str(row.get("catalyst_headline", "") or "")
+    catalyst_line = (
+        f"catalyst: {row.get('catalyst_type', 'UNKNOWN')} / "
+        f"confidence: {row.get('catalyst_confidence', 'unknown')} / "
+        f"source: {row.get('catalyst_source', '') or 'N/A'}\n"
+    )
+    headline_line = f"catalyst_headline: {headline}\n" if headline else ""
     return (
         f"[{row.get('alert_rank')} BREAKOUT] {row.get('ticker')} - {row.get('company_name') or 'N/A'}\n"
         f"production_live_score: {float(row.get('production_live_score', 0)):.1f} / "
         f"production_adjusted_score: {float(row.get('production_adjusted_score', 0)):.1f} / rank {row.get('alert_rank')}\n"
-        f"volume penalty: {float(row.get('volume_penalty', 0)):.0f} / suggested size: {row.get('suggested_size', 'N/A')}\n"
+        f"volume penalty: {float(row.get('volume_penalty', 0)):.0f} / suggested size: {row.get('suggested_size', 'N/A')} "
+        f"(raw: {row.get('raw_suggested_size', 'N/A')})\n"
         f"gap: {sn.format_pct(row.get('gap_pct'))} / volume: {float(row.get('volume_multiple', 0)):.2f}x / price: {float(price):.2f}\n"
         f"sector: {row.get('sector_proxy', 'N/A')} / theme: {row.get('theme', 'N/A')}\n"
+        f"{catalyst_line}"
+        f"{headline_line}"
         f"option_liquidity_warning: {row.get('option_liquidity_warning', '') or 'None'}\n"
         f"exclusion_reason: {row.get('exclusion_reason', '') or 'None'}\n"
-        f"action: {'WAKE_AND_CHECK' if row.get('alert_rank') in {'S', 'A', 'B'} else 'DISCORD_ONLY'}\n"
+        f"action: {action} / reason: {row.get('action_reason', '') or 'None'}\n"
         f"scan_time_jst: {pd.Timestamp.now(tz='Asia/Tokyo').isoformat()}\n"
         "--------------------------------"
     )
@@ -296,7 +347,11 @@ def _patched_build_message(candidates: pd.DataFrame, csv_path: Path, schedule_ut
         "intraday_2300": "23:00 JST Breakout Check",
         "pre_close_0430": "04:30 JST Pre-Close Breakout Check",
     }.get(_patched_schedule_kind(schedule_utc), "Production Momentum Alert")
-    sections = [title, "RS98 + 20-day breakout + volume pace. Candidate discovery only."]
+    sections = [
+        title,
+        "RS98 + 20-day breakout + volume pace. Candidate discovery only.",
+        "NEWS_SPIKE_WATCH_ONLY = contract/partnership/customer-win/order headline; no immediate call entry.",
+    ]
     shown = 0
     for rank in ["S", "A", "B", "C"]:
         group = visible[visible["alert_rank"] == rank].head(max(0, limit - shown))
@@ -316,7 +371,20 @@ def _patched_build_message(candidates: pd.DataFrame, csv_path: Path, schedule_ut
 def _patched_select_pushover_candidates(candidates: pd.DataFrame, schedule_utc: str, config: dict[str, Any]) -> pd.DataFrame:
     if schedule_utc not in PRE_CLOSE_SCAN_SCHEDULES or candidates.empty:
         return candidates.iloc[0:0].copy()
-    base = candidates[(candidates["exclusion_reason"].fillna("") == "") & candidates["alert_rank"].isin(["S", "A", "B"])].copy()
+
+    routing = sn.production_config(config).get("catalyst_routing", {}) or {}
+    routes = candidates.get(
+        "action_route",
+        pd.Series("STANDARD_BREAKOUT_REVIEW", index=candidates.index, dtype="object"),
+    )
+    base = candidates[
+        (candidates["exclusion_reason"].fillna("") == "")
+        & candidates["alert_rank"].isin(["S", "A", "B"])
+        & (
+            (routes != "NEWS_SPIKE_WATCH_ONLY")
+            | (not bool(routing.get("suppress_pushover_emergency", True)))
+        )
+    ].copy()
     state_path = _state_path(Path("scanner_alerts") / sn.today_str() / "russell1000_momentum_candidates.csv")
     state = _load_state(state_path)
     sendable = pd.DataFrame([row for _, row in base.iterrows() if _needs_emergency(row, state)])
@@ -337,6 +405,7 @@ def _patched_build_pushover_message(candidates: pd.DataFrame, csv_path: Path, li
             f"Price {float(row.get('latest_price', row.get('close', 0))):.2f} | "
             f"RS {float(row.get('standard_rs_score', 0)):.1f} | Vol {float(row.get('volume_multiple', 0)):.2f}x | "
             f"Score {float(row.get('production_adjusted_score', 0)):.1f} | Size {row.get('suggested_size', 'N/A')} | "
+            f"Catalyst {row.get('catalyst_type', 'UNKNOWN')} ({row.get('catalyst_confidence', 'unknown')}) | "
             f"Sector {row.get('sector_proxy', 'N/A')} | Theme {row.get('theme', 'N/A')} | "
             f"Gap {sn.format_pct(row.get('gap_pct'))} | IV {sn.format_pct(row.get('option_iv'))} | "
             f"Warnings {row.get('danger_flags', 'None')}"
