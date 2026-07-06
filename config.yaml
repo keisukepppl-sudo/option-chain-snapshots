@@ -43,6 +43,11 @@ notify:
       min_volume: 0
       max_relative_spread: 0.30
       max_spread_abs: 1.00
+    catalyst_routing:
+      enabled: true
+      lookback_hours: 48
+      max_news_items: 8
+      suppress_pushover_emergency: true
     exit_rules:
       profit_take: 1.25
       time_stop_days: 10
