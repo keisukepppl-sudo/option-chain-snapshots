@@ -65,8 +65,9 @@ def test_legacy_gate_fails_artifact_only() -> None:
     assert all(row["legacy_identity_reused_for_current_state"] is False for row in gate)
 
 
-def test_row_count_reconciles_and_summary() -> None:
+def test_row_count_reconciles_and_summary(monkeypatch) -> None:
     dates, pos = session_pos()
+    monkeypatch.setattr(m, "baseline_receipt", lambda: {"repository_commit_sha": "test", "run_id": "run"})
     rows = m.build_state_rows(s_fixture(dates), pos)
     summary = m.classification_summary(rows)
     assert sum(row["raw_s_event_count"] for row in summary) == len(rows)

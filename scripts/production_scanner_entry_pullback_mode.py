@@ -9,6 +9,7 @@ import pandas as pd
 
 import scripts.production_scanner_entry as entry
 import scripts.production_scanner_entry_0430 as runner
+import scripts.build_morita_regime_sizing_overlay_v1 as regime_overlay
 
 ALL_RANKS = ["S", "A", "B", "C"]
 WAKE_RANKS = ["S"]
@@ -67,6 +68,8 @@ def _candidate_block(row: pd.Series) -> str:
         header = f"[{rank} RESEARCH] {row.get('ticker')} - {row.get('company_name') or 'N/A'}"
         action = "DISCORD_ONLY"
         rule = "Research only"
+    overlay_text = regime_overlay.notification_overlay_block(row) if rank == "S" else ""
+    overlay_section = f"{overlay_text}\n" if overlay_text else ""
     return (
         f"{header}\n"
         f"production_adjusted_score: {float(row.get('production_adjusted_score', 0)):.1f} / rank {rank}\n"
@@ -74,6 +77,7 @@ def _candidate_block(row: pd.Series) -> str:
         f"gap: {entry.sn.format_pct(row.get('gap_pct'))} / volume: {float(row.get('volume_multiple', 0)):.2f}x / price: {price:.2f}\n"
         f"sector: {row.get('sector_proxy', 'N/A')} / theme: {row.get('theme', 'N/A')}\n"
         f"option_liquidity_warning: {row.get('option_liquidity_warning', '') or 'None'}\n"
+        f"{overlay_section}"
         f"action: {action}\n"
         f"rule: {rule}\n"
         f"scan_time_jst: {pd.Timestamp.now(tz='Asia/Tokyo').isoformat()}\n"
@@ -122,7 +126,8 @@ def _save_candidates(candidates: pd.DataFrame, outdir: Path) -> Path:
     token = entry._scan_time_token()
     outdir.mkdir(parents=True, exist_ok=True)
     visible = _visible(candidates)
-    visible[visible["alert_rank"] == "S"].to_csv(outdir / f"breakout_momentum_{token}.csv", index=False)
+    visible_with_overlay = regime_overlay.enrich_s_candidates(visible, write_logs=True)
+    visible_with_overlay[visible_with_overlay["alert_rank"] == "S"].to_csv(outdir / f"breakout_momentum_{token}.csv", index=False)
     visible[visible["alert_rank"].isin(["A", "B"])].to_csv(outdir / f"pullback_watchlist_{token}.csv", index=False)
     pd.DataFrame(columns=list(candidates.columns) + ["rebound_confirmation_type", "close_vs_20ema_pct", "pullback_volume_ratio"]).to_csv(outdir / f"pullback_entry_signals_{token}.csv", index=False)
     visible[~visible["alert_rank"].isin(["S", "A", "B"])].to_csv(outdir / f"pullback_rejected_{token}.csv", index=False)
@@ -163,12 +168,13 @@ def _build_s_only_pushover_message(candidates: pd.DataFrame, csv_path: Path, lim
         "Review: Delta0.6 / 90DTE single call only after chart, market, earnings, and option liquidity pass.",
     ]
     for _, row in candidates.head(limit).iterrows():
+        overlay_text = regime_overlay.notification_overlay_block(row).replace("\n", " | ")
         lines.append(
             f"S | {row.get('ticker')} {row.get('company_name') or ''} | "
             f"Price {float(row.get('latest_price', row.get('close', 0))):.2f} | "
             f"RS {float(row.get('standard_rs_score', 0)):.1f} | Vol {float(row.get('volume_multiple', 0)):.2f}x | "
             f"Score {float(row.get('production_adjusted_score', 0)):.1f} | "
-            f"Theme {row.get('theme', 'N/A')} | IV {entry.sn.format_pct(row.get('option_iv'))} | Warnings {row.get('danger_flags', 'None')}"
+            f"Theme {row.get('theme', 'N/A')} | IV {entry.sn.format_pct(row.get('option_iv'))} | Warnings {row.get('danger_flags', 'None')} | {overlay_text}"
         )
     lines.append(f"CSV: {csv_path}")
     return "\n".join(lines)

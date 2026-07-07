@@ -26,8 +26,9 @@ def s_fixture(dates: list[str]) -> pd.DataFrame:
     )
 
 
-def test_every_source_row_gets_one_classification_and_no_gap_rebreakout() -> None:
+def test_every_source_row_gets_one_classification_and_no_gap_rebreakout(monkeypatch) -> None:
     dates, pos = session_pos()
+    monkeypatch.setattr(m, "baseline_receipt", lambda: {"repository_commit_sha": "test", "run_id": "run"})
     rows, native = m.classify_notifications(s_fixture(dates), pos)
     assert native["status"] == "NATIVE_CURRENT_S_LOGIC_NOT_FOUND"
     assert len(rows) == 3

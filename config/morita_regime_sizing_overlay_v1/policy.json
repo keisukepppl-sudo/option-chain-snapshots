@@ -1,0 +1,28 @@
+{
+  "policy_version": "morita_regime_sizing_overlay_v1",
+  "scope": "S_only",
+  "mode": "notification_and_logging_only",
+  "normal": {
+    "base_target_premium_pct": 0.30,
+    "legacy_50pct_exception_allowed": true,
+    "rolling_10_session_new_S_cap_pct": null
+  },
+  "high_dispersion": {
+    "target_premium_pct": 0.20,
+    "legacy_50pct_exception_allowed": false,
+    "rolling_10_session_new_S_cap_pct": 0.40
+  },
+  "narrow_leadership": {
+    "target_premium_pct": 0.15,
+    "legacy_50pct_exception_allowed": false,
+    "rolling_10_session_new_S_cap_pct": 0.30
+  },
+  "regime_unavailable_conservative": {
+    "target_premium_pct": 0.20,
+    "legacy_50pct_exception_allowed": false,
+    "rolling_10_session_new_S_cap_pct": 0.40
+  },
+  "rolling_window_sessions": 10,
+  "broker_execution_enabled": false,
+  "auto_trade_action_enabled": false
+}
