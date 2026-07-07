@@ -1,0 +1,5 @@
+cell,cell_description,complete_signal_count,largest_single_ticker_share,top_five_ticker_share,unique_ticker_count
+A,D_high_and_L_high,0,,,0
+B,D_high_and_L_not_high,0,,,0
+C,D_not_high_and_L_high,0,,,0
+D,D_not_high_and_L_not_high,0,,,0

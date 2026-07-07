@@ -1,0 +1,23 @@
+{
+  "inherited_cutoffs": {
+    "broad_russell1000_cross_sectional_dispersion_20d": {
+      "metric": "broad_russell1000_cross_sectional_dispersion_20d",
+      "p33": 0.0907138950199848,
+      "p67": 0.1076297441118458,
+      "source_path": "outputs/morita_realized_dispersion_quick_screen/realized_dispersion_state_cutoffs.csv",
+      "source_sha256": "9eeea4426a5ff858c1fd69adb40e26c4954a49baabd849246a0abe3a244ec91c",
+      "state_construction": "unique_complete_signal_date_ex_post_terciles"
+    },
+    "broad_russell1000_qqq_minus_eqw_return_20d": {
+      "metric": "broad_russell1000_qqq_minus_eqw_return_20d",
+      "p33": -0.0099227766667306,
+      "p67": 0.0211600633543862,
+      "source_path": "outputs/morita_realized_dispersion_quick_screen/realized_dispersion_state_cutoffs.csv",
+      "source_sha256": "9eeea4426a5ff858c1fd69adb40e26c4954a49baabd849246a0abe3a244ec91c",
+      "state_construction": "unique_complete_signal_date_ex_post_terciles"
+    }
+  },
+  "inherited_from": "outputs/morita_realized_dispersion_quick_screen/realized_dispersion_state_cutoffs.csv",
+  "state_definition": "frozen_2024_2026_full_sample_ex_post_tercile_states_reused_without_retuning",
+  "threshold_search_performed": false
+}

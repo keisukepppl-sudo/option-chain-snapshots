@@ -1,0 +1,12 @@
+metric,state,decision_date_count
+broad_russell1000_cross_sectional_dispersion_20d,low,88
+broad_russell1000_cross_sectional_dispersion_20d,middle,20
+broad_russell1000_cross_sectional_dispersion_20d,high,18
+broad_russell1000_cross_sectional_dispersion_20d,metric_unavailable,0
+broad_russell1000_qqq_minus_eqw_return_20d,low,39
+broad_russell1000_qqq_minus_eqw_return_20d,middle,51
+broad_russell1000_qqq_minus_eqw_return_20d,high,36
+broad_russell1000_qqq_minus_eqw_return_20d,metric_unavailable,0
+D_L_2x2_cell,B,18
+D_L_2x2_cell,C,36
+D_L_2x2_cell,D,72

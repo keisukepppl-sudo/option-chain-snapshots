@@ -1,0 +1,17 @@
+cell,metric,replication_2023,prior_2024_2026_confirmation,comparison_status
+A,complete_signal_count,0.0,52.0,insufficient_2023_sample
+A,plus5_success_rate,,0.4230769230769231,insufficient_2023_sample
+A,breakout_low_breach_rate,,0.5576923076923077,insufficient_2023_sample
+A,timeout_rate,,0.0192307692307692,insufficient_2023_sample
+B,complete_signal_count,0.0,77.0,insufficient_2023_sample
+B,plus5_success_rate,,0.5714285714285714,insufficient_2023_sample
+B,breakout_low_breach_rate,,0.3896103896103896,insufficient_2023_sample
+B,timeout_rate,,0.0389610389610389,insufficient_2023_sample
+C,complete_signal_count,0.0,50.0,insufficient_2023_sample
+C,plus5_success_rate,,0.68,insufficient_2023_sample
+C,breakout_low_breach_rate,,0.28,insufficient_2023_sample
+C,timeout_rate,,0.04,insufficient_2023_sample
+D,complete_signal_count,0.0,129.0,insufficient_2023_sample
+D,plus5_success_rate,,0.6356589147286822,insufficient_2023_sample
+D,breakout_low_breach_rate,,0.3255813953488372,insufficient_2023_sample
+D,timeout_rate,,0.0387596899224806,insufficient_2023_sample

@@ -1,0 +1,7 @@
+scope,comparison,left_side,right_side,left_complete_signal_count,right_complete_signal_count,plus5_difference_pp,breach_difference_pp,timeout_difference_pp,directionally_adverse,comparison_status
+2023_replication,A_vs_B,A,B,0,0,,,,False,insufficient_sample
+2023_replication,A_vs_C,A,C,0,0,,,,False,insufficient_sample
+2023_replication,A_vs_D,A,D,0,0,,,,False,insufficient_sample
+2023_replication,A_vs_pooled_BCD,A,pooled_BCD,0,0,,,,False,insufficient_sample
+2023_replication,C_vs_D,C,D,0,0,,,,False,insufficient_sample
+2023_replication,B_vs_D,B,D,0,0,,,,False,insufficient_sample

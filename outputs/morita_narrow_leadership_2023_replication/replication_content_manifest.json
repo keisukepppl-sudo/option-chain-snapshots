@@ -1,0 +1,82 @@
+{
+  "artifact_version": "morita_narrow_leadership_2023_replication_v1",
+  "content_set_hash": "b8472cf93741657dcf376401199cbe7f2387c1bd8f52bb9c9d375f263f3b1f1a",
+  "created_at_utc": "2026-07-07T13:43:29Z",
+  "files": [
+    {
+      "bytes": 314,
+      "relative_path": "2023_replication_label.json",
+      "sha256": "9d841be40809f910841ed5867c19a84a3602f8b69783128ed9fc71f1022b3891"
+    },
+    {
+      "bytes": 239,
+      "relative_path": "2023_s_2x2_cell_coverage.csv",
+      "sha256": "28aa61bd051f7c6b88ec9cda673ab85ab9504f3701f6fc8ff677718922ff89c7"
+    },
+    {
+      "bytes": 308,
+      "relative_path": "2023_s_2x2_outcome_summary.csv",
+      "sha256": "8abae158c82477257fd60ec739aa099fb8591e57bc9558d1867c4c41901537df"
+    },
+    {
+      "bytes": 587,
+      "relative_path": "2023_s_2x2_required_comparisons.csv",
+      "sha256": "7fbd961bf10bc7bdf66d3de664d15696517ba6efe4886e8ec5d5cc03819e42e5"
+    },
+    {
+      "bytes": 32,
+      "relative_path": "2023_s_2x2_ticker_concentration.csv",
+      "sha256": "9a779eddb203a17ea0c19735c0c49d3b2dd8aa354c28d25c0eb3623cf9cecf52"
+    },
+    {
+      "bytes": 319,
+      "relative_path": "2023_signal_reconciliation.csv",
+      "sha256": "ca9824ec34448993f5e4f1014630c560d6f4cfd1f588534284dc7d3e5c9c07a1"
+    },
+    {
+      "bytes": 1076,
+      "relative_path": "2023_vs_2024_2026_comparison.csv",
+      "sha256": "a7a9a5067cc338b88d3217b1e733a8f6238b10197fa86a5458afd0b7c9641fb9"
+    },
+    {
+      "bytes": 345,
+      "relative_path": "historical_coverage_2023.csv",
+      "sha256": "411f92f92c90edd9bf61db273bbd5278c3845f6273b30413650a765c7e0ae0f3"
+    },
+    {
+      "bytes": 482,
+      "relative_path": "input_verification.csv",
+      "sha256": "182ed00967261e48190456f2f281c5088aa353cb4f4a98562c117ca64f3416d1"
+    },
+    {
+      "bytes": 1107,
+      "relative_path": "replication_receipt.json",
+      "sha256": "481392e478562fb0f928715c609f516bd8e9a0afff81d09d9ee86ac3fa040002"
+    },
+    {
+      "bytes": 4747,
+      "relative_path": "replication_summary.md",
+      "sha256": "d724fa1de117947b3ec0d0bea2291d4da8c04208c1e34ad1139506ba8c41870a"
+    },
+    {
+      "bytes": 2482,
+      "relative_path": "rs_warmup_diagnostic_2023.csv",
+      "sha256": "9146127a4caf0ce81a0a662b5084f0f78522d57747e61f857fcaf73fcb7969ed"
+    },
+    {
+      "bytes": 559,
+      "relative_path": "state_coverage_2023.csv",
+      "sha256": "d467576fda0e0b9aa8b614c5eae1df83927b9520ce3e7b7f5010325ffa410b51"
+    },
+    {
+      "bytes": 1243,
+      "relative_path": "state_cutoff_inheritance.json",
+      "sha256": "a542f959568c65b4985609c861a636a802cd3c87c10f0029b4d2ccefbe0b210a"
+    },
+    {
+      "bytes": 882,
+      "relative_path": "state_metric_lineage.json",
+      "sha256": "babf5c6442b2a3406f1513b83748a8aa465d1c7195e409974a6ed88737d7aecd"
+    }
+  ]
+}

@@ -1,0 +1,6 @@
+bucket,count,reason
+all_2023_formal_signal_rows,0,formal baseline panel
+all_2023_rejected_dates,126,formal baseline rejected audit
+2023_s_complete_state_joined,0,rank S and complete outcome
+2023_s_complete_eligible_2x2,0,state available
+rejected_no_breakout_prefilter_candidate,126,formal baseline rejected audit

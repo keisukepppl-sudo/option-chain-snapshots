@@ -1,0 +1,20 @@
+{
+  "actionization_allowed": false,
+  "artifact_version": "morita_narrow_leadership_2023_replication_v1",
+  "baseline_run_dir": "market_bomb_history/morita_bot_historical_baseline_v1/historical_runs/morita_baseline_20260703T123912Z_4994e3744ffa",
+  "baseline_run_id": "morita_baseline_20260703T123912Z_4994e3744ffa",
+  "confirmation_output_dir": "outputs/morita_narrow_leadership_confirmation",
+  "created_at_utc": "2026-07-07T13:43:29Z",
+  "dispersion_output_dir": "outputs/morita_realized_dispersion_quick_screen",
+  "eligible_2023_s_complete_signal_count": 0,
+  "live_action_allowed": false,
+  "new_data_downloaded": false,
+  "option_pnl_performed": false,
+  "replication_label": "no_2023_s_signals_available_for_2x2_replication",
+  "replication_observation_end": "2023-12-31",
+  "replication_observation_start": "2023-07-03",
+  "repository_commit_sha": "d7d3e5ec213a2a6c269ab114159c2a263de06ef8",
+  "research_decision": "cannot_confirm_or_refute_2024_2026_pattern_from_2023",
+  "status": "morita_narrow_leadership_2023_replication_completed",
+  "threshold_search_performed": false
+}
