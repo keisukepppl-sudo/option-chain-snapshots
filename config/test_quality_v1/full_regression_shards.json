@@ -49,6 +49,7 @@
         "tests/test_market_bomb_phase3_2b_morita_history_reconstruction.py",
         "tests/test_morita_bot_source_seal_v1.py",
         "tests/test_morita_failed_breakout_short_forward_v1.py",
+        "tests/test_morita_material_spike_put_vertical_research_v1.py",
         "tests/test_morita_mechanical_flow_monitor_v1.py",
         "tests/test_morita_portfolio_ledger_v1.py",
         "tests/test_phase1_6c_morita_bot_mechanical_flow_context_study.py",

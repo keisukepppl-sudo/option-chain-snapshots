@@ -1,0 +1,65 @@
+{
+  "policy_version": "morita_material_spike_put_vertical_v1",
+  "mode": "research_only",
+  "broker_execution_enabled": false,
+  "auto_trade_action_enabled": false,
+  "live_signal_enabled": false,
+  "rank_change_allowed": false,
+  "sizing_change_allowed": false,
+  "notification_change_allowed": false,
+  "existing_morita_behavior_change_allowed": false,
+  "future_leakage_allowed": false,
+  "baseline_population": "existing_morita_initial_breakout_candidates",
+  "universe_expansion_status": "input_panel_driven_russell1000_iwb_proxy_allowed_for_v1",
+  "material_spike_proxy": {
+    "candidate_material_spike": {
+      "gap_pct_min": 0.08,
+      "signal_date_return_min": 0.10,
+      "volume_multiple_min": 3.0,
+      "breakout_excess_pct_min": 0.05
+    },
+    "candidate_extreme_material_spike": {
+      "gap_pct_min": 0.15,
+      "signal_date_return_min": 0.20,
+      "volume_multiple_min": 5.0
+    }
+  },
+  "failure_window_sessions": 5,
+  "put_vertical_reference_model": {
+    "model_status": "synthetic_fixed_iv_not_historical_option_fill_reconstruction",
+    "dte_calendar_days": 35,
+    "buy_put_delta": -0.35,
+    "sell_put_delta": -0.20,
+    "entry_markup": 0.05,
+    "exit_haircut": 0.05,
+    "iv_scenarios": [0.60, 0.80, 1.00],
+    "post_catalyst_iv_crush_scenarios": [0.0, -0.10, -0.20],
+    "risk_free_rate": 0.0
+  },
+  "exit_policies": {
+    "PV_5D_TP50_STOP50": {
+      "take_profit_return": 0.50,
+      "stop_loss_return": -0.50,
+      "max_holding_sessions": 5,
+      "exit_on_close_above_d0_high_next_open": true
+    },
+    "PV_10D_TP75_STOP50": {
+      "take_profit_return": 0.75,
+      "stop_loss_return": -0.50,
+      "max_holding_sessions": 10,
+      "exit_on_close_above_d0_high_next_open": true
+    },
+    "PV_10D_TP100_STOP60": {
+      "take_profit_return": 1.00,
+      "stop_loss_return": -0.60,
+      "max_holding_sessions": 10,
+      "exit_on_close_above_d0_high_next_open": true
+    },
+    "PV_15D_TP100_STOP60": {
+      "take_profit_return": 1.00,
+      "stop_loss_return": -0.60,
+      "max_holding_sessions": 15,
+      "exit_on_close_above_d0_high_next_open": true
+    }
+  }
+}
