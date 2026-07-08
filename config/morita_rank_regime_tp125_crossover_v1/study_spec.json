@@ -1,0 +1,96 @@
+{
+  "artifact_version": "morita_rank_regime_tp125_crossover_v1",
+  "research_only": true,
+  "actionization_allowed": false,
+  "live_rule_change_allowed": false,
+  "purpose": "Compare current production-style S/A rank cells across inherited realized-dispersion regimes on the same fixed-IV TP125 single-call reference contract.",
+  "source_baseline_dir": "market_bomb_history/morita_bot_historical_baseline_v1/historical_runs/morita_baseline_20260703T123912Z_4994e3744ffa",
+  "source_2023_rs_warmup_retest_dir": "outputs/morita_2023_rs_warmup_retest_v1",
+  "source_realized_dispersion_dir": "outputs/morita_realized_dispersion_quick_screen",
+  "source_narrow_leadership_confirmation_dir": "outputs/morita_narrow_leadership_confirmation",
+  "source_2023_frozen_replication_dir": "outputs/morita_narrow_leadership_2023_frozen_replication_v2",
+  "option_reference_output_dir": "outputs/morita_s_single_call_reference_v1",
+  "D_metric_name": "broad_russell1000_cross_sectional_dispersion_20d",
+  "L_metric_name": "broad_russell1000_qqq_minus_eqw_return_20d",
+  "expected_D_high_cutoff": 0.1076297441118458,
+  "expected_L_high_cutoff": 0.0211600633543862,
+  "regime_definition": {
+    "NORMAL": "D_not_high regardless L",
+    "HIGH_DISPERSION": "D_high AND L_not_high",
+    "NARROW_LEADERSHIP": "D_high AND L_high"
+  },
+  "eligible_ranks": [
+    "S",
+    "A"
+  ],
+  "complete_status": "complete",
+  "primary_period": {
+    "period_id": "primary_2024_2026_completed_confirmation_interval",
+    "decision_start": "2024-01-08",
+    "decision_end_source": "max completed S/A decision date from realized_dispersion_signal_context_panel"
+  },
+  "descriptive_period_2023": {
+    "period_id": "descriptive_2023_rs_warmup_frozen_threshold",
+    "decision_start": "2023-01-03",
+    "decision_end": "2023-12-29"
+  },
+  "cells": [
+    "S_NORMAL",
+    "S_HIGH_DISPERSION",
+    "S_NARROW_LEADERSHIP",
+    "A_NORMAL",
+    "A_HIGH_DISPERSION",
+    "A_NARROW_LEADERSHIP"
+  ],
+  "required_comparisons": [
+    {
+      "comparison_id": "PRIMARY_A_NORMAL_vs_S_NARROW_LEADERSHIP",
+      "left_cell": "A_NORMAL",
+      "right_cell": "S_NARROW_LEADERSHIP",
+      "comparison_role": "primary"
+    },
+    {
+      "comparison_id": "A_NORMAL_vs_S_HIGH_DISPERSION",
+      "left_cell": "A_NORMAL",
+      "right_cell": "S_HIGH_DISPERSION",
+      "comparison_role": "secondary"
+    },
+    {
+      "comparison_id": "A_NORMAL_vs_S_NORMAL",
+      "left_cell": "A_NORMAL",
+      "right_cell": "S_NORMAL",
+      "comparison_role": "secondary"
+    },
+    {
+      "comparison_id": "A_HIGH_DISPERSION_vs_S_HIGH_DISPERSION",
+      "left_cell": "A_HIGH_DISPERSION",
+      "right_cell": "S_HIGH_DISPERSION",
+      "comparison_role": "secondary"
+    },
+    {
+      "comparison_id": "A_NARROW_LEADERSHIP_vs_S_NARROW_LEADERSHIP",
+      "left_cell": "A_NARROW_LEADERSHIP",
+      "right_cell": "S_NARROW_LEADERSHIP",
+      "comparison_role": "secondary"
+    }
+  ],
+  "sample_gates": {
+    "primary_comparison_min_per_side": 10,
+    "descriptive_min_per_cell": 10
+  },
+  "tp125_floor": {
+    "floor_hit_rate": 0.35,
+    "preferred_hit_rate": 0.40
+  },
+  "option_contract": {
+    "engine": "src.morita_single_call_reference.s_single_call_reference_engine.model_trade",
+    "contract_id": "morita_s_single_call_fixed_iv_reference_v1",
+    "option_side": "call",
+    "initial_calendar_dte": 60,
+    "target_entry_delta": 0.60,
+    "annualized_implied_volatility": 0.60,
+    "entry_markup": 0.05,
+    "exit_haircut": 0.05,
+    "tp125_semantics": "first executable model path high touch >= +125% is capped to +125%; otherwise terminal close return from existing fixed-IV reference engine"
+  }
+}
