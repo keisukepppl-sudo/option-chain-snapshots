@@ -1,0 +1,43 @@
+{
+  "policy_version": "morita_failed_breakout_short_forward_v1",
+  "mode": "research_logging_only",
+  "daily_research_summary_enabled": false,
+  "pushover_emergency_enabled": false,
+  "broker_execution_enabled": false,
+  "auto_trade_action_enabled": false,
+  "live_short_signal_enabled": false,
+  "put_alert_enabled": false,
+  "long_s_logic_change_allowed": false,
+  "rank_universe_rule_change_allowed": false,
+  "regime_sizing_policy_change_allowed": false,
+  "regime_thresholds": {
+    "D_high_cutoff": 0.1076297441118458,
+    "L_high_cutoff": 0.0211600633543862,
+    "D_metric_name": "broad_russell1000_cross_sectional_dispersion_20d",
+    "L_metric_name": "broad_russell1000_qqq_minus_eqw_return_20d",
+    "threshold_source_lineage": {
+      "source": "inherited_morita_regime_sizing_overlay",
+      "verification_status": "codified_for_forward_logger_v1_from_requested_existing_overlay_values",
+      "expected_D_high_cutoff": 0.1076297441118458,
+      "expected_L_high_cutoff": 0.0211600633543862,
+      "regime_mapping": {
+        "NORMAL": "D_not_high",
+        "HIGH_DISPERSION": "D_high_AND_L_not_high",
+        "NARROW_LEADERSHIP": "D_high_AND_L_high"
+      }
+    }
+  },
+  "breakout_rule": {
+    "prior_high_lookback_sessions": 65,
+    "volume_lookback_sessions": 50,
+    "volume_multiple_min": 1.2,
+    "source_scanner_rule": "scanner.breakout.detect_breakout close_above_prior_65d_high_with_volume"
+  },
+  "failure_rule": {
+    "tracking_sessions_after_breakout": 10,
+    "primary_trigger": "close_below_breakout_day_low",
+    "diagnostic_only_trigger": "intraday_low_below_breakout_day_low",
+    "hypothetical_entry": "next_regular_session_open_after_failure_close"
+  },
+  "option_model_status": "not_implemented_in_forward_logger_v1"
+}

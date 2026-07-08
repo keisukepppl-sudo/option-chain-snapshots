@@ -425,6 +425,21 @@ def _patched_send_pushover_emergency(message: str, title: str = "04:30 Breakout 
         raise
 
 
+def _maybe_run_forward_research_loggers() -> None:
+    if os.environ.get("MORITA_FORWARD_RESEARCH_LOGGERS_ENABLED", "").strip().lower() not in {"1", "true", "yes"}:
+        return
+    from scripts.build_morita_mechanical_flow_monitor_v1 import build_monitor
+
+    build_monitor()
+    price_panel = os.environ.get("MORITA_FAILED_BREAKOUT_PRICE_PANEL")
+    rs_panel = os.environ.get("MORITA_FAILED_BREAKOUT_RS_PANEL")
+    regime_panel = os.environ.get("MORITA_FAILED_BREAKOUT_REGIME_PANEL")
+    if price_panel and rs_panel and regime_panel:
+        from scripts.build_morita_failed_breakout_short_forward_v1 import build_forward_logger
+
+        build_forward_logger(pd.read_csv(price_panel), pd.read_csv(rs_panel), pd.read_csv(regime_panel))
+
+
 ORIGINAL_SELECT_CANDIDATES = sn.select_candidates
 ORIGINAL_SAVE_CANDIDATES = sn.save_candidates
 ORIGINAL_SCHEDULE_KIND = sn.schedule_kind
@@ -445,6 +460,7 @@ def main() -> None:
     if schedule in {"15 19 * * 1-5", "25 19 * * 1-5", "35 19 * * 1-5"}:
         os.environ["SCANNER_SCHEDULE_UTC"] = "30 19 * * 1-5"
     sn.main()
+    _maybe_run_forward_research_loggers()
 
 
 if __name__ == "__main__":

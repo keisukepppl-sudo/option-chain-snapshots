@@ -1,0 +1,22 @@
+{
+  "policy_version": "morita_mechanical_flow_monitor_v1",
+  "mode": "research_logging_only",
+  "metric_families": [
+    "cta_trend_following_proxy",
+    "volatility_control_proxy",
+    "risk_parity_bond_vol_proxy",
+    "leveraged_etf_flow_proxy",
+    "breadth_proxy",
+    "vix_curve_state",
+    "qqq_spy_equal_weight_spread_context"
+  ],
+  "research_only": true,
+  "no_signal_filtering": true,
+  "no_auto_execution": true,
+  "broker_execution_enabled": false,
+  "auto_trade_action_enabled": false,
+  "pushover_emergency_enabled": false,
+  "rank_change_allowed": false,
+  "sizing_change_allowed": false,
+  "notification_change_allowed": false
+}
