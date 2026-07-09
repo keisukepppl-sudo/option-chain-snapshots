@@ -1,0 +1,96 @@
+{
+  "artifact_version": "morita_former_leader_retest_short_v1",
+  "research_only": true,
+  "actionization_allowed": false,
+  "live_short_signal_allowed": false,
+  "broker_or_account_access_allowed": false,
+  "long_s_bot_change_allowed": false,
+  "regime_threshold_retune_allowed": false,
+  "analysis_end_date": "2026-06-30",
+  "required_ohlcv_start_for_2022_rs_warmup": "2021-01-01",
+  "periods": {
+    "2022": {
+      "start": "2022-01-01",
+      "end": "2022-12-31",
+      "requires_2021_warmup": true
+    },
+    "2023": {
+      "start": "2023-01-01",
+      "end": "2023-12-31",
+      "requires_2022_warmup": true
+    },
+    "2024_2026": {
+      "start": "2024-01-01",
+      "end": "2026-06-30",
+      "requires_2023_warmup": true
+    },
+    "combined_2022_2026_descriptive_only": {
+      "start": "2022-01-01",
+      "end": "2026-06-30",
+      "descriptive_only": true
+    }
+  },
+  "source_ohlcv_path": "outputs/morita_2023_rs_warmup_retest_v1/input/morita_baseline_2022warmup_2023_2026_v1/sources/daily_ohlcv_merged.csv",
+  "source_ohlcv_manifest": "outputs/morita_2023_rs_warmup_retest_v1/input/morita_baseline_2022warmup_2023_2026_v1/source_manifest.json",
+  "source_universe_path": "outputs/morita_2023_rs_warmup_retest_v1/input/morita_baseline_2022warmup_2023_2026_v1/sources/universe_membership.csv",
+  "source_baseline_run_dir": "market_bomb_history/morita_bot_historical_baseline_v1/historical_runs/morita_baseline_20260703T123912Z_4994e3744ffa",
+  "source_2023_signal_panel": "outputs/morita_2023_rs_warmup_retest_v1/morita_2023_signal_panel.csv",
+  "source_regime_daily_panel": "outputs/morita_realized_dispersion_quick_screen/realized_dispersion_daily_panel.csv",
+  "source_regime_cutoffs": "outputs/morita_realized_dispersion_quick_screen/realized_dispersion_state_cutoffs.csv",
+  "expected_D_high_cutoff": 0.1076297441118458,
+  "expected_L_high_cutoff": 0.0211600633543862,
+  "D_metric_name": "broad_russell1000_cross_sectional_dispersion_20d",
+  "L_metric_name": "broad_russell1000_qqq_minus_eqw_return_20d",
+  "former_leader_episode_dedup_sessions": 20,
+  "breakdown_min_sessions_after_origin": 5,
+  "breakdown_max_sessions_after_origin": 60,
+  "retest_min_sessions_after_breakdown": 1,
+  "retest_max_sessions_after_breakdown": 20,
+  "primary_retest_tolerance_pct": 0.025,
+  "diagnostic_retest_tolerances_pct": [
+    0.015,
+    0.05
+  ],
+  "rs_breakout_volume_multiple_min": 1.2,
+  "option_models": {
+    "long_put_60d_fixed_iv100": {
+      "dte": 60,
+      "iv": 1.0,
+      "risk_free_rate": 0.04,
+      "entry_markup": 0.075,
+      "exit_haircut": 0.075
+    },
+    "put_vertical_60d_fixed_iv100": {
+      "dte": 60,
+      "iv": 1.0,
+      "risk_free_rate": 0.04,
+      "entry_markup": 0.075,
+      "exit_haircut": 0.075,
+      "short_put_strike_pct": 0.9
+    },
+    "long_put_60d_fixed_iv100_stress_cost": {
+      "dte": 60,
+      "iv": 1.0,
+      "risk_free_rate": 0.04,
+      "entry_markup": 0.15,
+      "exit_haircut": 0.15
+    },
+    "put_vertical_60d_fixed_iv100_stress_cost": {
+      "dte": 60,
+      "iv": 1.0,
+      "risk_free_rate": 0.04,
+      "entry_markup": 0.15,
+      "exit_haircut": 0.15,
+      "short_put_strike_pct": 0.9
+    }
+  },
+  "sample_gates": {
+    "minimum_sample": 20,
+    "preferred_sample": 50,
+    "largest_single_ticker_share_max": 0.3,
+    "top_five_ticker_share_max": 0.65,
+    "acceptable_recovered_retest_high_10d_rate_max": 0.5,
+    "acceptable_median_mae_10d_max": 0.08,
+    "acceptable_p90_mae_10d_max": 0.2
+  }
+}
