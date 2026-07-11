@@ -25,7 +25,7 @@ gcloud auth list --filter=status:ACTIVE --format="value(account)" | grep -q . ||
 gcloud config set project "${PROJECT_ID}"
 gcloud projects describe "${PROJECT_ID}" >/dev/null
 
-BILLING_ENABLED="$(gcloud beta billing projects describe "${PROJECT_ID}" --format='value(billingEnabled)' 2>/dev/null || true)"
+BILLING_ENABLED="$(gcloud billing projects describe "${PROJECT_ID}" --format='value(billingEnabled)' 2>/dev/null || true)"
 if [[ "${BILLING_ENABLED}" != "True" && "${BILLING_ENABLED}" != "true" ]]; then
   echo "Billing is not enabled for ${PROJECT_ID}. Enable billing, then rerun." >&2
   exit 1
@@ -157,18 +157,21 @@ else
   gcloud scheduler jobs create http "${SCHEDULER_JOB}" "${COMMON_SCHEDULER_ARGS[@]}"
 fi
 
-echo
-echo "Deployment complete."
-echo "Service URL: ${SERVICE_URL}"
-echo "State bucket: gs://${BUCKET_NAME}"
-echo "Scheduler: ${SCHEDULER_JOB} (${SCHEDULE} UTC)"
-echo "DRY_RUN: ${DRY_RUN}"
-echo
-echo "Manual shadow test:"
-echo "  TOKEN=\$(gcloud auth print-identity-token)"
-echo "  curl -X POST -H \"Authorization: Bearer \${TOKEN}\" -H 'Content-Type: application/json' \\\" 
-echo "    '${SERVICE_URL}/tick' -d '{\"force_action\":\"12:00\",\"mock_time_et\":\"2026-07-10T12:05:00-04:00\"}'"
-echo
-echo "After shadow validation, enable live notifications:"
-echo "  gcloud run services update ${SERVICE_NAME} --region=${REGION} \\\" 
-echo "    --update-env-vars=DRY_RUN=false,ALLOW_TEST_OVERRIDES=false"
+cat <<EOF
+
+Deployment complete.
+Service URL: ${SERVICE_URL}
+State bucket: gs://${BUCKET_NAME}
+Scheduler: ${SCHEDULER_JOB} (${SCHEDULE} UTC)
+DRY_RUN: ${DRY_RUN}
+
+Manual shadow test:
+  TOKEN=\$(gcloud auth print-identity-token)
+  curl -X POST -H "Authorization: Bearer \${TOKEN}" -H "Content-Type: application/json" \\
+    "${SERVICE_URL}/tick" \\
+    -d '{"force_action":"12:00","mock_time_et":"2026-07-10T12:05:00-04:00"}'
+
+After shadow validation, enable live notifications:
+  gcloud run services update ${SERVICE_NAME} --region=${REGION} \\
+    --update-env-vars=DRY_RUN=false,ALLOW_TEST_OVERRIDES=false
+EOF
