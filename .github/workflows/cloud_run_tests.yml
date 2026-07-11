@@ -39,8 +39,14 @@ jobs:
       - name: Compile Python
         run: python -m compileall morita_cloud cloud_run_app.py scripts/production_scanner_entry_et_slots.py
 
-      - name: Run Cloud Run logic tests
-        run: pytest -vv tests/test_morita_cloud_logic.py
+      - name: Test checkpoint timing
+        run: pytest -vv tests/test_morita_cloud_logic.py -k "determine_action or completed_checkpoint or precompute"
+
+      - name: Test candidate filtering
+        run: pytest -vv tests/test_morita_cloud_logic.py -k "checkpoint_filters or wake_only or missing_noon"
+
+      - name: Test cutoff-safe intraday snapshot
+        run: pytest -vv tests/test_morita_cloud_logic.py -k "snapshot_excludes"
 
       - name: Run GitHub fallback tests
         run: pytest -vv tests/test_production_scanner_entry_et_slots.py
