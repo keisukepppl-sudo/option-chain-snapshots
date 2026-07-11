@@ -34,10 +34,10 @@ jobs:
           cache: pip
 
       - name: Install dependencies
-        run: pip install -r requirements.txt -r requirements-cloudrun.txt
+        run: pip install -q -r requirements.txt -r requirements-cloudrun.txt
 
       - name: Compile Python
-        run: python -m compileall morita_cloud cloud_run_app.py scripts/production_scanner_entry_et_slots.py
+        run: python -m compileall -q morita_cloud cloud_run_app.py scripts/production_scanner_entry_et_slots.py
 
       - name: Test checkpoint retry window
         run: pytest -vv tests/test_morita_cloud_logic.py::test_determine_action_uses_checkpoint_retry_window
