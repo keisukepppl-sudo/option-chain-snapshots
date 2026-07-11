@@ -39,8 +39,11 @@ jobs:
       - name: Compile Python
         run: python -m compileall morita_cloud cloud_run_app.py scripts/production_scanner_entry_et_slots.py
 
-      - name: Run focused tests
-        run: pytest -q tests/test_morita_cloud_logic.py tests/test_production_scanner_entry_et_slots.py
+      - name: Run Cloud Run logic tests
+        run: pytest -vv tests/test_morita_cloud_logic.py
+
+      - name: Run GitHub fallback tests
+        run: pytest -vv tests/test_production_scanner_entry_et_slots.py
 
       - name: Validate deployment shell
         run: bash -n deploy/bootstrap_gcp.sh
