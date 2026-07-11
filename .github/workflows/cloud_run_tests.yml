@@ -1,0 +1,52 @@
+name: Cloud Run Validation
+
+on:
+  pull_request:
+    paths:
+      - "morita_cloud/**"
+      - "cloud_run_app.py"
+      - "Dockerfile"
+      - "requirements-cloudrun.txt"
+      - "deploy/bootstrap_gcp.sh"
+      - "tests/test_morita_cloud_logic.py"
+      - ".github/workflows/cloud_run_tests.yml"
+  push:
+    branches:
+      - "agent/et-notification-slots"
+    paths:
+      - "morita_cloud/**"
+      - "cloud_run_app.py"
+      - "Dockerfile"
+      - "requirements-cloudrun.txt"
+      - "deploy/bootstrap_gcp.sh"
+      - "tests/test_morita_cloud_logic.py"
+      - ".github/workflows/cloud_run_tests.yml"
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Install dependencies
+        run: pip install -q -r requirements.txt -r requirements-cloudrun.txt
+
+      - name: Compile Python
+        run: python -m compileall -q morita_cloud cloud_run_app.py scripts/production_scanner_entry_et_slots.py
+
+      - name: Run Cloud Run logic tests
+        run: python -m pytest -vv tests/test_morita_cloud_logic.py
+
+      - name: Run GitHub fallback tests
+        run: python -m pytest -vv tests/test_production_scanner_entry_et_slots.py
+
+      - name: Validate deployment shell
+        run: bash -n deploy/bootstrap_gcp.sh
+
+      - name: Build container
+        run: docker build -t morita-cloud-run:test .

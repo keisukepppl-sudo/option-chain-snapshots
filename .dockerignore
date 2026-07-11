@@ -1,0 +1,14 @@
+.git
+.github
+.pytest_cache
+__pycache__
+*.pyc
+*.pyo
+*.pyd
+.env
+.venv
+venv
+scanner_alerts
+option_chain_snapshots
+outputs
+.scanner_state
