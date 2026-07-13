@@ -21,15 +21,24 @@ def candidate_summary_line(row: pd.Series) -> str:
     return f"{rank} {ticker} price={price:.2f} vol={volume:.2f}x score={score:.1f}"
 
 
-def checkpoint_message(slot: str, candidates: pd.DataFrame, cutoff_et: pd.Timestamp) -> str:
+def checkpoint_message(
+    slot: str,
+    candidates: pd.DataFrame,
+    cutoff_et: pd.Timestamp,
+    diagnostics: dict[str, Any] | None = None,
+) -> str:
+    diagnostics = diagnostics or {}
     visible = checkpoint_candidates(candidates)
     cutoff = normalize_et(cutoff_et)
     lines = [
         f"{slot} JST S+A Scan",
+        f"scheduled_slot_jst={slot}",
         f"decision_cutoff_jst={cutoff.tz_convert('Asia/Tokyo').isoformat()}",
         f"decision_cutoff_et={cutoff.isoformat()}",
     ]
-    if visible.empty:
+    if diagnostics.get("market_not_open"):
+        lines.append("U.S. market is not open yet; S/A cannot be evaluated at this fixed JST slot.")
+    elif visible.empty:
         lines.append("No S/A candidates.")
     else:
         for _, row in visible.head(12).iterrows():
