@@ -1,0 +1,4 @@
+cluster,B_industry,valid_B,stable_cluster_count,status,ticker_count,research_only,execution_allowed,live_order_allowed,broker_access_allowed,account_access_allowed,consumable_by_production,production_eligible,options_modeled,thresholds_optimized,future_information_allowed,signal_scope,future_safe
+MEMORY,,False,0,NO_VALID_A_ROWS,2,True,False,False,False,False,False,False,False,False,False,MORITA_UNIFIED_FLOW_V3_8_PIT_BAND_RECOVERY_RESEARCH_ONLY,True
+OTHER,,False,0,NO_VALID_A_ROWS,4,True,False,False,False,False,False,False,False,False,False,MORITA_UNIFIED_FLOW_V3_8_PIT_BAND_RECOVERY_RESEARCH_ONLY,True
+WFE,,False,0,NO_VALID_A_ROWS,3,True,False,False,False,False,False,False,False,False,False,MORITA_UNIFIED_FLOW_V3_8_PIT_BAND_RECOVERY_RESEARCH_ONLY,True

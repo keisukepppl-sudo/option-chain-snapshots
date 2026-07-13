@@ -1,0 +1,4 @@
+gate,status,failed_rows,reason,recoverable,next_action,research_only,execution_allowed,live_order_allowed,broker_access_allowed,account_access_allowed,consumable_by_production,production_eligible,options_modeled,thresholds_optimized,future_information_allowed,signal_scope,future_safe
+schema_fields_present,PASS,0,,False,,True,False,False,False,False,False,False,False,False,False,MORITA_UNIFIED_FLOW_V3_8_PIT_BAND_RECOVERY_RESEARCH_ONLY,True
+valid_registry_rows,FAIL,6,QUALITY_D_UNUSABLE,True,recover PIT V_t and valid A,True,False,False,False,False,False,False,False,False,False,MORITA_UNIFIED_FLOW_V3_8_PIT_BAND_RECOVERY_RESEARCH_ONLY,True
+production_eligible_false,PASS,0,,False,,True,False,False,False,False,False,False,False,False,False,MORITA_UNIFIED_FLOW_V3_8_PIT_BAND_RECOVERY_RESEARCH_ONLY,True

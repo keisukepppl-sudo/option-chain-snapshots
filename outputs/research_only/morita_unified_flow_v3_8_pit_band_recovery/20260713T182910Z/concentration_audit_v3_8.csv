@@ -1,0 +1,2 @@
+aggregation,rows,top_ticker,status,research_only,execution_allowed,live_order_allowed,broker_access_allowed,account_access_allowed,consumable_by_production,production_eligible,options_modeled,thresholds_optimized,future_information_allowed,signal_scope,future_safe
+ticker-event,978,AMAT,DIAGNOSTIC,True,False,False,False,False,False,False,False,False,False,MORITA_UNIFIED_FLOW_V3_8_PIT_BAND_RECOVERY_RESEARCH_ONLY,True

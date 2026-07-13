@@ -1,0 +1,7 @@
+gate,status,failed_rows,reason,research_only,execution_allowed,live_order_allowed,broker_access_allowed,account_access_allowed,consumable_by_production,production_eligible,options_modeled,thresholds_optimized,future_information_allowed,signal_scope,future_safe
+G1 source integrity,PASS,0,,True,False,False,False,False,False,False,False,False,False,MORITA_UNIFIED_FLOW_V3_8_PIT_BAND_RECOVERY_RESEARCH_ONLY,True
+G2 valuation integrity,FAIL,28,V_T_INCOMPLETE,True,False,False,False,False,False,False,False,False,False,MORITA_UNIFIED_FLOW_V3_8_PIT_BAND_RECOVERY_RESEARCH_ONLY,True
+G3 absorption integrity,PARTIAL,978,NO_VALID_V_T,True,False,False,False,False,False,False,False,False,False,MORITA_UNIFIED_FLOW_V3_8_PIT_BAND_RECOVERY_RESEARCH_ONLY,True
+G4 event independence,PARTIAL,940,many same macro adjustment events,True,False,False,False,False,False,False,False,False,False,MORITA_UNIFIED_FLOW_V3_8_PIT_BAND_RECOVERY_RESEARCH_ONLY,True
+G5 registry integrity,FAIL,6,QUALITY_D_UNUSABLE,True,False,False,False,False,False,False,False,False,False,MORITA_UNIFIED_FLOW_V3_8_PIT_BAND_RECOVERY_RESEARCH_ONLY,True
+G6 unified flow integrity,PASS_BLOCKED,0,state machine replayed with unavailable bands,True,False,False,False,False,False,False,False,False,False,MORITA_UNIFIED_FLOW_V3_8_PIT_BAND_RECOVERY_RESEARCH_ONLY,True

@@ -1,0 +1,15 @@
+tier,source_type,allowed_for_primary,notes,research_only,execution_allowed,live_order_allowed,broker_access_allowed,account_access_allowed,consumable_by_production,production_eligible,options_modeled,thresholds_optimized,future_information_allowed,signal_scope,future_safe
+A,SEC 10-K,True,v3.8 policy registry,True,False,False,False,False,False,False,False,False,False,MORITA_UNIFIED_FLOW_V3_8_PIT_BAND_RECOVERY_RESEARCH_ONLY,True
+A,SEC 10-Q,True,v3.8 policy registry,True,False,False,False,False,False,False,False,False,False,MORITA_UNIFIED_FLOW_V3_8_PIT_BAND_RECOVERY_RESEARCH_ONLY,True
+A,SEC 8-K earnings release,True,v3.8 policy registry,True,False,False,False,False,False,False,False,False,False,MORITA_UNIFIED_FLOW_V3_8_PIT_BAND_RECOVERY_RESEARCH_ONLY,True
+A,official earnings release,True,v3.8 policy registry,True,False,False,False,False,False,False,False,False,False,MORITA_UNIFIED_FLOW_V3_8_PIT_BAND_RECOVERY_RESEARCH_ONLY,True
+A,official investor presentation,True,v3.8 policy registry,True,False,False,False,False,False,False,False,False,False,MORITA_UNIFIED_FLOW_V3_8_PIT_BAND_RECOVERY_RESEARCH_ONLY,True
+A,official prepared remarks,True,v3.8 policy registry,True,False,False,False,False,False,False,False,False,False,MORITA_UNIFIED_FLOW_V3_8_PIT_BAND_RECOVERY_RESEARCH_ONLY,True
+A,official annual report,True,v3.8 policy registry,True,False,False,False,False,False,False,False,False,False,MORITA_UNIFIED_FLOW_V3_8_PIT_BAND_RECOVERY_RESEARCH_ONLY,True
+A,official guidance update,True,v3.8 policy registry,True,False,False,False,False,False,False,False,False,False,MORITA_UNIFIED_FLOW_V3_8_PIT_BAND_RECOVERY_RESEARCH_ONLY,True
+B,company-hosted transcript,True,v3.8 policy registry,True,False,False,False,False,False,False,False,False,False,MORITA_UNIFIED_FLOW_V3_8_PIT_BAND_RECOVERY_RESEARCH_ONLY,True
+B,official regulatory filing,True,v3.8 policy registry,True,False,False,False,False,False,False,False,False,False,MORITA_UNIFIED_FLOW_V3_8_PIT_BAND_RECOVERY_RESEARCH_ONLY,True
+B,official conference presentation,True,v3.8 policy registry,True,False,False,False,False,False,False,False,False,False,MORITA_UNIFIED_FLOW_V3_8_PIT_BAND_RECOVERY_RESEARCH_ONLY,True
+C_DIAGNOSTIC_ONLY,locally stored reputable consensus,False,v3.8 policy registry,True,False,False,False,False,False,False,False,False,False,MORITA_UNIFIED_FLOW_V3_8_PIT_BAND_RECOVERY_RESEARCH_ONLY,True
+C_DIAGNOSTIC_ONLY,third-party transcript,False,v3.8 policy registry,True,False,False,False,False,False,False,False,False,False,MORITA_UNIFIED_FLOW_V3_8_PIT_BAND_RECOVERY_RESEARCH_ONLY,True
+C_DIAGNOSTIC_ONLY,media report,False,v3.8 policy registry,True,False,False,False,False,False,False,False,False,False,MORITA_UNIFIED_FLOW_V3_8_PIT_BAND_RECOVERY_RESEARCH_ONLY,True

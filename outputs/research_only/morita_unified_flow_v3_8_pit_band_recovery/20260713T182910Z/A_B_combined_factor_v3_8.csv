@@ -1,0 +1,10 @@
+ticker,cluster,A_company,B_industry,A_B_combined,company_weight,industry_weight,status,research_only,execution_allowed,live_order_allowed,broker_access_allowed,account_access_allowed,consumable_by_production,production_eligible,options_modeled,thresholds_optimized,future_information_allowed,signal_scope,future_safe
+AMAT,,,,,0.0,0.0,BLOCKED_NO_VALID_A,True,False,False,False,False,False,False,False,False,False,MORITA_UNIFIED_FLOW_V3_8_PIT_BAND_RECOVERY_RESEARCH_ONLY,True
+GLW,,,,,0.0,0.0,BLOCKED_NO_VALID_A,True,False,False,False,False,False,False,False,False,False,MORITA_UNIFIED_FLOW_V3_8_PIT_BAND_RECOVERY_RESEARCH_ONLY,True
+KLAC,,,,,0.0,0.0,BLOCKED_NO_VALID_A,True,False,False,False,False,False,False,False,False,False,MORITA_UNIFIED_FLOW_V3_8_PIT_BAND_RECOVERY_RESEARCH_ONLY,True
+LRCX,,,,,0.0,0.0,BLOCKED_NO_VALID_A,True,False,False,False,False,False,False,False,False,False,MORITA_UNIFIED_FLOW_V3_8_PIT_BAND_RECOVERY_RESEARCH_ONLY,True
+MKSI,,,,,0.0,0.0,BLOCKED_NO_VALID_A,True,False,False,False,False,False,False,False,False,False,MORITA_UNIFIED_FLOW_V3_8_PIT_BAND_RECOVERY_RESEARCH_ONLY,True
+MU,,,,,0.0,0.0,BLOCKED_NO_VALID_A,True,False,False,False,False,False,False,False,False,False,MORITA_UNIFIED_FLOW_V3_8_PIT_BAND_RECOVERY_RESEARCH_ONLY,True
+NAN,,,,,0.0,0.0,BLOCKED_NO_VALID_A,True,False,False,False,False,False,False,False,False,False,MORITA_UNIFIED_FLOW_V3_8_PIT_BAND_RECOVERY_RESEARCH_ONLY,True
+TER,,,,,0.0,0.0,BLOCKED_NO_VALID_A,True,False,False,False,False,False,False,False,False,False,MORITA_UNIFIED_FLOW_V3_8_PIT_BAND_RECOVERY_RESEARCH_ONLY,True
+WDC,,,,,0.0,0.0,BLOCKED_NO_VALID_A,True,False,False,False,False,False,False,False,False,False,MORITA_UNIFIED_FLOW_V3_8_PIT_BAND_RECOVERY_RESEARCH_ONLY,True

@@ -1,0 +1,402 @@
+{
+  "account_access_allowed": false,
+  "broker_access_allowed": false,
+  "consumable_by_production": false,
+  "execution_allowed": false,
+  "files": [
+    {
+      "bytes": 49,
+      "exists": true,
+      "path": "outputs/research_only/morita_unified_flow_v3_8_pit_band_recovery/20260713T182910Z/RESEARCH_ONLY_DO_NOT_EXECUTE.marker",
+      "sha256": "7c1a681880c809f31617a3da6b919ffa93eb4cb334429d84a2110fb6c6bfec09"
+    },
+    {
+      "bytes": 3253,
+      "exists": true,
+      "path": "outputs/research_only/morita_unified_flow_v3_8_pit_band_recovery/20260713T182910Z/source_inventory_v3_8.csv",
+      "sha256": "e883429b2d735614e8dfb7060da3341e9ae23d16e3df97c8f4aee129ad0490fc"
+    },
+    {
+      "bytes": 2756,
+      "exists": true,
+      "path": "outputs/research_only/morita_unified_flow_v3_8_pit_band_recovery/20260713T182910Z/source_whitelist_v3_8.csv",
+      "sha256": "8dcdd55f05629659113aa08b95daceede1d71e72d89932d517ec8d66d4fd9168"
+    },
+    {
+      "bytes": 3626,
+      "exists": true,
+      "path": "outputs/research_only/morita_unified_flow_v3_8_pit_band_recovery/20260713T182910Z/source_availability_audit_v3_8.csv",
+      "sha256": "fea1cd748e50d7cca26b50f8fb2546a7c02d102d446575ee60c867ddd1968bab"
+    },
+    {
+      "bytes": 55066,
+      "exists": true,
+      "path": "outputs/research_only/morita_unified_flow_v3_8_pit_band_recovery/20260713T182910Z/pit_guidance_inventory_v3_8.csv",
+      "sha256": "db364edab588da6473bce1f64a6ae3254e6e10e50786e307a62cef45bd658050"
+    },
+    {
+      "bytes": 6610,
+      "exists": true,
+      "path": "outputs/research_only/morita_unified_flow_v3_8_pit_band_recovery/20260713T182910Z/valuation_snapshot_Vt_v3_8.csv",
+      "sha256": "77f39322a3cbdc0c5d954cafabd8be71e2c4f791054c28c72f0f95fa4e828b24"
+    },
+    {
+      "bytes": 14784,
+      "exists": true,
+      "path": "outputs/research_only/morita_unified_flow_v3_8_pit_band_recovery/20260713T182910Z/valuation_scenario_detail_v3_8.csv",
+      "sha256": "01206d6e910f4bb372de46943fc9fd0d8d4a381704d937633f9d5b6f9257c99d"
+    },
+    {
+      "bytes": 32868,
+      "exists": true,
+      "path": "outputs/research_only/morita_unified_flow_v3_8_pit_band_recovery/20260713T182910Z/valuation_assumption_lineage_v3_8.csv",
+      "sha256": "823baed8b4fd87d18ca54d651b8a46bd789293dd6e7a5b6cfb2e2f41e3bcfde1"
+    },
+    {
+      "bytes": 5809,
+      "exists": true,
+      "path": "outputs/research_only/morita_unified_flow_v3_8_pit_band_recovery/20260713T182910Z/valuation_sensitivity_v3_8.csv",
+      "sha256": "15295d1423dc29bd72db04c5433ede390f9c0e76f3347e910c3064c4a0c170e1"
+    },
+    {
+      "bytes": 5368,
+      "exists": true,
+      "path": "outputs/research_only/morita_unified_flow_v3_8_pit_band_recovery/20260713T182910Z/valuation_bridge_audit_v3_8.csv",
+      "sha256": "0faf2f05e37d31ca2c66a5eac5762b4b3052db523c5d61405af83f365dd4e8e0"
+    },
+    {
+      "bytes": 4983,
+      "exists": true,
+      "path": "outputs/research_only/morita_unified_flow_v3_8_pit_band_recovery/20260713T182910Z/ev_to_equity_audit_v3_8.csv",
+      "sha256": "4c57d56ea3abbb525097856831113870abb971e62bcc78e9985089b2919cb9b6"
+    },
+    {
+      "bytes": 238149,
+      "exists": true,
+      "path": "outputs/research_only/morita_unified_flow_v3_8_pit_band_recovery/20260713T182910Z/historical_correction_event_registry_v3_8.csv",
+      "sha256": "6585ea951dc075f2063cd0431be52a9166ee720fe58a6abde35d889c438f6dad"
+    },
+    {
+      "bytes": 305599,
+      "exists": true,
+      "path": "outputs/research_only/morita_unified_flow_v3_8_pit_band_recovery/20260713T182910Z/absorption_event_labels_v3_8.csv",
+      "sha256": "a807647ede2029ee3edfdabcd0ed8f5343e571e3e669b541fd5afdbbb5f5c6d8"
+    },
+    {
+      "bytes": 177364,
+      "exists": true,
+      "path": "outputs/research_only/morita_unified_flow_v3_8_pit_band_recovery/20260713T182910Z/observed_A_by_episode_v3_8.csv",
+      "sha256": "177b9e5a98333f0bb4eb29480860b53e9388937af2cb8a58536e2533d38d536f"
+    },
+    {
+      "bytes": 1849,
+      "exists": true,
+      "path": "outputs/research_only/morita_unified_flow_v3_8_pit_band_recovery/20260713T182910Z/A_stability_by_ticker_v3_8.csv",
+      "sha256": "8a12a1f6695afed404c55ce7ae18c4838c3d5aa1a9c9b52bfa5ace5f4dc318ef"
+    },
+    {
+      "bytes": 763,
+      "exists": true,
+      "path": "outputs/research_only/morita_unified_flow_v3_8_pit_band_recovery/20260713T182910Z/B_stability_by_cluster_v3_8.csv",
+      "sha256": "5122836f02a8222a355e211e47c1b42aad604c6ddb1433ed2bb93b63f8c7ef2a"
+    },
+    {
+      "bytes": 1734,
+      "exists": true,
+      "path": "outputs/research_only/morita_unified_flow_v3_8_pit_band_recovery/20260713T182910Z/A_B_combined_factor_v3_8.csv",
+      "sha256": "6389fa95a8c1a8b3bbe3e20de523de4caf895b0d57cdfd13f4c4a93b8a98897b"
+    },
+    {
+      "bytes": 446,
+      "exists": true,
+      "path": "outputs/research_only/morita_unified_flow_v3_8_pit_band_recovery/20260713T182910Z/out_of_sample_band_predictions_v3_8.csv",
+      "sha256": "4044ced7fdaafbead84c1ed984dae6eafef1ba33ab7506874844dc52552fcb74"
+    },
+    {
+      "bytes": 460,
+      "exists": true,
+      "path": "outputs/research_only/morita_unified_flow_v3_8_pit_band_recovery/20260713T182910Z/band_prediction_error_v3_8.csv",
+      "sha256": "1d94c735a906c5bc341a7914c5aa7b7eab64516c903662664e2ed6089de21c96"
+    },
+    {
+      "bytes": 1002,
+      "exists": true,
+      "path": "outputs/research_only/morita_unified_flow_v3_8_pit_band_recovery/20260713T182910Z/alternative_anchor_placebo_v3_8.csv",
+      "sha256": "a3f3fa549d414d94338e4e1df90875eb92d7467c72692bba3f2a4f57e4185829"
+    },
+    {
+      "bytes": 3183,
+      "exists": true,
+      "path": "outputs/research_only/morita_unified_flow_v3_8_pit_band_recovery/20260713T182910Z/pit_band_registry_v3_8.csv",
+      "sha256": "c64bf9a40f63f67b270f24f086ee7d19eeb875783f5af9405498cabaf8572197"
+    },
+    {
+      "bytes": 31219,
+      "exists": true,
+      "path": "outputs/research_only/morita_unified_flow_v3_8_pit_band_recovery/20260713T182910Z/pit_band_registry_v3_8.parquet",
+      "sha256": "3cf1d4abd479dfd27b908f072a355fcc7e2248618021221807002c650a8596fb"
+    },
+    {
+      "bytes": 809,
+      "exists": true,
+      "path": "outputs/research_only/morita_unified_flow_v3_8_pit_band_recovery/20260713T182910Z/pit_band_registry_integrity_audit_v3_8.csv",
+      "sha256": "18286cef8b7ff1a5d96dbe44641b7fdfe3854060563d03f089264c5c29be36ab"
+    },
+    {
+      "bytes": 2183,
+      "exists": true,
+      "path": "outputs/research_only/morita_unified_flow_v3_8_pit_band_recovery/20260713T182910Z/unified_flow_v3_8_daily_state.csv",
+      "sha256": "2bced420f7fefd7b3a2769510743a56954199159b3d01e417b3d2bb07a98d06e"
+    },
+    {
+      "bytes": 653,
+      "exists": true,
+      "path": "outputs/research_only/morita_unified_flow_v3_8_pit_band_recovery/20260713T182910Z/unified_flow_v3_8_state_transition_audit.csv",
+      "sha256": "265a3567ccf3e2fff939fbb425ff44b5cbc750196990376f30c69bfba0514186"
+    },
+    {
+      "bytes": 1039,
+      "exists": true,
+      "path": "outputs/research_only/morita_unified_flow_v3_8_pit_band_recovery/20260713T182910Z/unified_flow_v3_8_policy_matrix_audit.csv",
+      "sha256": "2d2e7fe0889558210b0f91d4c3ece28b6eff8543854f0aeb498633ddf4f442cb"
+    },
+    {
+      "bytes": 1711,
+      "exists": true,
+      "path": "outputs/research_only/morita_unified_flow_v3_8_pit_band_recovery/20260713T182910Z/unified_flow_v3_8_dry_run_alerts.csv",
+      "sha256": "6cf414147d1e079d11cf4f915815de310dfb5d1445cb6d5fc9f53c75ffb1e38c"
+    },
+    {
+      "bytes": 1475,
+      "exists": true,
+      "path": "outputs/research_only/morita_unified_flow_v3_8_pit_band_recovery/20260713T182910Z/unified_flow_v3_8_band_usage_audit.csv",
+      "sha256": "9a6c35f807934fdecf6730eb78385e8944dc04579a55c83e6d0da81a781d868a"
+    },
+    {
+      "bytes": 416,
+      "exists": true,
+      "path": "outputs/research_only/morita_unified_flow_v3_8_pit_band_recovery/20260713T182910Z/mechanical_tranche_events_v3_8.csv",
+      "sha256": "e82ebcfba94a0abc0d26f1a94ca4724043b257494b75cff383ba9e46b844eb6b"
+    },
+    {
+      "bytes": 411,
+      "exists": true,
+      "path": "outputs/research_only/morita_unified_flow_v3_8_pit_band_recovery/20260713T182910Z/ladder_policy_comparison_v3_8.csv",
+      "sha256": "91e3fab9393c8d80ae8dc9d4f43e2d029b78c7fe70e30f75dd0268ac46383d98"
+    },
+    {
+      "bytes": 415,
+      "exists": true,
+      "path": "outputs/research_only/morita_unified_flow_v3_8_pit_band_recovery/20260713T182910Z/buy_the_dip_trade_level_v3_8.csv",
+      "sha256": "65d201369127b14a7c385ee89e377295c27ffe57847b7fb668e74c890e725759"
+    },
+    {
+      "bytes": 417,
+      "exists": true,
+      "path": "outputs/research_only/morita_unified_flow_v3_8_pit_band_recovery/20260713T182910Z/buy_the_dip_episode_level_v3_8.csv",
+      "sha256": "afa0d7fb8ef687718d7a329c44205391103227485076062247e80bdbdb21f5b4"
+    },
+    {
+      "bytes": 421,
+      "exists": true,
+      "path": "outputs/research_only/morita_unified_flow_v3_8_pit_band_recovery/20260713T182910Z/anchor_first_short_exit_comparison_v3_8.csv",
+      "sha256": "e942afdcac57227326750ba03dccbcf9139b6ed41bb51c2d2fccf038d064c4c7"
+    },
+    {
+      "bytes": 476,
+      "exists": true,
+      "path": "outputs/research_only/morita_unified_flow_v3_8_pit_band_recovery/20260713T182910Z/big_tech_short_exit_sensor_v3_8.csv",
+      "sha256": "41aa4409b9346fdc02dcd985a8bf0ea8db9904e891286b5cf8ff28787ed38965"
+    },
+    {
+      "bytes": 424,
+      "exists": true,
+      "path": "outputs/research_only/morita_unified_flow_v3_8_pit_band_recovery/20260713T182910Z/supply_side_residual_short_v3_8.csv",
+      "sha256": "9aac114fd0435ab14a5edf97436c204566c76047517e4091ef2846bb2c4faaa8"
+    },
+    {
+      "bytes": 464,
+      "exists": true,
+      "path": "outputs/research_only/morita_unified_flow_v3_8_pit_band_recovery/20260713T182910Z/guidance_revision_events_v3_8.csv",
+      "sha256": "41fe781160d9399f56d3cf46f865037414fc5f5781680674b3b0ca763f930996"
+    },
+    {
+      "bytes": 515,
+      "exists": true,
+      "path": "outputs/research_only/morita_unified_flow_v3_8_pit_band_recovery/20260713T182910Z/guidance_breadth_daily_v3_8.csv",
+      "sha256": "120ce702daf73a5a0ac0e5c551a61cc32e25fb270d9480e8d5d120eef455cb9c"
+    },
+    {
+      "bytes": 6120,
+      "exists": true,
+      "path": "outputs/research_only/morita_unified_flow_v3_8_pit_band_recovery/20260713T182910Z/future_information_audit_v3_8.csv",
+      "sha256": "b16630c0e42254d13db392ee516ed327e208b004f064b2a24297d0d3c75a5a48"
+    },
+    {
+      "bytes": 32868,
+      "exists": true,
+      "path": "outputs/research_only/morita_unified_flow_v3_8_pit_band_recovery/20260713T182910Z/point_in_time_field_lineage_v3_8.csv",
+      "sha256": "823baed8b4fd87d18ca54d651b8a46bd789293dd6e7a5b6cfb2e2f41e3bcfde1"
+    },
+    {
+      "bytes": 1320,
+      "exists": true,
+      "path": "outputs/research_only/morita_unified_flow_v3_8_pit_band_recovery/20260713T182910Z/data_quality_summary_v3_8.csv",
+      "sha256": "e25bc36968ff276e19ae322e53954efa1819738bb92323d616702d02d3ec0304"
+    },
+    {
+      "bytes": 198348,
+      "exists": true,
+      "path": "outputs/research_only/morita_unified_flow_v3_8_pit_band_recovery/20260713T182910Z/independent_episode_audit_v3_8.csv",
+      "sha256": "ef6704f6c0c21dd4c370a7dc8ca14523ab5e62e1fb50f3bc3e3497111e718365"
+    },
+    {
+      "bytes": 421,
+      "exists": true,
+      "path": "outputs/research_only/morita_unified_flow_v3_8_pit_band_recovery/20260713T182910Z/concentration_audit_v3_8.csv",
+      "sha256": "3e9df0366c8cb00cc632320fc4a44ba60caf629c27d67902d36418db17c2a496"
+    },
+    {
+      "bytes": 142,
+      "exists": true,
+      "path": "outputs/research_only/morita_unified_flow_v3_8_pit_band_recovery/20260713T182910Z/test_results_v3_8.json",
+      "sha256": "df8fb77f68d835b8d0e9206548ee1ef654b360e0d640da792d8c606d4ed75a19"
+    },
+    {
+      "bytes": 1946,
+      "exists": true,
+      "path": "outputs/research_only/morita_unified_flow_v3_8_pit_band_recovery/20260713T182910Z/run_receipt_v3_8.json",
+      "sha256": "ca4adbdafe601ef04cd97a8cff44cd4c6e26b1ebae718494c4bd23c3ecb4c4a1"
+    },
+    {
+      "bytes": 4171,
+      "exists": true,
+      "path": "outputs/research_only/morita_unified_flow_v3_8_pit_band_recovery/20260713T182910Z/morita_unified_flow_v3_8_main_report.md",
+      "sha256": "528d33da1b769730b8fbf54fdb449ed1dd232c078d52af17bc7a9315fd1375e8"
+    },
+    {
+      "bytes": 4181,
+      "exists": true,
+      "path": "outputs/research_only/morita_unified_flow_v3_8_pit_band_recovery/20260713T182910Z/morita_unified_flow_v3_8_chatgpt_review_bundle.md",
+      "sha256": "e54a58ccad4e4f5ba7969551d80c79dd326bbc5d61f815e41da5482d9a3a028c"
+    },
+    {
+      "bytes": 140,
+      "exists": true,
+      "path": "outputs/research_only/morita_unified_flow_v3_8_pit_band_recovery/20260713T182910Z/PIT_source_recovery_report.md",
+      "sha256": "1ea1bf35a9778c0746bc4be883a7188a4a788efcec6786fa5f8013e1e92dc9d6"
+    },
+    {
+      "bytes": 104,
+      "exists": true,
+      "path": "outputs/research_only/morita_unified_flow_v3_8_pit_band_recovery/20260713T182910Z/Vt_valuation_audit.md",
+      "sha256": "5135000076f83d1ea9e2103c96ea3c54acaa23f7a6752a5c5da5618fbd8997e1"
+    },
+    {
+      "bytes": 155,
+      "exists": true,
+      "path": "outputs/research_only/morita_unified_flow_v3_8_pit_band_recovery/20260713T182910Z/absorption_label_audit.md",
+      "sha256": "5fcfb552d377ea3355adce9c0ed6227bbc5d0422c83964ee263eb3b0ac687d85"
+    },
+    {
+      "bytes": 142,
+      "exists": true,
+      "path": "outputs/research_only/morita_unified_flow_v3_8_pit_band_recovery/20260713T182910Z/A_B_stability_validation_report.md",
+      "sha256": "8a9607ab4f3d657cb598afca69c0b38a7b7d4a637103736f899fa94c8a8f2d4a"
+    },
+    {
+      "bytes": 152,
+      "exists": true,
+      "path": "outputs/research_only/morita_unified_flow_v3_8_pit_band_recovery/20260713T182910Z/pit_band_registry_activation_report.md",
+      "sha256": "4390c79f968c6998d39980c0270b6f65b24b4d685e6495d85c2fa368368280e2"
+    },
+    {
+      "bytes": 171,
+      "exists": true,
+      "path": "outputs/research_only/morita_unified_flow_v3_8_pit_band_recovery/20260713T182910Z/unified_flow_replay_report.md",
+      "sha256": "f1b6ce9440dfdb6cfb22cc7a178565f378afa1948bbb857511c1ef3865874742"
+    },
+    {
+      "bytes": 186,
+      "exists": true,
+      "path": "outputs/research_only/morita_unified_flow_v3_8_pit_band_recovery/20260713T182910Z/limitations.md",
+      "sha256": "ca87e4a38a45becae948e1d74fd39618d109ff41980b4f2796cf00f846eee31b"
+    },
+    {
+      "bytes": 1429,
+      "exists": true,
+      "path": "outputs/research_only/morita_unified_flow_v3_8_pit_band_recovery/20260713T182910Z/autonomous_recovery_log.md",
+      "sha256": "9c1563eb7a1dbd7412a1dcf7ec44efca11ffea7e61f2ef4c5ba8a532cfdc150e"
+    },
+    {
+      "bytes": 0,
+      "exists": true,
+      "path": "outputs/research_only/morita_unified_flow_v3_8_pit_band_recovery/20260713T182910Z/artifact_manifest.json",
+      "sha256": "SELF_REFERENTIAL_MANIFEST"
+    }
+  ],
+  "future_information_allowed": false,
+  "live_order_allowed": false,
+  "options_modeled": false,
+  "production_eligible": false,
+  "required_outputs": [
+    "RESEARCH_ONLY_DO_NOT_EXECUTE.marker",
+    "morita_unified_flow_v3_8_main_report.md",
+    "morita_unified_flow_v3_8_chatgpt_review_bundle.md",
+    "PIT_source_recovery_report.md",
+    "Vt_valuation_audit.md",
+    "absorption_label_audit.md",
+    "A_B_stability_validation_report.md",
+    "pit_band_registry_activation_report.md",
+    "unified_flow_replay_report.md",
+    "autonomous_recovery_log.md",
+    "limitations.md",
+    "source_inventory_v3_8.csv",
+    "source_whitelist_v3_8.csv",
+    "source_availability_audit_v3_8.csv",
+    "pit_guidance_inventory_v3_8.csv",
+    "valuation_snapshot_Vt_v3_8.csv",
+    "valuation_scenario_detail_v3_8.csv",
+    "valuation_assumption_lineage_v3_8.csv",
+    "valuation_sensitivity_v3_8.csv",
+    "valuation_bridge_audit_v3_8.csv",
+    "ev_to_equity_audit_v3_8.csv",
+    "historical_correction_event_registry_v3_8.csv",
+    "absorption_event_labels_v3_8.csv",
+    "observed_A_by_episode_v3_8.csv",
+    "A_stability_by_ticker_v3_8.csv",
+    "B_stability_by_cluster_v3_8.csv",
+    "A_B_combined_factor_v3_8.csv",
+    "out_of_sample_band_predictions_v3_8.csv",
+    "band_prediction_error_v3_8.csv",
+    "alternative_anchor_placebo_v3_8.csv",
+    "pit_band_registry_v3_8.csv",
+    "pit_band_registry_v3_8.parquet",
+    "pit_band_registry_integrity_audit_v3_8.csv",
+    "unified_flow_v3_8_daily_state.csv",
+    "unified_flow_v3_8_state_transition_audit.csv",
+    "unified_flow_v3_8_policy_matrix_audit.csv",
+    "unified_flow_v3_8_dry_run_alerts.csv",
+    "unified_flow_v3_8_band_usage_audit.csv",
+    "mechanical_tranche_events_v3_8.csv",
+    "ladder_policy_comparison_v3_8.csv",
+    "buy_the_dip_trade_level_v3_8.csv",
+    "buy_the_dip_episode_level_v3_8.csv",
+    "anchor_first_short_exit_comparison_v3_8.csv",
+    "big_tech_short_exit_sensor_v3_8.csv",
+    "supply_side_residual_short_v3_8.csv",
+    "guidance_revision_events_v3_8.csv",
+    "guidance_breadth_daily_v3_8.csv",
+    "future_information_audit_v3_8.csv",
+    "point_in_time_field_lineage_v3_8.csv",
+    "data_quality_summary_v3_8.csv",
+    "independent_episode_audit_v3_8.csv",
+    "concentration_audit_v3_8.csv",
+    "test_results_v3_8.json",
+    "run_receipt_v3_8.json",
+    "artifact_manifest.json"
+  ],
+  "research_only": true,
+  "signal_scope": "MORITA_UNIFIED_FLOW_V3_8_PIT_BAND_RECOVERY_RESEARCH_ONLY",
+  "thresholds_optimized": false
+}
