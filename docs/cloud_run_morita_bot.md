@@ -8,19 +8,21 @@
 - Secret Manager entries for Pushover and optional Discord
 - Separate runtime and scheduler service accounts
 
-The service converts UTC to `America/New_York`, so U.S. daylight-saving changes are automatic.
+The user-facing checkpoint slots are fixed in `Asia/Tokyo`, so they do not move when U.S. daylight-saving time changes.
 
 ## Runtime behavior
 
-| ET window | Action |
+| JST slot | Action |
 |---|---|
-| 08:15–09:50 | Build the daily RS98 candidate cache once |
-| 10:00–10:14 | Send S+A status once |
-| 11:30–11:44 | Send S+A status once |
-| 12:00–12:14 | Send S+A status and save the execution baseline |
-| 15:15–15:40 | Check every five minutes; Emergency only for a current S absent from the noon S+A baseline |
+| 21:00–22:20 | Build the daily RS98 candidate cache once |
+| 22:30 | Send the first S+A status after the first regular-session 5-minute bar completes; normally arrives around 22:35 JST |
+| 23:00 | Send S+A status once |
+| 24:00 | Send S+A status and save the execution baseline |
+| 15:15–15:40 ET | Check every five minutes; Emergency only for a current S absent from the 24:00 JST S+A baseline |
 
-Each checkpoint uses only complete 5-minute bars whose start timestamp is strictly before the decision cutoff. A run starting at 12:03 therefore still uses the 11:55–12:00 bar as its final eligible bar, not the 12:00–12:05 bar.
+Each checkpoint uses only complete 5-minute bars whose start timestamp is strictly before the decision cutoff. The 22:30 slot intentionally executes at 22:35 JST so the first regular-session 5-minute bar is complete and the notification remains within the accepted five-minute delay.
+
+During U.S. standard time, the fixed 22:30 and 23:00 JST slots occur before the NYSE regular session opens. The service still sends an explicit heartbeat stating that S/A cannot yet be evaluated, rather than failing silently or reporting a false zero-candidate scan.
 
 Cloud Storage uses separate `shadow` and `live` state paths. Shadow testing therefore does not suppress the next live notification.
 
@@ -67,17 +69,17 @@ curl -X POST \
   -H "Authorization: Bearer ${TOKEN}" \
   -H "Content-Type: application/json" \
   "${SERVICE_URL}/tick" \
-  -d '{"force_action":"PRECOMPUTE","mock_time_et":"2026-07-10T08:30:00-04:00"}'
+  -d '{"force_action":"PRECOMPUTE","mock_time_et":"2026-07-10T08:00:00-04:00"}'
 ```
 
-Then force a 12:00 shadow scan:
+Then force the 24:00 JST execution-baseline scan. During U.S. daylight-saving time, 24:00 JST is 11:00 ET:
 
 ```bash
 curl -X POST \
   -H "Authorization: Bearer ${TOKEN}" \
   -H "Content-Type: application/json" \
   "${SERVICE_URL}/tick" \
-  -d '{"force_action":"12:00","mock_time_et":"2026-07-10T12:05:00-04:00"}'
+  -d '{"force_action":"24:00","mock_time_et":"2026-07-10T11:05:00-04:00"}'
 ```
 
 Use a date for which Yahoo intraday data is still available. Five-minute history is limited by the upstream provider.
@@ -120,11 +122,12 @@ gcloud storage ls --recursive "gs://${PROJECT_ID}-morita-bot-state/**"
 ## Failure behavior
 
 - Low intraday-data coverage returns HTTP 500. The checkpoint is not marked complete, so the next five-minute Scheduler call retries it.
+- Fixed JST slots that occur before the regular session opens send an explicit `market_not_open` heartbeat and are marked complete.
 - Pushover failure also prevents completion from being saved.
 - Duplicate or overlapping calls are serialized by a Cloud Storage lock and by Cloud Run `max-instances=1`, `concurrency=1`.
-- If the 12:00 baseline is missing, the wake path fails safe: every current eligible S is wake-eligible, and the alert explicitly warns that the noon baseline is missing.
-- NYSE holidays are skipped. On early-close sessions, the 15:15–15:40 wake window is skipped.
+- If the 24:00 JST baseline is missing, the wake path fails safe: every current eligible S is wake-eligible, and the alert explicitly warns that the baseline is missing.
+- NYSE holidays are skipped. On early-close sessions, the 15:15–15:40 ET wake window is skipped.
 
 ## Cutover
 
-Keep GitHub Actions available only as a manual fallback. After at least several shadow sessions match the existing scanner, enable live Cloud Run notifications. Do not run both scheduled paths live, or duplicate alerts can occur.
+Keep GitHub Actions available only as a manual fallback. After shadow output is correct, enable live Cloud Run notifications. Do not run both scheduled paths live, or duplicate alerts can occur.

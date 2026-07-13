@@ -14,6 +14,7 @@ from morita_cloud.cache import build_precompute, load_precompute, manifest_name
 from morita_cloud.intraday import fetch_intraday_snapshots_at_cutoff
 from morita_cloud.logic import (
     CHECKPOINT_TIMES,
+    FINAL_EXECUTION_SLOT,
     WAKE_START,
     checkpoint_candidates,
     checkpoint_timestamp,
@@ -84,17 +85,18 @@ class TickRunner:
         session = market_session(timestamp)
         if session is None:
             return TickResult("market_closed", None, date_et, {"now_et": timestamp.isoformat()})
-        _, market_close = session
+        market_open, market_close = session
 
         try:
             with self.store.lock(f"locks/{date_et}.lock"):
-                return self._run_locked(timestamp, market_close, force_action)
+                return self._run_locked(timestamp, market_open, market_close, force_action)
         except LockUnavailable as exc:
             return TickResult("busy", None, date_et, {"reason": str(exc)})
 
     def _run_locked(
         self,
         timestamp: pd.Timestamp,
+        market_open: pd.Timestamp,
         market_close: pd.Timestamp,
         force_action: str | None,
     ) -> TickResult:
@@ -129,7 +131,7 @@ class TickRunner:
         state["precompute_complete"] = True
         state["precompute_manifest"] = manifest_name(date_et)
         cutoff = checkpoint_timestamp(timestamp, action) if action in CHECKPOINT_TIMES else timestamp.floor("5min")
-        candidates, diagnostics = self._scan_at_cutoff(date_et, cutoff)
+        candidates, diagnostics = self._scan_at_cutoff(date_et, cutoff, market_open)
         output_name = self._save_scan_output(date_et, action, cutoff, candidates, diagnostics)
 
         if action in CHECKPOINT_TIMES:
@@ -171,11 +173,11 @@ class TickRunner:
         output_name: str,
     ) -> TickResult:
         notification = send_notification(
-            checkpoint_message(action, candidates, cutoff),
-            title=f"Morita Bot {action} ET",
-            priority=0 if action == "10:00" else 1,
+            checkpoint_message(action, candidates, cutoff, diagnostics),
+            title=f"Morita Bot {action} JST",
+            priority=0 if action == "22:30" else 1,
             discord_message=full_discord_message(
-                f"{action} ET S+A Check",
+                f"{action} JST S+A Check",
                 checkpoint_candidates(candidates),
                 cutoff,
             ),
@@ -190,8 +192,9 @@ class TickRunner:
             "a_tickers": a_tickers,
             "notification": notification,
             "output": output_name,
+            "market_not_open": bool(diagnostics.get("market_not_open")),
         }
-        if action == "12:00":
+        if action == FINAL_EXECUTION_SLOT:
             state["noon_snapshot_complete"] = True
             state["noon_execution_tickers"] = sorted(set(s_tickers + a_tickers))
         self.store.write_json(state_name, state, generation=generation)
@@ -235,7 +238,7 @@ class TickRunner:
             retry=60,
             expire=600,
             sound="siren",
-            discord_message=full_discord_message("POST-NOON NEW S", late, cutoff),
+            discord_message=full_discord_message("POST-24:00 JST NEW S", late, cutoff),
             dry_run=self.dry_run,
         )
         sent = state.setdefault("late_s_emergency_sent", {})
@@ -272,10 +275,34 @@ class TickRunner:
             period=self.precompute_period,
         )
 
-    def _scan_at_cutoff(self, date_et: str, cutoff_et: pd.Timestamp) -> tuple[pd.DataFrame, dict[str, Any]]:
+    def _scan_at_cutoff(
+        self,
+        date_et: str,
+        cutoff_et: pd.Timestamp,
+        market_open_et: pd.Timestamp,
+    ) -> tuple[pd.DataFrame, dict[str, Any]]:
         bundle = load_precompute(self.store, date_et)
         tickers = sorted(set(bundle.results["ticker"].astype(str).tolist())) if not bundle.results.empty else []
-        intraday = fetch_intraday_snapshots_at_cutoff(tickers, cutoff_et, interval="5m")
+        cutoff = normalize_et(cutoff_et)
+        market_open = normalize_et(market_open_et)
+
+        if cutoff <= market_open:
+            diagnostics = {
+                "base_candidate_count": int(len(tickers)),
+                "intraday_snapshot_count": 0,
+                "intraday_coverage": 0.0,
+                "selected_count": 0,
+                "market_not_open": True,
+                "market_open_et": market_open.isoformat(),
+                "market_open_jst": market_open.tz_convert("Asia/Tokyo").isoformat(),
+                "cutoff_et": cutoff.isoformat(),
+                "cutoff_jst": cutoff.tz_convert("Asia/Tokyo").isoformat(),
+                "precompute_created_at_utc": bundle.manifest.get("created_at_utc"),
+                "latest_daily_bar": bundle.manifest.get("latest_daily_bar"),
+            }
+            return pd.DataFrame(), diagnostics
+
+        intraday = fetch_intraday_snapshots_at_cutoff(tickers, cutoff, interval="5m")
         coverage = len(intraday) / len(tickers) if tickers else 1.0
         min_coverage = float(os.environ.get("MIN_INTRADAY_COVERAGE", "0.50"))
         if tickers and coverage < min_coverage:
@@ -297,7 +324,9 @@ class TickRunner:
             "intraday_snapshot_count": int(len(intraday)),
             "intraday_coverage": coverage,
             "selected_count": int(len(candidates)),
-            "cutoff_et": normalize_et(cutoff_et).isoformat(),
+            "market_not_open": False,
+            "cutoff_et": cutoff.isoformat(),
+            "cutoff_jst": cutoff.tz_convert("Asia/Tokyo").isoformat(),
             "precompute_created_at_utc": bundle.manifest.get("created_at_utc"),
             "latest_daily_bar": bundle.manifest.get("latest_daily_bar"),
         }
