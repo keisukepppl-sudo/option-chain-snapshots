@@ -102,7 +102,16 @@ def long_path(path: Path) -> str:
 
 def run_cmd(args: list[str], repo_root: Path, timeout: int = 60) -> tuple[int, str, str]:
     try:
-        proc = subprocess.run(args, cwd=repo_root, capture_output=True, text=True, timeout=timeout, check=False)
+        proc = subprocess.run(
+            args,
+            cwd=repo_root,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=timeout,
+            check=False,
+        )
         return proc.returncode, proc.stdout.strip(), proc.stderr.strip()
     except Exception as exc:
         return 999, "", f"{type(exc).__name__}: {exc}"
@@ -144,7 +153,19 @@ def inspect_environment(repo_root: Path) -> dict[str, Any]:
     }
 
 
-def recover_github_evidence(repo_root: Path) -> tuple[list[dict[str, Any]], list[dict[str, Any]], list[dict[str, Any]], list[dict[str, Any]], list[dict[str, Any]], str, str]:
+def recover_github_evidence(
+    repo_root: Path,
+) -> tuple[
+    list[dict[str, Any]],
+    list[dict[str, Any]],
+    list[dict[str, Any]],
+    list[dict[str, Any]],
+    list[dict[str, Any]],
+    list[dict[str, Any]],
+    list[dict[str, Any]],
+    str,
+    str,
+]:
     commits = git_lines(repo_root, ["log", "--all", "--full-history", "--date=iso-strict", "--pretty=format:%H%x09%aI%x09%D%x09%s"], timeout=120)
     branches = git_lines(repo_root, ["branch", "--all", "--format=%(refname:short)\t%(objectname)\t%(committerdate:iso-strict)"], timeout=60)
     tags = git_lines(repo_root, ["tag", "--format=%(refname:short)\t%(objectname)\t%(creatordate:iso-strict)"], timeout=60)
@@ -192,6 +213,8 @@ def recover_github_evidence(repo_root: Path) -> tuple[list[dict[str, Any]], list
     artifact_rows = github_artifact_inventory(repo_root, gh_path, gh_run_rows[:50])
     if artifact_rows:
         artifact_rows = download_github_artifacts(repo_root, gh_path, artifact_rows)
+    workflow_log_rows = github_workflow_log_audit(repo_root, gh_path, gh_run_rows, artifact_rows)
+    artifact_content_rows = audit_github_artifact_contents(repo_root, artifact_rows)
     if not artifact_rows:
         artifact_rows = [
             {
@@ -209,6 +232,22 @@ def recover_github_evidence(repo_root: Path) -> tuple[list[dict[str, Any]], list
                 "zip_sha256": "",
                 "extracted_file_sha256": "",
                 "status": "GITHUB_AUTH_ACTION_REQUIRED" if not gh_path else "NO_ARTIFACTS_FOUND_OR_ACCESSIBLE",
+            }
+        ]
+    if not artifact_content_rows:
+        artifact_content_rows = [
+            {
+                "status": "NO_DOWNLOADED_ARTIFACT_FILES",
+                "authority_candidate": False,
+                "pit_reusable": False,
+            }
+        ]
+    if not workflow_log_rows:
+        workflow_log_rows = [
+            {
+                "status": "NO_WORKFLOW_LOGS_DOWNLOADED",
+                "authority_candidate": False,
+                "pit_reusable": False,
             }
         ]
     signal_lineage = lineage_rows(keyword_files, "SIGNAL")
@@ -230,7 +269,7 @@ def recover_github_evidence(repo_root: Path) -> tuple[list[dict[str, Any]], list
     gh_status = "GITHUB_EVIDENCE_RECOVERED" if gh_run_rows or signal_lineage else "NO_AUTHORITATIVE_ARCHIVED_SIGNAL"
     if not gh_path:
         gh_status = "GITHUB_AUTH_ACTION_REQUIRED"
-    return run_rows, artifact_rows, signal_lineage, config_lineage, universe_lineage, report, gh_status
+    return run_rows, artifact_rows, artifact_content_rows, workflow_log_rows, signal_lineage, config_lineage, universe_lineage, report, gh_status
 
 
 def github_workflow_runs(repo_root: Path, gh_path: str) -> list[dict[str, Any]]:
@@ -345,6 +384,169 @@ def download_github_artifacts(repo_root: Path, gh_path: str, artifact_rows: list
                 row["status"] = "ARTIFACT_RUN_DOWNLOADED_NAME_MISMATCH"
                 row["extracted_file_sha256"] = "|".join(f"{p.name}:{sha256_file(p)}" for p in sorted(files)[:20])
     return artifact_rows
+
+
+def _text_tokens(value: str) -> set[str]:
+    lowered = value.lower().replace("\\", "/")
+    return {token for token in lowered.replace("-", "_").replace(".", "_").replace("/", "_").split("_") if token}
+
+
+def _safe_read_sample(path: Path, limit: int = 4096) -> str:
+    try:
+        with open(long_path(path), "r", encoding="utf-8", errors="ignore") as f:
+            return f.read(limit)
+    except Exception:
+        return ""
+
+
+def _csv_shape(path: Path, size_bytes: int) -> tuple[int | str, str]:
+    if size_bytes <= 1:
+        return 0, ""
+    try:
+        with open(long_path(path), newline="", encoding="utf-8-sig", errors="ignore") as f:
+            reader = csv.reader(f)
+            header = next(reader, [])
+            rows = sum(1 for _ in reader)
+        return rows, "|".join(str(col) for col in header)
+    except Exception as exc:
+        return "PARSE_ERROR", f"{type(exc).__name__}: {exc}"
+
+
+def audit_github_artifact_contents(repo_root: Path, artifact_rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    root = repo_root / GITHUB_ARTIFACT_DIR
+    if not root.exists():
+        return []
+    by_run_name = {(str(row.get("run_id") or ""), str(row.get("artifact_name") or "")): row for row in artifact_rows}
+    rows: list[dict[str, Any]] = []
+    for path in sorted(p for p in root.rglob("*") if p.is_file()):
+        rel = path.relative_to(repo_root)
+        rel_parts = path.relative_to(root).parts
+        run_id = rel_parts[0] if len(rel_parts) >= 1 else ""
+        artifact_name = rel_parts[1] if len(rel_parts) >= 2 else ""
+        meta = by_run_name.get((run_id, artifact_name), {})
+        size_bytes = path.stat().st_size
+        extension = path.suffix.lower().lstrip(".")
+        row_count: int | str = ""
+        columns = ""
+        if extension == "csv":
+            row_count, columns = _csv_shape(path, size_bytes)
+        elif extension == "json":
+            sample = _safe_read_sample(path)
+            columns = "json"
+            row_count = 1 if sample.strip() else 0
+        else:
+            sample = _safe_read_sample(path, 1024)
+            row_count = 1 if sample.strip() else 0
+            columns = ""
+        combined = " ".join([str(rel), str(columns), _safe_read_sample(path, 512)])
+        tokens = _text_tokens(combined)
+        signal_like = bool(tokens & {"signal", "signals", "rank", "candidate", "candidates", "notified", "daily_scan", "scanner"})
+        universe_like = bool(tokens & {"universe", "holdings", "iwb", "russell", "russell1000"})
+        config_like = bool(tokens & {"config", "yaml", "yml", "threshold", "thresholds"})
+        test_like = "collection-coverage" in str(rel).lower() or "test" in str(rel).lower()
+        nonempty = size_bytes > 1 and row_count not in {0, "PARSE_ERROR"}
+        authority_candidate = bool(nonempty and (signal_like or universe_like) and not test_like)
+        pit_reusable = False
+        effectively_empty = size_bytes <= 2 or row_count == 0
+        if effectively_empty and artifact_name == "russell1000-1015-scan":
+            status = "CURRENT_EMPTY_SCANNER_ARTIFACT"
+        elif effectively_empty:
+            status = "EMPTY_FILE"
+        elif test_like:
+            status = "TEST_OR_CI_ARTIFACT"
+        elif authority_candidate:
+            status = "NONEMPTY_SIGNAL_OR_UNIVERSE_LIKE_REQUIRES_PIT_PROOF"
+        else:
+            status = "NONEMPTY_NON_SIGNAL_ARTIFACT"
+        rows.append(
+            {
+                "run_id": run_id,
+                "artifact_name": artifact_name,
+                "workflow_name": meta.get("workflow_name", ""),
+                "workflow_started_at": meta.get("workflow_started_at", ""),
+                "head_sha": meta.get("head_sha", ""),
+                "branch": meta.get("branch", ""),
+                "file_path": str(rel),
+                "file_name": path.name,
+                "extension": extension,
+                "size_bytes": size_bytes,
+                "sha256": sha256_file(path),
+                "row_count": row_count,
+                "columns": columns,
+                "signal_like": signal_like,
+                "universe_like": universe_like,
+                "config_like": config_like,
+                "test_like": test_like,
+                "nonempty": nonempty,
+                "authority_candidate": authority_candidate,
+                "pit_reusable": pit_reusable,
+                "status": status,
+                "reason": "Downloaded file lacks complete PIT timestamp, frozen config, and frozen universe proof.",
+            }
+        )
+    return rows
+
+
+def github_workflow_log_audit(
+    repo_root: Path,
+    gh_path: str,
+    runs: list[dict[str, Any]],
+    artifact_rows: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    if not gh_path or os.getenv("MORITA_V12_DISABLE_GITHUB") == "1":
+        return []
+    artifact_run_ids = {str(row.get("run_id") or "") for row in artifact_rows if row.get("run_id")}
+    keyword_run_ids = []
+    for row in runs:
+        haystack = " ".join(str(row.get(k, "")) for k in ["workflow_name", "subject"]).lower()
+        if any(k in haystack for k in ["scanner", "russell", "status", "production"]):
+            keyword_run_ids.append(str(row.get("run_id") or ""))
+    selected = [rid for rid in dict.fromkeys([*keyword_run_ids, *sorted(artifact_run_ids)]) if rid][:25]
+    root = repo_root / GITHUB_ARTIFACT_DIR
+    rows: list[dict[str, Any]] = []
+    run_meta = {str(row.get("run_id") or ""): row for row in runs}
+    for run_id in selected:
+        log_path = root / run_id / "workflow_log.txt"
+        log_path.parent.mkdir(parents=True, exist_ok=True)
+        if not log_path.exists():
+            code, out, err = run_cmd([gh_path, "run", "view", run_id, "--log"], repo_root, timeout=180)
+            if code == 0 and out:
+                write_text(log_path, out + "\n")
+            else:
+                write_text(log_path, f"LOG_DOWNLOAD_FAILED\n{err}\n")
+        text = _safe_read_sample(log_path, 200_000)
+        lowered = text.lower()
+        evidence_terms = {
+            "signal": lowered.count("signal"),
+            "universe": lowered.count("universe"),
+            "russell": lowered.count("russell"),
+            "candidate": lowered.count("candidate"),
+            "notified": lowered.count("notified"),
+            "daily_scan": lowered.count("daily_scan"),
+            "artifact": lowered.count("artifact"),
+            "config": lowered.count("config"),
+        }
+        has_signal_terms = any(evidence_terms[k] for k in ["signal", "candidate", "notified", "daily_scan"])
+        has_universe_terms = any(evidence_terms[k] for k in ["universe", "russell"])
+        authority_candidate = bool(has_signal_terms or has_universe_terms)
+        rows.append(
+            {
+                "run_id": run_id,
+                "workflow_name": run_meta.get(run_id, {}).get("workflow_name", ""),
+                "workflow_started_at": run_meta.get(run_id, {}).get("workflow_started_at", ""),
+                "head_sha": run_meta.get(run_id, {}).get("head_sha", ""),
+                "branch": run_meta.get(run_id, {}).get("branch", ""),
+                "log_path": str(log_path.relative_to(repo_root)),
+                "size_bytes": log_path.stat().st_size,
+                "sha256": sha256_file(log_path),
+                **evidence_terms,
+                "authority_candidate": authority_candidate,
+                "pit_reusable": False,
+                "status": "LOG_DOWNLOADED_REQUIRES_ARTIFACT_PROOF" if authority_candidate else "LOG_DOWNLOADED_NO_SIGNAL_UNIVERSE_PROOF",
+                "reason": "Workflow logs can support provenance but cannot replace a nonempty archived signal/universe artifact.",
+            }
+        )
+    return rows
 
 
 def lineage_rows(paths: list[str], category: str) -> list[dict[str, Any]]:
@@ -605,6 +807,8 @@ def build_review(
     retention: dict[str, Any],
     gh_runs: list[dict[str, Any]],
     gh_artifacts: list[dict[str, Any]],
+    gh_artifact_contents: list[dict[str, Any]],
+    gh_workflow_logs: list[dict[str, Any]],
     authority_receipt: dict[str, Any],
     universe_registry: dict[str, Any],
     rerun_receipt: dict[str, Any],
@@ -618,6 +822,9 @@ def build_review(
 
     complete_signal_sessions = sum(1 for row in event_inventory if row.get("status") == "COMPLETE")
     single_blocker = short_ready.get("single_remaining_blocker", "")
+    nonempty_authority_candidates = sum(1 for row in gh_artifact_contents if row.get("authority_candidate") is True)
+    empty_scanner_files = sum(1 for row in gh_artifact_contents if row.get("status") == "CURRENT_EMPTY_SCANNER_ARTIFACT")
+    workflow_logs_downloaded = sum(1 for row in gh_workflow_logs if str(row.get("status", "")).startswith("LOG_DOWNLOADED"))
     return "\n".join(
         [
             "# Morita Historical PIT + M15 Autonomous Recovery v1.2 Review Bundle",
@@ -638,20 +845,24 @@ def build_review(
             f"14. GitHub CLI / API access available: {gh_status != 'GITHUB_AUTH_ACTION_REQUIRED'}",
             f"15. Workflow/local run evidence inspected: {len(gh_runs)}",
             f"16. Artifacts recovered: {sum(1 for r in gh_artifacts if r.get('artifact_id'))}",
-            f"17. Authority-C families promoted: {authority_receipt.get('authority_c_promoted_count', 0)}",
-            f"18. Authority A count: {authority_receipt.get('authority_a_count', 0)}",
-            f"19. Authority B count: {authority_receipt.get('authority_b_count', 0)}",
-            "20. Exact authoritative source: none promoted yet.",
-            f"21. Exact historical universe recovered: {universe_registry.get('status') == 'PIT_UNIVERSE_VERIFIED'}",
-            "22. Frozen config/universe dates: none.",
-            f"23. Deterministic rerun executed: {rerun_receipt.get('rerun_executed')}",
-            "24. Authoritative S/A/B rows: 0 / 0 / 0",
-            "25. Signal episodes with complete SOXX + ticker M15: 0",
-            f"26. Short v3.5.1 ready: {short_ready.get('ready')}",
-            f"27. Single remaining blocker: {single_blocker}",
-            f"28. User action: {'see USER_ACTION_REQUIRED.md' if webull_status != 'WEBULL_M15_2022_2025_SUPPORTED' or gh_status == 'GITHUB_AUTH_ACTION_REQUIRED' else 'none'}",
-            "29. Next launcher: SETUP_WEBULL_AND_RESUME.cmd, then RESUME_MORITA_RECOVERY.cmd.",
-            "30. Next highest-value task: complete Webull credentialed M15 probe and GitHub Actions authentication so archived workflow artifacts can be recovered.",
+            f"17. Downloaded artifact files inspected: {sum(1 for r in gh_artifact_contents if r.get('file_path'))}",
+            f"18. Nonempty signal/universe-like artifact candidates: {nonempty_authority_candidates}",
+            f"19. Empty current scanner CSV files: {empty_scanner_files}",
+            f"20. Workflow logs downloaded/audited: {workflow_logs_downloaded}",
+            f"21. Authority-C families promoted: {authority_receipt.get('authority_c_promoted_count', 0)}",
+            f"22. Authority A count: {authority_receipt.get('authority_a_count', 0)}",
+            f"23. Authority B count: {authority_receipt.get('authority_b_count', 0)}",
+            "24. Exact authoritative source: none promoted yet.",
+            f"25. Exact historical universe recovered: {universe_registry.get('status') == 'PIT_UNIVERSE_VERIFIED'}",
+            "26. Frozen config/universe dates: none.",
+            f"27. Deterministic rerun executed: {rerun_receipt.get('rerun_executed')}",
+            "28. Authoritative S/A/B rows: 0 / 0 / 0",
+            "29. Signal episodes with complete SOXX + ticker M15: 0",
+            f"30. Short v3.5.1 ready: {short_ready.get('ready')}",
+            f"31. Single remaining blocker: {single_blocker}",
+            f"32. User action: {'see USER_ACTION_REQUIRED.md' if webull_status != 'WEBULL_M15_2022_2025_SUPPORTED' or gh_status == 'GITHUB_AUTH_ACTION_REQUIRED' else 'none'}",
+            "33. Next launcher: SETUP_WEBULL_AND_RESUME.cmd, then RESUME_MORITA_RECOVERY.cmd.",
+            "34. Next highest-value task: find a nonempty archived signal/universe artifact or accept the PIT replay remains blocked.",
             "",
         ]
     )
@@ -775,7 +986,7 @@ def run_v1_2(repo_root: Path, output_root: Path | None = None, run_id: str | Non
     webull_status = webull_terminal_status(retention)
     if webull_receipt["terminal_status"] == "WEBULL_USER_AUTH_ACTION_REQUIRED":
         webull_status = "WEBULL_USER_AUTH_ACTION_REQUIRED"
-    gh_runs, gh_artifacts, signal_lineage, config_lineage, universe_lineage, gh_report, gh_status = recover_github_evidence(repo_root)
+    gh_runs, gh_artifacts, gh_artifact_contents, gh_workflow_logs, signal_lineage, config_lineage, universe_lineage, gh_report, gh_status = recover_github_evidence(repo_root)
     reaudit, promotion_evidence, rejection_reasons, authoritative_calendar, signal_receipt, signal_status = source_authority_reaudit(repo_root, signal_lineage)
     universe_inventory, universe_audit, universe_registry, universe_status = pit_universe_recovery(universe_lineage)
     rerun_contract, rerun_calendar, rerun_reconciliation, rerun_receipt = deterministic_rerun_outputs(universe_status, signal_status)
@@ -811,6 +1022,8 @@ def run_v1_2(repo_root: Path, output_root: Path | None = None, run_id: str | Non
     write_text(output_dir / "webull_m15_credentialed_probe_report.md", webull_report)
     write_csv(output_dir / "github_workflow_run_inventory.csv", gh_runs)
     write_csv(output_dir / "github_workflow_artifact_inventory.csv", gh_artifacts)
+    write_csv(output_dir / "github_artifact_content_evidence_audit.csv", gh_artifact_contents)
+    write_csv(output_dir / "github_workflow_log_evidence_audit.csv", gh_workflow_logs)
     write_csv(output_dir / "github_signal_artifact_lineage.csv", signal_lineage)
     write_csv(output_dir / "github_config_lineage.csv", config_lineage)
     write_csv(output_dir / "github_universe_lineage.csv", universe_lineage)
@@ -840,7 +1053,22 @@ def run_v1_2(repo_root: Path, output_root: Path | None = None, run_id: str | Non
     write_csv(output_dir / "production_rejection_test_results.csv", production_rejection_results())
     write_text(output_dir / "START_HERE_MORITA.md", build_start_here("RESUME_MORITA_RECOVERY.cmd"))
     write_text(output_dir / "USER_ACTION_REQUIRED.md", build_user_action(webull_status, gh_status))
-    review = build_review(env, matrix, retention, gh_runs, gh_artifacts, signal_receipt, universe_registry, rerun_receipt, event_inventory, webull_status, gh_status, short_ready)
+    review = build_review(
+        env,
+        matrix,
+        retention,
+        gh_runs,
+        gh_artifacts,
+        gh_artifact_contents,
+        gh_workflow_logs,
+        signal_receipt,
+        universe_registry,
+        rerun_receipt,
+        event_inventory,
+        webull_status,
+        gh_status,
+        short_ready,
+    )
     write_text(output_dir / "morita_historical_pit_m15_autonomous_recovery_v1_2_chatgpt_review_bundle.md", review)
     manifest = {"artifact_version": ARTIFACT_VERSION, "run_id": run_id, "mode": mode, "guardrails": GUARDRAILS, "files": sorted(p.name for p in output_dir.iterdir() if p.is_file())}
     write_json(output_dir / "run_manifest.json", manifest)

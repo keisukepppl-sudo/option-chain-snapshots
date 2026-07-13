@@ -6,7 +6,7 @@ from pathlib import Path
 
 import pandas as pd
 
-from src.research.pit_recovery.autonomous_recovery_v1_2 import GUARDRAILS, run_v1_2
+from src.research.pit_recovery.autonomous_recovery_v1_2 import GUARDRAILS, audit_github_artifact_contents, run_v1_2
 from src.research.pit_recovery.webull_m15_backfill import event_window_inventory, quality_audit_from_inventory
 from src.research.pit_recovery.webull_m15_credentialed_probe import (
     ProbeWindow,
@@ -212,6 +212,25 @@ def test_27_production_rejection_passes(tmp_path: Path) -> None:
     assert rows["passed"].astype(str).str.lower().eq("true").all()
 
 
+def test_28_empty_scanner_artifact_cannot_promote_authority(tmp_path: Path) -> None:
+    file_path = tmp_path / "data" / "pit_recovery" / "github_artifacts" / "123" / "russell1000-1015-scan" / "2026-07-13" / "notified_candidates_20260713_2128.csv"
+    file_path.parent.mkdir(parents=True)
+    file_path.write_text("\n", encoding="utf-8")
+    rows = audit_github_artifact_contents(
+        tmp_path,
+        [
+            {
+                "run_id": "123",
+                "artifact_name": "russell1000-1015-scan",
+                "workflow_name": "Russell1000 Scanner 10:15 JST Status",
+            }
+        ],
+    )
+    assert rows[0]["status"] == "CURRENT_EMPTY_SCANNER_ARTIFACT"
+    assert rows[0]["authority_candidate"] is False
+    assert rows[0]["pit_reusable"] is False
+
+
 def test_required_output_set(tmp_path: Path) -> None:
     out = _run(tmp_path)
     required = {
@@ -221,6 +240,8 @@ def test_required_output_set(tmp_path: Path) -> None:
         "environment_capability_audit.json",
         "webull_m15_credentialed_capability_matrix.csv",
         "github_workflow_run_inventory.csv",
+        "github_artifact_content_evidence_audit.csv",
+        "github_workflow_log_evidence_audit.csv",
         "authoritative_signal_calendar_v1_2.csv",
         "frozen_pit_universe_registry.json",
         "authoritative_signal_m15_episode_dataset_v1_2.parquet",
