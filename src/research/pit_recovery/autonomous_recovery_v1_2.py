@@ -529,7 +529,28 @@ def create_launchers(repo_root: Path) -> None:
     launchers = {
         "RUN_MORITA_RECOVERY.cmd": "powershell.exe -NoProfile -ExecutionPolicy Bypass -File \"%~dp0scripts\\run_morita_recovery_v1_2.ps1\" -Mode full\n",
         "RESUME_MORITA_RECOVERY.cmd": "powershell.exe -NoProfile -ExecutionPolicy Bypass -File \"%~dp0scripts\\run_morita_recovery_v1_2.ps1\" -Mode resume\n",
-        "SETUP_WEBULL_AND_RESUME.cmd": "powershell.exe -NoProfile -ExecutionPolicy Bypass -File \"%~dp0scripts\\setup_webull_credentials_interactive.ps1\"\n",
+        "SETUP_WEBULL_AND_RESUME.cmd": "\n".join(
+            [
+                "@echo off",
+                "setlocal",
+                "powershell.exe -NoProfile -ExecutionPolicy Bypass -Command ^",
+                "  \"$ErrorActionPreference='Stop';\" ^",
+                "  \"Write-Host 'Webull credential setup. Do not paste secrets into ChatGPT.';\" ^",
+                "  \"$AppKey = Read-Host 'WEBULL_APP_KEY';\" ^",
+                "  \"$Secret = Read-Host 'WEBULL_APP_SECRET' -AsSecureString;\" ^",
+                "  \"$BSTR = [Runtime.InteropServices.Marshal]::SecureStringToBSTR($Secret);\" ^",
+                "  \"$Plain = [Runtime.InteropServices.Marshal]::PtrToStringAuto($BSTR);\" ^",
+                "  \"[Environment]::SetEnvironmentVariable('WEBULL_APP_KEY', $AppKey, 'User');\" ^",
+                "  \"[Environment]::SetEnvironmentVariable('WEBULL_APP_SECRET', $Plain, 'User');\" ^",
+                "  \"[Runtime.InteropServices.Marshal]::ZeroFreeBSTR($BSTR);\" ^",
+                "  \"Write-Host 'Saved to Windows User environment variables.';\" ^",
+                "  \"$Base = '%~dp0';\" ^",
+                "  \"$Resume = Join-Path $Base 'scripts\\run_morita_recovery_v1_2.ps1';\" ^",
+                "  \"if (Test-Path $Resume) { powershell.exe -NoProfile -ExecutionPolicy Bypass -File $Resume -Mode resume } else { Write-Host 'If this file is outside the repo, open the repo folder and run RESUME_MORITA_RECOVERY.cmd after this.' }\"",
+                "pause",
+                "",
+            ]
+        ),
         "SETUP_GITHUB_AND_RESUME.cmd": "powershell.exe -NoProfile -ExecutionPolicy Bypass -File \"%~dp0scripts\\setup_github_and_resume_v1_2.ps1\"\n",
     }
     for name, text in launchers.items():
@@ -544,6 +565,7 @@ def create_launchers(repo_root: Path) -> None:
                 "Set-Location $Root",
                 "$Py = 'C:\\Users\\keisu\\.cache\\codex-runtimes\\codex-primary-runtime\\dependencies\\python\\python.exe'",
                 "if (-not (Test-Path $Py)) { $Py = 'python' }",
+                "& $Py -m pip install --quiet --disable-pip-version-check webull-openapi-python-sdk==2.0.13",
                 "& $Py -B -m pytest tests\\test_morita_historical_pit_m15_autonomous_recovery_v1_2.py -q -p no:cacheprovider",
                 "& $Py -B scripts\\run_morita_historical_pit_m15_autonomous_recovery_v1_2.py --full-autonomous-run",
                 "$Latest = Get-ChildItem outputs\\research_only\\morita_historical_pit_m15_autonomous_recovery_v1_2 -Directory | Sort-Object LastWriteTime -Descending | Select-Object -First 1",

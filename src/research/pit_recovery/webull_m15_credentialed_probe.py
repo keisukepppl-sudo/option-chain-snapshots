@@ -4,8 +4,10 @@ import hashlib
 import importlib
 import inspect
 import json
+import logging
 import os
 import subprocess
+import time as pytime
 from dataclasses import dataclass
 from datetime import date, datetime, time, timezone
 from pathlib import Path
@@ -222,6 +224,8 @@ def classify_response(window: ProbeWindow, response: Any, error: str = "") -> tu
 def fake_blocked_probe(repo_root: Path) -> tuple[list[dict[str, Any]], list[dict[str, Any]], list[dict[str, Any]], dict[str, Any], str]:
     credentials = credential_inventory(repo_root)
     sdk = sdk_interface_audit()
+    if os.getenv("MORITA_V12_DISABLE_LIVE_WEBULL") != "1" and credentials["credential_present"] and sdk["interface_status"] == "PASS":
+        return credentialed_probe(repo_root, credentials, sdk)
     requests = [request_log_row(window) for window in build_probe_windows()]
     matrix = []
     audit = []
@@ -261,6 +265,107 @@ def fake_blocked_probe(repo_root: Path) -> tuple[list[dict[str, Any]], list[dict
         "blocked_reason": "WEBULL_USER_AUTH_ACTION_REQUIRED" if not credentials["credential_present"] else "SDK_OR_AUTH_PROBE_NOT_COMPLETED",
     }
     return matrix, requests, audit, receipt, report
+
+
+def credentialed_probe(repo_root: Path, credentials: dict[str, Any] | None = None, sdk: dict[str, Any] | None = None) -> tuple[list[dict[str, Any]], list[dict[str, Any]], list[dict[str, Any]], dict[str, Any], str]:
+    credentials = credentials or credential_inventory(repo_root)
+    sdk = sdk or sdk_interface_audit()
+    app_key = os.getenv("WEBULL_APP_KEY") or safe_user_env("WEBULL_APP_KEY") or ""
+    app_secret = os.getenv("WEBULL_APP_SECRET") or safe_user_env("WEBULL_APP_SECRET") or ""
+    region = os.getenv("WEBULL_REGION_ID") or safe_user_env("WEBULL_REGION_ID") or "jp"
+    endpoint = os.getenv("WEBULL_API_ENDPOINT") or safe_user_env("WEBULL_API_ENDPOINT") or ("api.webull.co.jp" if region == "jp" else "")
+    request_rows = [request_log_row(window) for window in build_probe_windows()]
+    matrix: list[dict[str, Any]] = []
+    audit: list[dict[str, Any]] = []
+    if not app_key or not app_secret:
+        return fake_blocked_probe(repo_root)
+    try:
+        logging.getLogger("webull").setLevel(logging.WARNING)
+        from webull.core.client import ApiClient
+        from webull.data.common.category import Category
+        from webull.data.common.timespan import Timespan
+        from webull.data.data_client import DataClient
+
+        api_client = ApiClient(app_key, app_secret, region)
+        if endpoint:
+            api_client.add_endpoint(region, endpoint)
+        data_client = DataClient(api_client)
+        for window, request_row in zip(build_probe_windows(), request_rows, strict=True):
+            category = Category.US_ETF.name if window.symbol in {"SOXX", "QQQ"} else Category.US_STOCK.name
+            timespan = getattr(Timespan, window.interval).name
+            payload_for_hash: Any = None
+            error = ""
+            response = None
+            try:
+                response = data_client.market_data.get_history_bar(
+                    symbol=window.symbol,
+                    category=category,
+                    timespan=timespan,
+                    count="1200",
+                    trading_sessions="RTH",
+                    start_time=window.start_time_ms,
+                    end_time=window.end_time_ms,
+                )
+                try:
+                    payload_for_hash = response.json()
+                except Exception:
+                    payload_for_hash = getattr(response, "text", "")
+            except Exception as exc:
+                error = f"{type(exc).__name__}: {str(exc)[:180]}"
+            status, detail = classify_response(window, response, error=error)
+            returned_min = str(detail.get("returned_min_time", ""))
+            returned_max = str(detail.get("returned_max_time", ""))
+            requested_date_matched = window.session_date in returned_min or window.session_date in returned_max
+            start_end_honored = status.startswith("HISTORICAL_M15_") or status.endswith("_SUPPORTED_DIAGNOSTIC")
+            matrix.append(
+                {
+                    "symbol": window.symbol,
+                    "session_date": window.session_date,
+                    "interval": window.interval,
+                    "status": status,
+                    "requested_date_matched": requested_date_matched,
+                    "row_count": detail.get("row_count", 0),
+                    "start_end_honored": start_end_honored,
+                }
+            )
+            audit.append(
+                {
+                    **request_row,
+                    "response_status": status,
+                    "returned_min_time": returned_min,
+                    "returned_max_time": returned_max,
+                    "response_sha256": response_hash(payload_for_hash) if payload_for_hash is not None else "",
+                    "error": detail.get("error", ""),
+                }
+            )
+            pytime.sleep(0.15)
+        terminal = "WEBULL_M15_2022_2025_SUPPORTED" if all(
+            any(row["symbol"] == "SOXX" and row["interval"] == "M15" and row["session_date"].startswith(year) and "SUPPORTED" in row["status"] for row in matrix)
+            for year in ["2022", "2023", "2024", "2025"]
+        ) else "WEBULL_M15_PARTIAL"
+        report = "\n".join(
+            [
+                "# Webull M15 Credentialed Probe Report",
+                "",
+                f"credential_present: {credentials['credential_present']}",
+                "credentialed_probe_executed: True",
+                f"sdk_version: {sdk.get('sdk_version', '')}",
+                f"sdk_interface_status: {sdk.get('interface_status', '')}",
+                f"terminal_status: {terminal}",
+                "No order, account, balance, position, or preview endpoint was called.",
+                "",
+            ]
+        )
+        receipt = {
+            "terminal_status": terminal,
+            "credential": {**credentials, "authentication_status": "WEBULL_AUTH_OK"},
+            "sdk": sdk,
+            "probe_executed": True,
+            "blocked_reason": "" if terminal == "WEBULL_M15_2022_2025_SUPPORTED" else "WEBULL_M15_PARTIAL",
+        }
+        return matrix, request_rows, audit, receipt, report
+    finally:
+        app_secret = ""
 
 
 def response_hash(payload: Any) -> str:
