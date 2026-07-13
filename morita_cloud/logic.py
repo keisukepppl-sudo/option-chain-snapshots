@@ -8,10 +8,12 @@ import pandas as pd
 
 
 # User-facing checkpoint labels are fixed Japan times. The values are
-# (JST wall-clock time, day offset from the U.S. trading date).
+# (actual JST execution time, day offset from the U.S. trading date).
+# The 22:30 slot executes at 22:35 so the first regular-session 5-minute bar
+# is complete; this remains inside the user's accepted five-minute tolerance.
 # "24:00" means midnight at the end of the U.S. trading date's JST date.
 CHECKPOINT_TIMES = {
-    "22:30": (time(22, 30), 0),
+    "22:30": (time(22, 35), 0),
     "23:00": (time(23, 0), 0),
     "24:00": (time(0, 0), 1),
 }
