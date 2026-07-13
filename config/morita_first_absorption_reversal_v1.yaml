@@ -1,0 +1,22 @@
+artifact_version: morita_first_absorption_reversal_v1
+research_only: true
+live_order_allowed: false
+broker_integration_allowed: false
+webull_integration_allowed: false
+production_scanner_change_allowed: false
+primary_lookback_sessions: 126
+lookback_sessions: [63, 126, 189]
+min_days_since_s: 20
+primary_candidate_drawdown_threshold: -0.05
+candidate_drawdown_thresholds: [-0.05, -0.08, -0.10, -0.12]
+primary_close_location_threshold: 0.65
+close_location_thresholds: [0.65, 0.75, 0.85]
+primary_relative_peer_threshold: 0.01
+relative_peer_thresholds: [0.0, 0.01, 0.02]
+primary_relative_soxx_threshold: 0.005
+relative_soxx_thresholds: [0.0, 0.005, 0.01]
+primary_universe_two_day_median_threshold: 0.0
+universe_two_day_median_thresholds: [0.0, -0.01, -0.02]
+fundamental_filter_policy: missing_point_in_time_event_audit_fails_to_AMBIGUOUS
+option_policy: underlying_first_options_blocked_without_historical_chains
+

@@ -1,0 +1,130 @@
+{
+  "files": [
+    {
+      "bytes": 49,
+      "exists": true,
+      "path": "outputs/morita_first_absorption_reversal_v1/RESEARCH_ONLY_DO_NOT_EXECUTE.marker",
+      "sha256": "7c1a681880c809f31617a3da6b919ffa93eb4cb334429d84a2110fb6c6bfec09"
+    },
+    {
+      "bytes": 17384,
+      "exists": true,
+      "path": "outputs/morita_first_absorption_reversal_v1/signal_candidates.csv",
+      "sha256": "a41bc4ae743c3c8479cc06773aa550e10083c95997143da3521a3a3c66ba1b4d"
+    },
+    {
+      "bytes": 105931,
+      "exists": true,
+      "path": "outputs/morita_first_absorption_reversal_v1/trade_level_underlying.csv",
+      "sha256": "a6331662e9ebf654dc3bda60c380d1f3d5b105660153dab9dca25608a89ba07b"
+    },
+    {
+      "bytes": 237,
+      "exists": true,
+      "path": "outputs/morita_first_absorption_reversal_v1/trade_level_options.csv",
+      "sha256": "ffbf5a2dfb464e489bdd3c3398f1dc63adca932330e1847566962def03c7f00e"
+    },
+    {
+      "bytes": 7905,
+      "exists": true,
+      "path": "outputs/morita_first_absorption_reversal_v1/event_audit.csv",
+      "sha256": "24393760bc2f491ce5c0f23179c2d492068ad131a0937e20b1d9cb16496fa28d"
+    },
+    {
+      "bytes": 5888,
+      "exists": true,
+      "path": "outputs/morita_first_absorption_reversal_v1/fundamental_filter_audit.csv",
+      "sha256": "1bf0f55a8f8c53999aca55dd4bd62e35d92e9ab7e65a5881746ada4c16f420f9"
+    },
+    {
+      "bytes": 5291,
+      "exists": true,
+      "path": "outputs/morita_first_absorption_reversal_v1/regime_classification.csv",
+      "sha256": "0f74a99bc77e1566923776d02cf9fe4da6667737f04270ae2412a4e00f4f8ccc"
+    },
+    {
+      "bytes": 81837,
+      "exists": true,
+      "path": "outputs/morita_first_absorption_reversal_v1/peer_universe_daily.csv",
+      "sha256": "612c0579ecd7523a832f05998dabfb0c04f8abb2fc1c02f8a3b03c3a27067d86"
+    },
+    {
+      "bytes": 3313,
+      "exists": true,
+      "path": "outputs/morita_first_absorption_reversal_v1/parameter_sensitivity.csv",
+      "sha256": "7f7920a30b2c7286fcd84969167543f7e2308985b8bdb520c9da41a2b181984c"
+    },
+    {
+      "bytes": 897,
+      "exists": true,
+      "path": "outputs/morita_first_absorption_reversal_v1/yearly_summary.csv",
+      "sha256": "111d2591f44eb0f442360b7b4d94347037268d81d2caf9c215b7e2c03d718efa"
+    },
+    {
+      "bytes": 1236,
+      "exists": true,
+      "path": "outputs/morita_first_absorption_reversal_v1/regime_summary.csv",
+      "sha256": "8d70464cd45952098aac2c36fd174390d2ed41b32b887bf7184b9f78182819d1"
+    },
+    {
+      "bytes": 1815,
+      "exists": true,
+      "path": "outputs/morita_first_absorption_reversal_v1/ticker_summary.csv",
+      "sha256": "f7e905f4c459d5ec2988ef35c861c41cee1498618853dac12e7f609786a4bfcf"
+    },
+    {
+      "bytes": 3589,
+      "exists": true,
+      "path": "outputs/morita_first_absorption_reversal_v1/concentration_report.csv",
+      "sha256": "c250eefed2337c638eda5d7850325f80044cc17d547c9818c50e22ca396f0a48"
+    },
+    {
+      "bytes": 438,
+      "exists": true,
+      "path": "outputs/morita_first_absorption_reversal_v1/false_positive_cases.csv",
+      "sha256": "b338b3d9fd8ac14a51b3fe8044cd8c5025e632cb5b7885d89c188a33fedbb5ea"
+    },
+    {
+      "bytes": 250,
+      "exists": true,
+      "path": "outputs/morita_first_absorption_reversal_v1/excluded_shock_cases.csv",
+      "sha256": "b1ff52657085889730aa816cd9ab03fe68b0ca6c675e973b7afe83647345c63b"
+    },
+    {
+      "bytes": 1184,
+      "exists": true,
+      "path": "outputs/morita_first_absorption_reversal_v1/source_inventory.csv",
+      "sha256": "d479840419cf8880869fc1d474ef2457638be99124281968def7aa6e6406a5cd"
+    },
+    {
+      "bytes": 3332,
+      "exists": true,
+      "path": "outputs/morita_first_absorption_reversal_v1/case_study_mksi_amat.md",
+      "sha256": "d8f400a07bc585ee6c9696be1da69ddb41ca64f90d45c6b61c473b8a4f5cab0e"
+    },
+    {
+      "bytes": 314,
+      "exists": true,
+      "path": "outputs/morita_first_absorption_reversal_v1/case_study_covid.md",
+      "sha256": "7427578f63c25155552517a749fe3f546a265e6632757ab1647438f87a5eee76"
+    },
+    {
+      "bytes": 3394,
+      "exists": true,
+      "path": "outputs/morita_first_absorption_reversal_v1/backtest_report.md",
+      "sha256": "551e4de9856951daec61b7e49ae86ee174184f719731d096156363a65f767e91"
+    },
+    {
+      "bytes": 2534,
+      "exists": true,
+      "path": "outputs/morita_first_absorption_reversal_v1/chatgpt_review_bundle.md",
+      "sha256": "068190523cfba69040e37d8294390b0d50a87ed8ad523783d0aa364844c98c17"
+    },
+    {
+      "bytes": 1330,
+      "exists": true,
+      "path": "outputs/morita_first_absorption_reversal_v1/receipt.json",
+      "sha256": "6628fe19ee8f65607a6c1ea2d0e73186b0e9fef9738783ede0ff9eac0982cf36"
+    }
+  ]
+}

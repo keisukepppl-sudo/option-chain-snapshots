@@ -1,0 +1,29 @@
+{
+  "adoption_reason": "No CLEAN PIT fundamental audit rows and no historical option chains.",
+  "adoption_status": "BLOCKED_NOT_ADOPTION_READY",
+  "artifact_version": "morita_first_absorption_reversal_v1",
+  "broker_integration_allowed": false,
+  "candidate_rows": 24,
+  "clean_candidate_rows": 0,
+  "consumable_by_production": false,
+  "daily_rows_loaded": 4507,
+  "execution_allowed": false,
+  "git_head_at_run_start": "f06c0b85ad9da3d4c84545b34f22457677a76b92",
+  "live_order_allowed": false,
+  "options_trade_rows": 0,
+  "peer_universe_daily_rows": 416,
+  "primary_e_candidate_rows": 0,
+  "recent_s_membership_rows": 3453,
+  "research_only": true,
+  "run_timestamp_utc": "2026-07-13T15:32:43.410355+00:00",
+  "signal_scope": "MORITA_FIRST_ABSORPTION_REVERSAL_V1_RESEARCH_ONLY",
+  "signals_loaded": 381,
+  "sources": {
+    "daily_path": "data/pit/daily/core_semis_daily.parquet",
+    "intraday_path": "data/pit/intraday/core_semis_m15.parquet",
+    "signals_2023_path": "outputs/morita_2023_rs_warmup_retest_v1/morita_2023_signal_panel.csv",
+    "signals_2024_2026_path": "market_bomb_history/morita_bot_historical_baseline_v1/historical_runs/morita_baseline_20260703T123912Z_4994e3744ffa/morita_bot_baseline_panel.csv"
+  },
+  "underlying_trade_rows": 308,
+  "webull_integration_allowed": false
+}

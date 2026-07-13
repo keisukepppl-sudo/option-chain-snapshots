@@ -1,0 +1,1 @@
+candidate_id,ticker,option_status,reason,assumed_iv,assumed_dte,assumed_delta,premium_return,research_only,execution_allowed,live_order_allowed,broker_integration_allowed,webull_integration_allowed,consumable_by_production,signal_scope
