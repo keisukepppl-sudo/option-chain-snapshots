@@ -14,6 +14,7 @@ from morita_cloud.cache import build_precompute, load_precompute, manifest_name
 from morita_cloud.intraday import fetch_intraday_snapshots_at_cutoff
 from morita_cloud.logic import (
     CHECKPOINT_TIMES,
+    FINAL_EXECUTION_SLOT,
     WAKE_START,
     checkpoint_candidates,
     checkpoint_timestamp,
@@ -172,10 +173,10 @@ class TickRunner:
     ) -> TickResult:
         notification = send_notification(
             checkpoint_message(action, candidates, cutoff),
-            title=f"Morita Bot {action} ET",
-            priority=0 if action == "10:00" else 1,
+            title=f"Morita Bot {action} JST",
+            priority=0 if action == "22:30" else 1,
             discord_message=full_discord_message(
-                f"{action} ET S+A Check",
+                f"{action} JST S+A Check",
                 checkpoint_candidates(candidates),
                 cutoff,
             ),
@@ -191,7 +192,7 @@ class TickRunner:
             "notification": notification,
             "output": output_name,
         }
-        if action == "12:00":
+        if action == FINAL_EXECUTION_SLOT:
             state["noon_snapshot_complete"] = True
             state["noon_execution_tickers"] = sorted(set(s_tickers + a_tickers))
         self.store.write_json(state_name, state, generation=generation)
@@ -235,7 +236,7 @@ class TickRunner:
             retry=60,
             expire=600,
             sound="siren",
-            discord_message=full_discord_message("POST-NOON NEW S", late, cutoff),
+            discord_message=full_discord_message("POST-24:00 JST NEW S", late, cutoff),
             dry_run=self.dry_run,
         )
         sent = state.setdefault("late_s_emergency_sent", {})
@@ -298,6 +299,7 @@ class TickRunner:
             "intraday_coverage": coverage,
             "selected_count": int(len(candidates)),
             "cutoff_et": normalize_et(cutoff_et).isoformat(),
+            "cutoff_jst": normalize_et(cutoff_et).tz_convert("Asia/Tokyo").isoformat(),
             "precompute_created_at_utc": bundle.manifest.get("created_at_utc"),
             "latest_daily_bar": bundle.manifest.get("latest_daily_bar"),
         }
