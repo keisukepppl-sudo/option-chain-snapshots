@@ -26,26 +26,28 @@ def sample_candidates() -> pd.DataFrame:
 
 def test_determine_action_uses_fixed_jst_checkpoint_retry_window_in_summer() -> None:
     state = default_state("2026-07-10")
-    assert determine_action(pd.Timestamp("2026-07-10 09:30", tz="America/New_York"), state, True) == "22:30"
-    assert determine_action(pd.Timestamp("2026-07-10 09:39", tz="America/New_York"), state, True) == "22:30"
-    assert determine_action(pd.Timestamp("2026-07-10 09:46", tz="America/New_York"), state, True) is None
+    assert determine_action(pd.Timestamp("2026-07-10 09:30", tz="America/New_York"), state, True) is None
+    assert determine_action(pd.Timestamp("2026-07-10 09:35", tz="America/New_York"), state, True) == "22:30"
+    assert determine_action(pd.Timestamp("2026-07-10 09:44", tz="America/New_York"), state, True) == "22:30"
+    assert determine_action(pd.Timestamp("2026-07-10 09:50", tz="America/New_York"), state, True) is None
     assert determine_action(pd.Timestamp("2026-07-10 10:00", tz="America/New_York"), state, True) == "23:00"
     assert determine_action(pd.Timestamp("2026-07-10 11:00", tz="America/New_York"), state, True) == "24:00"
 
 
 def test_fixed_jst_checkpoints_shift_et_automatically_in_winter() -> None:
     state = default_state("2026-12-10")
-    assert determine_action(pd.Timestamp("2026-12-10 08:30", tz="America/New_York"), state, True) == "22:30"
+    assert determine_action(pd.Timestamp("2026-12-10 08:35", tz="America/New_York"), state, True) == "22:30"
     assert determine_action(pd.Timestamp("2026-12-10 09:00", tz="America/New_York"), state, True) == "23:00"
     assert determine_action(pd.Timestamp("2026-12-10 10:00", tz="America/New_York"), state, True) == "24:00"
 
 
-def test_checkpoint_timestamp_is_exact_fixed_jst_wall_clock() -> None:
+def test_checkpoint_timestamp_uses_fixed_jst_execution_instants() -> None:
     summer = pd.Timestamp("2026-07-10 12:00", tz="America/New_York")
     winter = pd.Timestamp("2026-12-10 12:00", tz="America/New_York")
-    assert checkpoint_timestamp(summer, "22:30").tz_convert("Asia/Tokyo").strftime("%Y-%m-%d %H:%M") == "2026-07-10 22:30"
+    assert checkpoint_timestamp(summer, "22:30").tz_convert("Asia/Tokyo").strftime("%Y-%m-%d %H:%M") == "2026-07-10 22:35"
+    assert checkpoint_timestamp(summer, "23:00").tz_convert("Asia/Tokyo").strftime("%Y-%m-%d %H:%M") == "2026-07-10 23:00"
     assert checkpoint_timestamp(summer, "24:00").tz_convert("Asia/Tokyo").strftime("%Y-%m-%d %H:%M") == "2026-07-11 00:00"
-    assert checkpoint_timestamp(winter, "22:30").tz_convert("Asia/Tokyo").strftime("%Y-%m-%d %H:%M") == "2026-12-10 22:30"
+    assert checkpoint_timestamp(winter, "22:30").tz_convert("Asia/Tokyo").strftime("%Y-%m-%d %H:%M") == "2026-12-10 22:35"
     assert checkpoint_timestamp(winter, "24:00").tz_convert("Asia/Tokyo").strftime("%Y-%m-%d %H:%M") == "2026-12-11 00:00"
 
 
