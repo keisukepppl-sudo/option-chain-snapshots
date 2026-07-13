@@ -1,0 +1,37 @@
+{
+  "daily_ohlcv": {
+    "bytes": 152402462,
+    "exists": true,
+    "path": "C:\\Users\\keisu\\Documents\\Codex\\2026-06-25\\bot-rs-2-1-2-historical\\work\\option-chain-snapshots-main\\outputs\\morita_2023_rs_warmup_retest_v1\\input\\morita_baseline_2022warmup_2023_2026_v1\\sources\\daily_ohlcv_merged.csv",
+    "sha256": "0afa703c2509fbf5b5aa11a300586f6ce709841fa7fed2b9de2c77351da91438"
+  },
+  "git": {
+    "branch": "research/morita-short-v3-5-2-independent-audit-20260714",
+    "head": "a1f2d80daf0ccae220de3499fb9753b302521902",
+    "status_short": "?? __pycache__/\n?? aws/pushover_healthcheck/__pycache__/\n?? outputs/research_only/morita_short_v3_5_2_independent_audit/\n?? scanner/__pycache__/\n?? scripts/__pycache__/\n?? scripts/run_morita_short_v3_5_2_independent_audit.py\n?? src/__pycache__/\n?? src/morita_first_absorption_reversal_v1/__pycache__/\n?? src/morita_long_call_completion_research/__pycache__/\n?? src/morita_notification_v2/__pycache__/\n?? src/morita_single_call_reference/__pycache__/\n?? src/morita_unified_flow_v3_8_pit_band_recovery/__pycache__/\n?? src/research/__pycache__/\n?? src/research/pit_recovery/__pycache__/\n?? tests/__pycache__/\n?? tests/test_morita_short_v3_5_2_independent_audit.py"
+  },
+  "instruction": {
+    "bytes": 14373,
+    "exists": true,
+    "path": "C:\\Users\\keisu\\Downloads\\morita_integration_room2_short_v3_5_2_independent_audit_instruction.md",
+    "sha256": "916bbd0342ad08ed3ef59c75e3cfe2a499a1e5050d541934f5fbda31b70eea9f"
+  },
+  "m15_bars": {
+    "bytes": 1310970,
+    "exists": true,
+    "path": "C:\\Users\\keisu\\Documents\\Codex\\2026-06-25\\bot-rs-2-1-2-historical\\work\\option-chain-snapshots-main\\data\\intraday\\normalized\\webull_semis_m15.parquet",
+    "sha256": "0e240208abfac283e592c28bda63e08869b7a0d5ffb832fe27f673cd3c6677be"
+  },
+  "signal_calendar": {
+    "bytes": 419854,
+    "exists": true,
+    "path": "C:\\Users\\keisu\\Documents\\Codex\\2026-07-11\\files-mentioned-by-the-user-morita\\outputs\\morita_current_conditions_sa_signal_calendar_latest.csv",
+    "sha256": "98a0be34b66a325fead14d205edc83becf063a66df4006cc922d57da2ae201a7"
+  },
+  "source_receipt": {
+    "bytes": 1484,
+    "exists": true,
+    "path": "C:\\Users\\keisu\\Documents\\Codex\\2026-07-11\\files-mentioned-by-the-user-morita\\outputs\\morita_current_conditions_sa_rebuild_v1_run_receipt_latest.json",
+    "sha256": "9a1cccfc177f76f751e3ac6d86664a1f7146c2cb44c58db943487abbe09ac5b1"
+  }
+}

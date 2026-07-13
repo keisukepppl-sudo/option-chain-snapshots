@@ -1,0 +1,4 @@
+concentration_axis,group_count,top_1_share_of_positive_pnl,top_3_share_of_positive_pnl,top_5_share_of_positive_pnl,largest_positive_group,largest_positive_group_return_sum,research_only,execution_allowed,live_order_allowed,order_preview_allowed,broker_account_access_allowed,positions_access_allowed,balance_access_allowed,threshold_optimization_allowed,future_information_allowed,synthetic_intraday_data_allowed,consumable_by_production
+ticker,143,0.6107364963685316,0.7088203449520498,0.7545626843534564,CAR,7.735364011717586,True,False,False,False,False,False,False,False,False,False,False
+ticker_episode,477,0.41414924058749675,0.4562495085520489,0.48953291207591226,TE5_CAR_0002,7.544296536459976,True,False,False,False,False,False,False,False,False,False,False
+market_episode,35,0.6470746722044897,0.7876354016776983,0.874353121657939,ME_0034,7.290578758251426,True,False,False,False,False,False,False,False,False,False,False

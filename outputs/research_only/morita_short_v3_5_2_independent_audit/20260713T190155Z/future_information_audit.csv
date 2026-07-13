@@ -1,0 +1,6 @@
+audit,future_information_detected,status,detail,research_only,execution_allowed,live_order_allowed,order_preview_allowed,broker_account_access_allowed,positions_access_allowed,balance_access_allowed,threshold_optimization_allowed,future_information_allowed,synthetic_intraday_data_allowed,consumable_by_production
+d0_selection_window,False,PASS,D0 search uses sessions after signal date but before D1 entry only.,True,False,False,False,False,False,False,False,False,False,False
+d1_entry_selection,False,PASS,D1 candidates are selected from D0 event and next session calendar only.,True,False,False,False,False,False,False,False,False,False,False
+entry_timestamp,False,PASS,M15 entries use exact bar-start open at timestamp; missing bars are not filled.,True,False,False,False,False,False,False,False,False,False,False
+missing_m15_interpolation,False,PASS,Missing 09:45/10:00/10:30 bars remain missing.,True,False,False,False,False,False,False,False,False,False,False
+m15_coverage,False,BLOCKED_SUBSET,Intraday variants are formal only on real M15-covered subset.,True,False,False,False,False,False,False,False,False,False,False

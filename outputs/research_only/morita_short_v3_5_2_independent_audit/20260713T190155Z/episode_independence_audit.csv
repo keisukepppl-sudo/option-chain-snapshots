@@ -1,0 +1,8 @@
+metric,value,research_only,execution_allowed,live_order_allowed,order_preview_allowed,broker_account_access_allowed,positions_access_allowed,balance_access_allowed,threshold_optimization_allowed,future_information_allowed,synthetic_intraday_data_allowed,consumable_by_production
+raw signal rows,813.0,True,False,False,False,False,False,False,False,False,False,False
+constructed candidates,804.0,True,False,False,False,False,False,False,False,False,False,False
+unique ticker-date,525.0,True,False,False,False,False,False,False,False,False,False,False
+unique ticker episodes,477.0,True,False,False,False,False,False,False,False,False,False,False
+unique market episodes,35.0,True,False,False,False,False,False,False,False,False,False,False
+median candidates per market episode,16.0,True,False,False,False,False,False,False,False,False,False,False
+max candidates per market episode,85.0,True,False,False,False,False,False,False,False,False,False,False

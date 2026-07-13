@@ -1,0 +1,49 @@
+﻿{
+    "artifact_version":  "morita_short_v3_5_2_independent_audit",
+    "balance_access_allowed":  false,
+    "broker_account_access_allowed":  false,
+    "candidate_n":  804,
+    "consumable_by_production":  false,
+    "decision_tags":  [
+                          "0945_ADVANTAGE_REPLICATED",
+                          "S_OUTPERFORMS_A_ROBUSTLY",
+                          "NO_INDEPENDENT_EPISODE_ALPHA_CONFIRMED"
+                      ],
+    "execution_allowed":  false,
+    "future_information_allowed":  false,
+    "input_reconciled":  true,
+    "live_order_allowed":  false,
+    "m15_trade_rows":  630,
+    "market_episode_n":  35,
+    "order_preview_allowed":  false,
+    "output_dir":  "C:\\Users\\keisu\\Documents\\Codex\\2026-06-25\\bot-rs-2-1-2-historical\\work\\morita_short_v3_5_2_independent_audit_20260714\\outputs\\research_only\\morita_short_v3_5_2_independent_audit\\20260713T190155Z",
+    "positions_access_allowed":  false,
+    "raw_signal_rows":  813,
+    "repo_root":  "C:\\Users\\keisu\\Documents\\Codex\\2026-06-25\\bot-rs-2-1-2-historical\\work\\morita_short_v3_5_2_independent_audit_20260714",
+    "research_only":  true,
+    "run_at_utc":  "2026-07-13T19:03:10.034015+00:00",
+    "run_id":  "20260713T190155Z",
+    "source_branch_reported":  "research/first-absorption-reversal-v1",
+    "source_commit_reported":  "6ab4c7b04148bbef4036b7ec5e52d304b06a5473",
+    "synthetic_intraday_data_allowed":  false,
+    "terminal_statuses":  [
+                              "0945_ADVANTAGE_REPLICATED",
+                              "S_OUTPERFORMS_A_ROBUSTLY",
+                              "NO_INDEPENDENT_EPISODE_ALPHA_CONFIRMED",
+                              "NO_USER_ACTION_REQUIRED"
+                          ],
+    "threshold_optimization_allowed":  false,
+    "ticker_episode_n":  477,
+    "tests":  [
+                  {
+                      "scope":  "targeted",
+                      "status":  "PASS",
+                      "detail":  "5 passed"
+                  },
+                  {
+                      "scope":  "full_suite",
+                      "status":  "TIMEOUT",
+                      "detail":  "Timed out after 304 seconds"
+                  }
+              ]
+}

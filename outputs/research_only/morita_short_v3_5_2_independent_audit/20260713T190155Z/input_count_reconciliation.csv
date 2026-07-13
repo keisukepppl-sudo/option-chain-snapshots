@@ -1,0 +1,7 @@
+metric,expected,actual,status,research_only,execution_allowed,live_order_allowed,order_preview_allowed,broker_account_access_allowed,positions_access_allowed,balance_access_allowed,threshold_optimization_allowed,future_information_allowed,synthetic_intraday_data_allowed,consumable_by_production
+S,309,309,PASS,True,False,False,False,False,False,False,False,False,False,False
+A,504,504,PASS,True,False,False,False,False,False,False,False,False,False,False
+S+A,813,813,PASS,True,False,False,False,False,False,False,False,False,False,False
+base_candidates,1147,1147,PASS,True,False,False,False,False,False,False,False,False,False,False
+min_signal_date,2023-01-04,2023-01-04,PASS,True,False,False,False,False,False,False,False,False,False,False
+max_signal_date,2026-07-02,2026-07-02,PASS,True,False,False,False,False,False,False,False,False,False,False

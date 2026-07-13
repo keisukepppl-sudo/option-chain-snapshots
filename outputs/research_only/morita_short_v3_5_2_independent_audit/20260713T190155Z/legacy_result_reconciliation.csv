@@ -1,0 +1,10 @@
+comparison,legacy_value,current_value,difference_driver,research_only,execution_allowed,live_order_allowed,order_preview_allowed,broker_account_access_allowed,positions_access_allowed,balance_access_allowed,threshold_optimization_allowed,future_information_allowed,synthetic_intraday_data_allowed,consumable_by_production
+v3.4.1 candidate 09:45 PF,3.369,1.4767890206995815,Mostly unavailable because full-population M15 is not present; no synthetic intraday fill used.,True,False,False,False,False,False,False,False,False,False,False
+later small sample candidate S PF,1.269,1.7871216820426779,Population expanded to current-condition S signals and daily D0 deterioration construction.,True,False,False,False,False,False,False,False,False,False,False
+later small sample candidate A PF,1.172,1.1232005737942077,Population expanded to current-condition A signals and daily D0 deterioration construction.,True,False,False,False,False,False,False,False,False,False,False
+later small sample episode S PF,0.685,1.4918027554423428,Candidate rows collapsed to market episodes.,True,False,False,False,False,False,False,False,False,False,False
+later small sample episode A PF,0.869,1.0065621176395692,Candidate rows collapsed to market episodes.,True,False,False,False,False,False,False,False,False,False,False
+current daily proxy candidate S+A Open D1,,1.4232105090939549,Daily-open proxy result; 09:45 formal comparison blocked where M15 is missing.,True,False,False,False,False,False,False,False,False,False,False
+current daily proxy market-episode S+A Open D1,,1.3254133958346932,Independence adjustment result.,True,False,False,False,False,False,False,False,False,False,False
+input reconciliation,,1.0,S/A/base count gate.,True,False,False,False,False,False,False,False,False,False,False
+constructed candidates,,804.0,D0 deterioration found within 1-30 official sessions.,True,False,False,False,False,False,False,False,False,False,False
