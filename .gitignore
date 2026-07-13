@@ -26,3 +26,23 @@ outputs/morita_s1_ab_candidate_layer_v0_1/
 outputs/morita_s1_pb_c_route_comparison_v0_1/
 outputs/morita_current_s_notification_quality_audit_v0_1/
 outputs/morita_s_setup_episode_identity_v0_1/
+
+# Webull OpenAPI local execution readiness secrets/state
+.env
+.env.*
+!.env.example
+.webull_token_cache*
+webull_token_cache*
+logs/webull/
+runtime_private/
+artifacts/webull_*.sqlite
+artifacts/webull_*.db
+artifacts/webull_*token*
+artifacts/webull_*secret*
+
+# Historical M15 raw/normalized vendor data
+data/historical_m15/raw/
+data/historical_m15/normalized/
+data/pit_recovery/github_artifacts/
+config/webull.local.json
+config/webull_credentials.local.json
