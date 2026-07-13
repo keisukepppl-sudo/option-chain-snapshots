@@ -108,6 +108,16 @@ def run_cmd(args: list[str], repo_root: Path, timeout: int = 60) -> tuple[int, s
         return 999, "", f"{type(exc).__name__}: {exc}"
 
 
+def find_gh() -> str:
+    if os.getenv("MORITA_V12_DISABLE_GITHUB") == "1":
+        return ""
+    found = shutil.which("gh")
+    if found:
+        return found
+    fallback = Path("C:/Program Files/GitHub CLI/gh.exe")
+    return str(fallback) if fallback.exists() else ""
+
+
 def git_lines(repo_root: Path, args: list[str], timeout: int = 60) -> list[str]:
     code, out, _ = run_cmd(["git", *args], repo_root, timeout=timeout)
     if code != 0:
@@ -116,7 +126,7 @@ def git_lines(repo_root: Path, args: list[str], timeout: int = 60) -> list[str]:
 
 
 def inspect_environment(repo_root: Path) -> dict[str, Any]:
-    gh_path = shutil.which("gh")
+    gh_path = find_gh()
     gh_status = "GH_NOT_INSTALLED"
     if gh_path:
         code, out, err = run_cmd(["gh", "auth", "status"], repo_root, timeout=20)
@@ -159,6 +169,8 @@ def recover_github_evidence(repo_root: Path) -> tuple[list[dict[str, Any]], list
         ],
         timeout=120,
     )
+    gh_path = find_gh()
+    gh_run_rows = github_workflow_runs(repo_root, gh_path)
     run_rows = []
     for idx, line in enumerate(commits[:5000], start=1):
         parts = line.split("\t")
@@ -175,24 +187,30 @@ def recover_github_evidence(repo_root: Path) -> tuple[list[dict[str, Any]], list
                 "subject": parts[3] if len(parts) > 3 else "",
             }
         )
-    artifact_rows = [
-        {
-            "repository": "keisukepppl-sudo/option-chain-snapshots",
-            "run_id": "",
-            "job_id": "",
-            "artifact_id": "",
-            "artifact_name": "",
-            "workflow_name": "",
-            "workflow_started_at": "",
-            "workflow_completed_at": "",
-            "head_sha": "",
-            "branch": "",
-            "downloaded_at_utc": "",
-            "zip_sha256": "",
-            "extracted_file_sha256": "",
-            "status": "GITHUB_AUTH_ACTION_REQUIRED" if not shutil.which("gh") else "NO_ARTIFACT_DOWNLOAD_ATTEMPTED_WITHOUT_EXPLICIT_AUTH",
-        }
-    ]
+    if gh_run_rows:
+        run_rows = gh_run_rows + run_rows
+    artifact_rows = github_artifact_inventory(repo_root, gh_path, gh_run_rows[:50])
+    if artifact_rows:
+        artifact_rows = download_github_artifacts(repo_root, gh_path, artifact_rows)
+    if not artifact_rows:
+        artifact_rows = [
+            {
+                "repository": "keisukepppl-sudo/option-chain-snapshots",
+                "run_id": "",
+                "job_id": "",
+                "artifact_id": "",
+                "artifact_name": "",
+                "workflow_name": "",
+                "workflow_started_at": "",
+                "workflow_completed_at": "",
+                "head_sha": "",
+                "branch": "",
+                "downloaded_at_utc": "",
+                "zip_sha256": "",
+                "extracted_file_sha256": "",
+                "status": "GITHUB_AUTH_ACTION_REQUIRED" if not gh_path else "NO_ARTIFACTS_FOUND_OR_ACCESSIBLE",
+            }
+        ]
     signal_lineage = lineage_rows(keyword_files, "SIGNAL")
     config_lineage = lineage_rows([f for f in keyword_files if "config" in f.lower()], "CONFIG")
     universe_lineage = lineage_rows([f for f in keyword_files if any(k in f.lower() for k in ["universe", "holdings", "iwb", "russell"])], "UNIVERSE")
@@ -204,15 +222,129 @@ def recover_github_evidence(repo_root: Path) -> tuple[list[dict[str, Any]], list
             f"Branches visible locally: {len(branches)}",
             f"Tags visible locally: {len(tags)}",
             f"Signal/config/universe-like historical paths found: {len(set(keyword_files))}",
-            f"gh available: {bool(shutil.which('gh'))}",
+            f"gh available: {bool(gh_path)}",
             "Remote workflow artifact download requires gh authentication; no historical evidence was modified or deleted.",
             "",
         ]
     )
-    gh_status = "GITHUB_EVIDENCE_RECOVERED" if signal_lineage else "NO_AUTHORITATIVE_ARCHIVED_SIGNAL"
-    if not shutil.which("gh"):
+    gh_status = "GITHUB_EVIDENCE_RECOVERED" if gh_run_rows or signal_lineage else "NO_AUTHORITATIVE_ARCHIVED_SIGNAL"
+    if not gh_path:
         gh_status = "GITHUB_AUTH_ACTION_REQUIRED"
     return run_rows, artifact_rows, signal_lineage, config_lineage, universe_lineage, report, gh_status
+
+
+def github_workflow_runs(repo_root: Path, gh_path: str) -> list[dict[str, Any]]:
+    if not gh_path:
+        return []
+    code, out, _ = run_cmd(
+        [
+            gh_path,
+            "run",
+            "list",
+            "--limit",
+            "200",
+            "--json",
+            "databaseId,workflowName,status,conclusion,createdAt,updatedAt,headSha,headBranch,event,url",
+        ],
+        repo_root,
+        timeout=120,
+    )
+    if code != 0 or not out:
+        return []
+    try:
+        payload = json.loads(out)
+    except Exception:
+        return []
+    rows = []
+    for item in payload:
+        rows.append(
+            {
+                "repository": "keisukepppl-sudo/option-chain-snapshots",
+                "run_id": item.get("databaseId", ""),
+                "workflow_name": item.get("workflowName", ""),
+                "workflow_started_at": item.get("createdAt", ""),
+                "workflow_completed_at": item.get("updatedAt", ""),
+                "head_sha": item.get("headSha", ""),
+                "branch": item.get("headBranch", ""),
+                "source": "gh_run_list",
+                "subject": f"{item.get('event', '')}:{item.get('status', '')}:{item.get('conclusion', '')}",
+                "url": item.get("url", ""),
+            }
+        )
+    return rows
+
+
+def github_artifact_inventory(repo_root: Path, gh_path: str, runs: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    if not gh_path:
+        return []
+    rows: list[dict[str, Any]] = []
+    for run in runs:
+        run_id = str(run.get("run_id") or "")
+        if not run_id:
+            continue
+        code, out, _ = run_cmd(
+            [gh_path, "api", f"repos/keisukepppl-sudo/option-chain-snapshots/actions/runs/{run_id}/artifacts"],
+            repo_root,
+            timeout=60,
+        )
+        if code != 0 or not out:
+            continue
+        try:
+            payload = json.loads(out)
+        except Exception:
+            continue
+        for artifact in payload.get("artifacts", []):
+            rows.append(
+                {
+                    "repository": "keisukepppl-sudo/option-chain-snapshots",
+                    "run_id": run_id,
+                    "job_id": "",
+                    "artifact_id": artifact.get("id", ""),
+                    "artifact_name": artifact.get("name", ""),
+                    "workflow_name": run.get("workflow_name", ""),
+                    "workflow_started_at": run.get("workflow_started_at", ""),
+                    "workflow_completed_at": run.get("workflow_completed_at", ""),
+                    "head_sha": run.get("head_sha", ""),
+                    "branch": run.get("branch", ""),
+                    "downloaded_at_utc": "",
+                    "zip_sha256": "",
+                    "extracted_file_sha256": "",
+                    "status": "ARTIFACT_LISTED_NOT_DOWNLOADED",
+                    "expired": artifact.get("expired", ""),
+                    "size_in_bytes": artifact.get("size_in_bytes", ""),
+                }
+            )
+    return rows
+
+
+def download_github_artifacts(repo_root: Path, gh_path: str, artifact_rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    if not gh_path or os.getenv("MORITA_V12_DISABLE_GITHUB_DOWNLOAD") == "1":
+        return artifact_rows
+    root = repo_root / GITHUB_ARTIFACT_DIR
+    root.mkdir(parents=True, exist_ok=True)
+    downloaded_at = utc_now()
+    for run_id in sorted({str(row.get("run_id") or "") for row in artifact_rows if row.get("run_id")}):
+        run_dir = root / run_id
+        run_dir.mkdir(parents=True, exist_ok=True)
+        if any(run_dir.rglob("*")):
+            continue
+        run_cmd([gh_path, "run", "download", run_id, "-D", str(run_dir)], repo_root, timeout=180)
+    for row in artifact_rows:
+        run_id = str(row.get("run_id") or "")
+        name = str(row.get("artifact_name") or "")
+        artifact_dir = root / run_id / name
+        files = [p for p in artifact_dir.rglob("*") if p.is_file()] if artifact_dir.exists() else []
+        if files:
+            row["downloaded_at_utc"] = downloaded_at
+            row["status"] = "ARTIFACT_DOWNLOADED_EXTRACTED"
+            row["extracted_file_sha256"] = "|".join(f"{p.name}:{sha256_file(p)}" for p in sorted(files)[:20])
+        elif run_id and (root / run_id).exists():
+            files = [p for p in (root / run_id).rglob("*") if p.is_file()]
+            if files:
+                row["downloaded_at_utc"] = downloaded_at
+                row["status"] = "ARTIFACT_RUN_DOWNLOADED_NAME_MISMATCH"
+                row["extracted_file_sha256"] = "|".join(f"{p.name}:{sha256_file(p)}" for p in sorted(files)[:20])
+    return artifact_rows
 
 
 def lineage_rows(paths: list[str], category: str) -> list[dict[str, Any]]:

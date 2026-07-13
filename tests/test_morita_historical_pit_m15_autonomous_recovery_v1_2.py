@@ -34,6 +34,8 @@ _RUN_CACHE: dict[str, Path] = {}
 
 def _run(tmp_path: Path) -> Path:
     os.environ["MORITA_V12_DISABLE_LIVE_WEBULL"] = "1"
+    os.environ["MORITA_V12_DISABLE_GITHUB"] = "1"
+    os.environ["MORITA_V12_DISABLE_GITHUB_DOWNLOAD"] = "1"
     cache_key = "secret" if os.getenv("WEBULL_APP_SECRET") == "unit-secret-value" else "default"
     if cache_key in _RUN_CACHE and _RUN_CACHE[cache_key].exists():
         return _RUN_CACHE[cache_key]
