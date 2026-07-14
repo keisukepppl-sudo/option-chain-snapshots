@@ -1,0 +1,2 @@
+"test_scope","command","status","detail"
+"targeted_v352_v353","python -m pytest tests/test_morita_short_v3_5_2_independent_audit.py tests/test_morita_short_v3_5_3_claim_audit.py -q","PASS","9 passed in 0.77s"

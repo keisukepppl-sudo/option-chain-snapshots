@@ -1,0 +1,42 @@
+﻿{
+    "artifact_version":  "morita_short_v3_5_3_claim_audit",
+    "balance_access_allowed":  false,
+    "broker_account_access_allowed":  false,
+    "constructed_candidates":  804,
+    "consumable_by_production":  false,
+    "execution_allowed":  false,
+    "final_decision":  "REJECT_HISTORICAL_EDGE_CONCENTRATION",
+    "future_information_allowed":  false,
+    "git":  {
+                "branch":  "research/morita-short-v3-5-3-claim-audit-20260714",
+                "head":  "6c28702b5018e8eb7b7d33ee21043f4b80ab2cd4",
+                "status_short":  "?? outputs/research_only/morita_short_v3_5_3_claim_audit/\n?? scripts/run_morita_short_v3_5_3_claim_audit.py\n?? tests/test_morita_short_v3_5_3_claim_audit.py"
+            },
+    "live_order_allowed":  false,
+    "order_preview_allowed":  false,
+    "output_dir":  "C:\\Users\\keisu\\Documents\\Codex\\2026-06-25\\bot-rs-2-1-2-historical\\work\\morita_short_v3_5_2_independent_audit_20260714\\outputs\\research_only\\morita_short_v3_5_3_claim_audit\\20260714T092817Z",
+    "positions_access_allowed":  false,
+    "primary_decision":  "NO_INDEPENDENT_EPISODE_ALPHA_CONFIRMED",
+    "raw_signals":  813,
+    "reported_decisions_retracted_to_hypothesis":  [
+                                                       "0945_ADVANTAGE_REPLICATED",
+                                                       "S_OUTPERFORMS_A_ROBUSTLY"
+                                                   ],
+    "research_only":  true,
+    "run_at_utc":  "2026-07-14T09:29:29.718333+00:00",
+    "run_id":  "20260714T092817Z",
+    "synthetic_intraday_data_allowed":  false,
+    "terminal_statuses":  [
+                              "REJECT_HISTORICAL_EDGE_CONCENTRATION",
+                              "NO_USER_ACTION_REQUIRED"
+                          ],
+    "threshold_optimization_allowed":  false,
+    "v352_run":  "C:\\Users\\keisu\\Documents\\Codex\\2026-06-25\\bot-rs-2-1-2-historical\\work\\morita_short_v3_5_2_independent_audit_20260714\\outputs\\research_only\\morita_short_v3_5_2_independent_audit\\20260713T190155Z",
+    "tests":  [
+                  {
+                      "scope":  "targeted_v352_v353",
+                      "status":  "PASS",
+                      "detail":  "9 passed in 0.77s"
+                  }
+              ]
+}

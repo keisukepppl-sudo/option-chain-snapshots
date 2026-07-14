@@ -1,0 +1,127 @@
+﻿{
+    "artifact_version":  "morita_short_v3_5_3_claim_audit",
+    "artifacts":  [
+                      {
+                          "name":  "car_me0034_forensic_audit.csv",
+                          "path":  "C:\\Users\\keisu\\Documents\\Codex\\2026-06-25\\bot-rs-2-1-2-historical\\work\\morita_short_v3_5_2_independent_audit_20260714\\outputs\\research_only\\morita_short_v3_5_3_claim_audit\\20260714T092817Z\\car_me0034_forensic_audit.csv",
+                          "bytes":  1616,
+                          "sha256":  "27387425c8f8b699211be45f5909369522bc7b7df24ddf34e6384bb1122ab4cc"
+                      },
+                      {
+                          "name":  "concentration_exclusion_scenarios.csv",
+                          "path":  "C:\\Users\\keisu\\Documents\\Codex\\2026-06-25\\bot-rs-2-1-2-historical\\work\\morita_short_v3_5_2_independent_audit_20260714\\outputs\\research_only\\morita_short_v3_5_3_claim_audit\\20260714T092817Z\\concentration_exclusion_scenarios.csv",
+                          "bytes":  26168,
+                          "sha256":  "cc90bd26f0b2b5bfe3a4d4343189819c01eb500ebb819f3f383893ae7ab9d759"
+                      },
+                      {
+                          "name":  "entry_time_paired_audit.csv",
+                          "path":  "C:\\Users\\keisu\\Documents\\Codex\\2026-06-25\\bot-rs-2-1-2-historical\\work\\morita_short_v3_5_2_independent_audit_20260714\\outputs\\research_only\\morita_short_v3_5_3_claim_audit\\20260714T092817Z\\entry_time_paired_audit.csv",
+                          "bytes":  32289,
+                          "sha256":  "157409510918f7a7785b9b59992331dd4af12549d465118cc450f10b14cd0d26"
+                      },
+                      {
+                          "name":  "entry_time_paired_bootstrap.csv",
+                          "path":  "C:\\Users\\keisu\\Documents\\Codex\\2026-06-25\\bot-rs-2-1-2-historical\\work\\morita_short_v3_5_2_independent_audit_20260714\\outputs\\research_only\\morita_short_v3_5_3_claim_audit\\20260714T092817Z\\entry_time_paired_bootstrap.csv",
+                          "bytes":  28194,
+                          "sha256":  "17bfd09b7736df3aa513460cc16dd2092f1b0648e689cbf9fb9bd9e890b85619"
+                      },
+                      {
+                          "name":  "independent_episode_gate.csv",
+                          "path":  "C:\\Users\\keisu\\Documents\\Codex\\2026-06-25\\bot-rs-2-1-2-historical\\work\\morita_short_v3_5_2_independent_audit_20260714\\outputs\\research_only\\morita_short_v3_5_3_claim_audit\\20260714T092817Z\\independent_episode_gate.csv",
+                          "bytes":  1385,
+                          "sha256":  "6f09afb7f44b7d13d54073524030dc478cd138b5e953a2c3db0bf62e2a2a8811"
+                      },
+                      {
+                          "name":  "morita_short_v3_5_3_chatgpt_review_bundle.md",
+                          "path":  "C:\\Users\\keisu\\Documents\\Codex\\2026-06-25\\bot-rs-2-1-2-historical\\work\\morita_short_v3_5_2_independent_audit_20260714\\outputs\\research_only\\morita_short_v3_5_3_claim_audit\\20260714T092817Z\\morita_short_v3_5_3_chatgpt_review_bundle.md",
+                          "bytes":  11584,
+                          "sha256":  "e43c421e7a8d98e737e865bed8272a5d7e79defe38c407463ae11451fc2911e6"
+                      },
+                      {
+                          "name":  "morita_short_v3_5_3_claim_audit_report.md",
+                          "path":  "C:\\Users\\keisu\\Documents\\Codex\\2026-06-25\\bot-rs-2-1-2-historical\\work\\morita_short_v3_5_2_independent_audit_20260714\\outputs\\research_only\\morita_short_v3_5_3_claim_audit\\20260714T092817Z\\morita_short_v3_5_3_claim_audit_report.md",
+                          "bytes":  6217,
+                          "sha256":  "b6afca7a8405ddd27bbf425a27e276721fcbf72835e2cdee04f766b68b421f5f"
+                      },
+                      {
+                          "name":  "positive_pf_negative_median_explanation.md",
+                          "path":  "C:\\Users\\keisu\\Documents\\Codex\\2026-06-25\\bot-rs-2-1-2-historical\\work\\morita_short_v3_5_2_independent_audit_20260714\\outputs\\research_only\\morita_short_v3_5_3_claim_audit\\20260714T092817Z\\positive_pf_negative_median_explanation.md",
+                          "bytes":  1739,
+                          "sha256":  "cd20225318ccb30b67ebb8c1035a61bbad4cb46f0a5600eb85abcad7e6f70cd0"
+                      },
+                      {
+                          "name":  "RESEARCH_ONLY_DO_NOT_EXECUTE.marker",
+                          "path":  "C:\\Users\\keisu\\Documents\\Codex\\2026-06-25\\bot-rs-2-1-2-historical\\work\\morita_short_v3_5_2_independent_audit_20260714\\outputs\\research_only\\morita_short_v3_5_3_claim_audit\\20260714T092817Z\\RESEARCH_ONLY_DO_NOT_EXECUTE.marker",
+                          "bytes":  71,
+                          "sha256":  "dd4a1d280f5be5165f8e0f233d9a1f94b689c8521c97a60823a36fb56fb77bfa"
+                      },
+                      {
+                          "name":  "return_distribution_decomposition.csv",
+                          "path":  "C:\\Users\\keisu\\Documents\\Codex\\2026-06-25\\bot-rs-2-1-2-historical\\work\\morita_short_v3_5_2_independent_audit_20260714\\outputs\\research_only\\morita_short_v3_5_3_claim_audit\\20260714T092817Z\\return_distribution_decomposition.csv",
+                          "bytes":  6741,
+                          "sha256":  "b59f60eac9d243fdaded7c05599c14b60d9c3efb414ec6018ff39fed9594637a"
+                      },
+                      {
+                          "name":  "run_manifest.json",
+                          "path":  "C:\\Users\\keisu\\Documents\\Codex\\2026-06-25\\bot-rs-2-1-2-historical\\work\\morita_short_v3_5_2_independent_audit_20260714\\outputs\\research_only\\morita_short_v3_5_3_claim_audit\\20260714T092817Z\\run_manifest.json",
+                          "bytes":  11104,
+                          "sha256":  "79c7dd62528e127a8df9a74905a9f3bf6409d29ba5f4e5c50380cf4ae53cbf69"
+                      },
+                      {
+                          "name":  "run_receipt.json",
+                          "path":  "C:\\Users\\keisu\\Documents\\Codex\\2026-06-25\\bot-rs-2-1-2-historical\\work\\morita_short_v3_5_2_independent_audit_20260714\\outputs\\research_only\\morita_short_v3_5_3_claim_audit\\20260714T092817Z\\run_receipt.json",
+                          "bytes":  2318,
+                          "sha256":  "4743dd8367c031f3ce3985f054ccebfcadfac8da2ac281a4dfee994127a5814a"
+                      },
+                      {
+                          "name":  "s_vs_a_matched_episode_audit.csv",
+                          "path":  "C:\\Users\\keisu\\Documents\\Codex\\2026-06-25\\bot-rs-2-1-2-historical\\work\\morita_short_v3_5_2_independent_audit_20260714\\outputs\\research_only\\morita_short_v3_5_3_claim_audit\\20260714T092817Z\\s_vs_a_matched_episode_audit.csv",
+                          "bytes":  9494,
+                          "sha256":  "0e4e021e716ce0c40df140c2719f64ee7dbc9c58ac4c489269376a4e58514800"
+                      },
+                      {
+                          "name":  "s_vs_a_weighting_sensitivity.csv",
+                          "path":  "C:\\Users\\keisu\\Documents\\Codex\\2026-06-25\\bot-rs-2-1-2-historical\\work\\morita_short_v3_5_2_independent_audit_20260714\\outputs\\research_only\\morita_short_v3_5_3_claim_audit\\20260714T092817Z\\s_vs_a_weighting_sensitivity.csv",
+                          "bytes":  4032,
+                          "sha256":  "2517dd99f07c6257d16a3a41c84f4ab51fca2ba2e6f5d4c8311375b8e95db6fb"
+                      },
+                      {
+                          "name":  "short_forward_tracking_schema.csv",
+                          "path":  "C:\\Users\\keisu\\Documents\\Codex\\2026-06-25\\bot-rs-2-1-2-historical\\work\\morita_short_v3_5_2_independent_audit_20260714\\outputs\\research_only\\morita_short_v3_5_3_claim_audit\\20260714T092817Z\\short_forward_tracking_schema.csv",
+                          "bytes":  2158,
+                          "sha256":  "d43624d9c42d9113f63c271f9f4334c357e7f3e1126d23e248359a7663f8f1c7"
+                      },
+                      {
+                          "name":  "short_forward_tracking_spec.md",
+                          "path":  "C:\\Users\\keisu\\Documents\\Codex\\2026-06-25\\bot-rs-2-1-2-historical\\work\\morita_short_v3_5_2_independent_audit_20260714\\outputs\\research_only\\morita_short_v3_5_3_claim_audit\\20260714T092817Z\\short_forward_tracking_spec.md",
+                          "bytes":  2596,
+                          "sha256":  "c0ab2a0202e17bb1bb882bf302b8af00993812e4fe84dedde2fa66739abea6e2"
+                      },
+                      {
+                          "name":  "test_summary.csv",
+                          "path":  "C:\\Users\\keisu\\Documents\\Codex\\2026-06-25\\bot-rs-2-1-2-historical\\work\\morita_short_v3_5_2_independent_audit_20260714\\outputs\\research_only\\morita_short_v3_5_3_claim_audit\\20260714T092817Z\\test_summary.csv",
+                          "bytes":  211,
+                          "sha256":  "69ef5346ad1dd4590b8714a3c02fd0ba7dec4808f1163c45726bb2dc85bb0758"
+                      }
+                  ],
+    "balance_access_allowed":  false,
+    "broker_account_access_allowed":  false,
+    "consumable_by_production":  false,
+    "execution_allowed":  false,
+    "future_information_allowed":  false,
+    "live_order_allowed":  false,
+    "order_preview_allowed":  false,
+    "positions_access_allowed":  false,
+    "research_only":  true,
+    "run_id":  "20260714T092817Z",
+    "source_paths":  {
+                         "daily_ohlcv":  "C:\\Users\\keisu\\Documents\\Codex\\2026-06-25\\bot-rs-2-1-2-historical\\work\\option-chain-snapshots-main\\outputs\\morita_2023_rs_warmup_retest_v1\\input\\morita_baseline_2022warmup_2023_2026_v1\\sources\\daily_ohlcv_merged.csv",
+                         "instruction":  "C:\\Users\\keisu\\Downloads\\morita_room2_short_v3_5_3_claim_audit_instruction.md",
+                         "m15_bars":  "C:\\Users\\keisu\\Documents\\Codex\\2026-06-25\\bot-rs-2-1-2-historical\\work\\option-chain-snapshots-main\\data\\intraday\\normalized\\webull_semis_m15.parquet",
+                         "signal_calendar":  "C:\\Users\\keisu\\Documents\\Codex\\2026-07-11\\files-mentioned-by-the-user-morita\\outputs\\morita_current_conditions_sa_signal_calendar_latest.csv",
+                         "source_receipt":  "C:\\Users\\keisu\\Documents\\Codex\\2026-07-11\\files-mentioned-by-the-user-morita\\outputs\\morita_current_conditions_sa_rebuild_v1_run_receipt_latest.json"
+                     },
+    "synthetic_intraday_data_allowed":  false,
+    "threshold_optimization_allowed":  false,
+    "v352_run":  "C:\\Users\\keisu\\Documents\\Codex\\2026-06-25\\bot-rs-2-1-2-historical\\work\\morita_short_v3_5_2_independent_audit_20260714\\outputs\\research_only\\morita_short_v3_5_2_independent_audit\\20260713T190155Z"
+}

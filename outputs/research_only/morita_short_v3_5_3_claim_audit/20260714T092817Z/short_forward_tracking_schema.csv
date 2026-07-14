@@ -1,0 +1,17 @@
+field,type,description,research_only,execution_allowed,live_order_allowed,order_preview_allowed,broker_account_access_allowed,positions_access_allowed,balance_access_allowed,threshold_optimization_allowed,future_information_allowed,synthetic_intraday_data_allowed,consumable_by_production
+run_id,string,Forward tracking batch id.,True,False,False,False,False,False,False,False,False,False,False
+signal_id,string,Source current-condition signal id.,True,False,False,False,False,False,False,False,False,False,False
+ticker,string,Ticker.,True,False,False,False,False,False,False,False,False,False,False
+rank,string,Frozen rank; S only if activated.,True,False,False,False,False,False,False,False,False,False,False
+entry_route,string,Open or 09:45 frozen route.,True,False,False,False,False,False,False,False,False,False,False
+entry_timestamp_et,datetime,Executable timestamp in America/New_York.,True,False,False,False,False,False,False,False,False,False,False
+price_source,string,DAILY_OPEN or actual M15_OPEN.,True,False,False,False,False,False,False,False,False,False,False
+d1_return,float,Short return through D1 close.,True,False,False,False,False,False,False,False,False,False,False
+d2_return,float,Short return through D2 close.,True,False,False,False,False,False,False,False,False,False,False
+d3_return,float,Short return through D3 close.,True,False,False,False,False,False,False,False,False,False,False
+d5_return,float,Short return through D5 close.,True,False,False,False,False,False,False,False,False,False,False
+ticker_episode_id,string,Frozen 5-session ticker episode id.,True,False,False,False,False,False,False,False,False,False,False
+market_episode_id,string,Frozen market episode id.,True,False,False,False,False,False,False,False,False,False,False
+car_like_special_event_flag,bool,True for CAR-like concentration/special-event review.,True,False,False,False,False,False,False,False,False,False,False
+no_signal_heartbeat,bool,True on days with no eligible signal.,True,False,False,False,False,False,False,False,False,False,False
+research_only,bool,Always true.,True,False,False,False,False,False,False,False,False,False,False
