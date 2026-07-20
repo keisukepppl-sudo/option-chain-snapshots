@@ -1,5 +1,5 @@
 {
-  "registry_version": "full_regression_shards_v1_0_0",
+  "registry_version": "full_regression_shards_v1_0_1",
   "purpose": "Deterministic pytest full-regression coverage shards. No deselection, ignore, xfail, allow-failure, or market-data access.",
   "canonical_collection_command": [
     "python",
@@ -51,6 +51,14 @@
         "tests/test_fetch_morita_vxn_history_v1.py",
         "tests/test_morita_bot_historical_baseline_v1.py",
         "tests/test_morita_bot_source_seal_v1.py",
+        "tests/test_morita_2026_scanner_artifact_recovery_v1.py",
+        "tests/test_morita_first_absorption_reversal_v1.py",
+        "tests/test_morita_former_leader_retest_short_v1.py",
+        "tests/test_morita_historical_pit_m15_autonomous_recovery_v1_2.py",
+        "tests/test_morita_historical_s_aplus_replay_v1_3.py",
+        "tests/test_morita_short_v3_5_2_independent_audit.py",
+        "tests/test_morita_short_v3_5_3_claim_audit.py",
+        "tests/test_morita_unified_flow_v3_8_pit_band_recovery.py",
         "tests/test_ab_pullback_and_time_stop_notification_v2.py",
         "tests/test_black_scholes_reference_v1.py",
         "tests/test_morita_portfolio_ledger_v1.py",
