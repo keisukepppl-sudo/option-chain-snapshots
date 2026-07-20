@@ -39,6 +39,43 @@ GUARDRAILS: dict[str, Any] = {
     "production_notification_change_allowed": False,
 }
 
+PHASE_A_SIGNAL_COLUMNS = [
+    "ticker",
+    "decision_date",
+    "decision_timestamp_et",
+    "last_market_data_timestamp_used",
+    "data_available_at",
+    "rank",
+    "score",
+    "RS",
+    "breakout state/reference",
+    "relative volume",
+    "gap",
+    "price",
+    "market cap",
+    "exclusion flags",
+    "cooldown",
+    "engine/config hash",
+    "PIT audit result",
+    "universe_mode",
+    "survivorship_safe",
+    "headline_eligible",
+]
+
+RECENT_SIGNAL_STATE_COLUMNS = [
+    "signal date",
+    "rank",
+    "valid from/through",
+    "breakout age",
+    "PIT post-signal peak",
+    "drawdown",
+    "overlapping signal",
+    "PIT validity",
+    "status",
+    "blocked_reason",
+    "headline_eligible",
+]
+
 REQUIRED_OUTPUTS = [
     "RESEARCH_ONLY_DO_NOT_EXECUTE.marker",
     "run_receipt.json",
@@ -352,15 +389,51 @@ def latest_dir(root: Path) -> Path | None:
     return max(dirs, key=lambda p: p.stat().st_mtime) if dirs else None
 
 
+def latest_recovered_2026_signal_source(repo_root: Path) -> Path | None:
+    root = repo_root / "outputs" / "research_only" / "morita_2026_scanner_artifact_recovery_v1"
+    if not root.exists():
+        return None
+    candidates = sorted(
+        root.glob("*/rank_weighted_signal_calendar_recovered.csv"),
+        key=lambda path: path.parent.name,
+        reverse=True,
+    )
+    for path in candidates:
+        if not read_csv(path).empty:
+            return path
+    return None
+
+
 def frozen_2026_signal_reproduction(repo_root: Path) -> pd.DataFrame:
     source = repo_root / "outputs" / "morita_2026_rank_weighted_replay_v1" / "rank_weighted_signal_calendar.csv"
     signals = read_csv(source)
     if signals.empty:
+        recovered_source = latest_recovered_2026_signal_source(repo_root)
+        recovered = read_csv(recovered_source) if recovered_source is not None else pd.DataFrame()
+        if not recovered.empty:
+            rows = []
+            for rank in ["S", "A", "A_PLUS_NORMAL_SHADOW"]:
+                sub = recovered[recovered.get("rank", pd.Series(dtype=str)).astype(str).eq(rank)]
+                rows.append(
+                    {
+                        "check": "2026_signal_source_partial_artifact_recovery",
+                        "rank": rank,
+                        "status": "BLOCKED_FROZEN_2026_SIGNAL_SOURCE_MISSING_PARTIAL_RECOVERY_ONLY",
+                        "expected": "complete original frozen rank_weighted_signal_calendar.csv",
+                        "actual": int(len(sub)),
+                        "unique_tickers": int(sub.get("ticker", pd.Series(dtype=str)).nunique()) if not sub.empty else 0,
+                        "min_decision_date": str(sub.get("signal_decision_date", pd.Series(dtype=str)).min()) if not sub.empty else "",
+                        "max_decision_date": str(sub.get("signal_decision_date", pd.Series(dtype=str)).max()) if not sub.empty else "",
+                        "source_path": str(recovered_source),
+                        "complete_frozen_2026_source": False,
+                    }
+                )
+            return pd.DataFrame(rows)
         return pd.DataFrame(
             [
                 {
                     "check": "2026_signal_source_exists",
-                    "status": "FAIL_FROZEN_2026_BASELINE_REPRODUCTION",
+                    "status": "BLOCKED_FROZEN_2026_SIGNAL_SOURCE_MISSING",
                     "expected": "nonempty rank_weighted_signal_calendar.csv",
                     "actual": "missing_or_empty",
                     "source_path": str(source),
@@ -406,6 +479,17 @@ def frozen_2026_short_reproduction(repo_root: Path) -> pd.DataFrame:
         if "frozen_logic_modified" not in out.columns:
             out["frozen_logic_modified"] = False
         return out
+    except ModuleNotFoundError as exc:
+        return pd.DataFrame(
+            [
+                {
+                    "check": "short_v3_5_baseline",
+                    "status": "BLOCKED_FROZEN_2026_SHORT_SOURCE_MISSING",
+                    "error": f"{type(exc).__name__}: {exc}",
+                    "frozen_logic_modified": False,
+                }
+            ]
+        )
     except Exception as exc:
         return pd.DataFrame(
             [
@@ -422,7 +506,13 @@ def frozen_2026_short_reproduction(repo_root: Path) -> pd.DataFrame:
 def phase_a_current_universe(repo_root: Path) -> pd.DataFrame:
     sig = read_csv(repo_root / "outputs" / "morita_2026_rank_weighted_replay_v1" / "rank_weighted_signal_calendar.csv")
     apl = read_csv(repo_root / "outputs" / "morita_a_plus_normal_forward_tracking_v1" / "daily_a_plus_normal_signals.csv")
-    tickers = sorted(set(sig.get("ticker", pd.Series(dtype=str)).dropna().astype(str)) | set(apl.get("ticker", pd.Series(dtype=str)).dropna().astype(str)))
+    recovered_source = latest_recovered_2026_signal_source(repo_root)
+    recovered = read_csv(recovered_source) if recovered_source is not None else pd.DataFrame()
+    tickers = sorted(
+        set(sig.get("ticker", pd.Series(dtype=str)).dropna().astype(str))
+        | set(apl.get("ticker", pd.Series(dtype=str)).dropna().astype(str))
+        | set(recovered.get("ticker", pd.Series(dtype=str)).dropna().astype(str))
+    )
     rows = []
     for ticker in tickers:
         rows.append(
@@ -514,7 +604,7 @@ def phase_a_signal_calendar(repo_root: Path) -> pd.DataFrame:
                     "headline_eligible": False,
                 }
             )
-    return pd.DataFrame(rows)
+    return pd.DataFrame(rows, columns=PHASE_A_SIGNAL_COLUMNS)
 
 
 def daily_replay_status(phase: str, rows: int, blocker: str = "") -> pd.DataFrame:
@@ -571,7 +661,7 @@ def blocked_df(status: str, columns: list[str] | None = None) -> pd.DataFrame:
 
 def build_recent_state(signals: pd.DataFrame, phase: str) -> pd.DataFrame:
     if signals.empty:
-        return blocked_df(f"PHASE_{phase}_NO_SIGNAL_STATE", ["signal date", "rank", "valid from/through", "PIT validity"])
+        return blocked_df(f"PHASE_{phase}_NO_SIGNAL_STATE", RECENT_SIGNAL_STATE_COLUMNS)
     rows = []
     for _, row in signals.iterrows():
         decision = str(row.get("decision_date", ""))
@@ -587,7 +677,7 @@ def build_recent_state(signals: pd.DataFrame, phase: str) -> pd.DataFrame:
                 "PIT validity": row.get("PIT audit result", ""),
             }
         )
-    return pd.DataFrame(rows)
+    return pd.DataFrame(rows, columns=RECENT_SIGNAL_STATE_COLUMNS)
 
 
 def d0_events(signals: pd.DataFrame, phase: str) -> pd.DataFrame:
@@ -746,15 +836,36 @@ def run_v1_3(repo_root: Path, output_root: Path | None = None, run_id: str | Non
     blockers = ["PHASE_B_UNIVERSE_BLOCKED_OR_DIAGNOSTIC"]
     if phase_a_signals.empty:
         blockers.append("PHASE_A_NO_REPLAYED_SIGNAL_ROWS")
-    if not short_2026.get("status", pd.Series(dtype=str)).astype(str).eq("PASS").all():
+    signal_statuses = signal_2026.get("status", pd.Series(dtype=str)).astype(str)
+    short_statuses = short_2026.get("status", pd.Series(dtype=str)).astype(str)
+    if short_statuses.str.startswith("FAIL").any():
         blockers.append("FAIL_FROZEN_2026_BASELINE_REPRODUCTION")
-    signal_2026_status = "PASS" if not signal_2026["status"].astype(str).str.startswith("FAIL").any() else "FAIL_FROZEN_2026_BASELINE_REPRODUCTION"
-    short_2026_status = "PASS" if not short_2026["status"].astype(str).str.startswith("FAIL").any() else "FAIL_FROZEN_2026_BASELINE_REPRODUCTION"
+    elif short_statuses.str.startswith("BLOCKED").any():
+        blockers.append("BLOCKED_FROZEN_2026_SHORT_SOURCE_MISSING")
+    if signal_statuses.str.startswith("BLOCKED").any():
+        blockers.append("BLOCKED_FROZEN_2026_SIGNAL_SOURCE_MISSING")
+    signal_2026_status = (
+        "FAIL_FROZEN_2026_BASELINE_REPRODUCTION"
+        if signal_statuses.str.startswith("FAIL").any()
+        else "BLOCKED_FROZEN_2026_SIGNAL_SOURCE_MISSING"
+        if signal_statuses.str.startswith("BLOCKED").any()
+        else "PASS"
+    )
+    short_2026_status = (
+        "FAIL_FROZEN_2026_BASELINE_REPRODUCTION"
+        if short_statuses.str.startswith("FAIL").any()
+        else "BLOCKED_FROZEN_2026_SHORT_SOURCE_MISSING"
+        if short_statuses.str.startswith("BLOCKED").any()
+        else "PASS"
+    )
     run_status = "PHASE_A_DIAGNOSTIC_PHASE_B_BLOCKED"
+    nonpass_reproduction_statuses = [
+        status for status in [signal_2026_status, short_2026_status] if status != "PASS"
+    ]
     if signal_2026_status == "PASS" and short_2026_status == "PASS":
         terminal = ["PHASE_A_DIAGNOSTIC_COMPLETE", phase_b_status, "NO_USER_ACTION_REQUIRED"]
     else:
-        terminal = ["FAIL_FROZEN_2026_BASELINE_REPRODUCTION", phase_b_status, "NO_USER_ACTION_REQUIRED"]
+        terminal = [*nonpass_reproduction_statuses, phase_b_status, "NO_USER_ACTION_REQUIRED"]
 
     receipt = {
         "artifact_version": ARTIFACT_VERSION,

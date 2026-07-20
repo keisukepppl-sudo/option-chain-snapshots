@@ -1,0 +1,20 @@
+{
+  "artifact_version": "morita_2026_scanner_artifact_recovery_v1",
+  "blocker": "ORIGINAL_FROZEN_2026_SIGNAL_CALENDAR_AND_COMPLETE_ARTIFACT_COVERAGE_MISSING",
+  "calendar_rows": 27,
+  "complete_frozen_2026_source": false,
+  "decision_dates": 8,
+  "execution_allowed": false,
+  "headline_eligible": false,
+  "nonempty_source_files": 66,
+  "rank_counts": {
+    "A": 12,
+    "S": 15
+  },
+  "raw_observations": 128,
+  "research_only": true,
+  "source_files": 72,
+  "source_root": "data/pit_recovery/github_artifacts",
+  "status": "PARTIAL_RECOVERY_ONLY",
+  "unique_tickers": 9
+}
