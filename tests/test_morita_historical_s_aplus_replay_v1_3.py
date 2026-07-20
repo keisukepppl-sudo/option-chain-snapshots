@@ -5,7 +5,13 @@ from pathlib import Path
 
 import pandas as pd
 
-from src.research.historical_s_aplus_replay_v1_3 import GUARDRAILS, REQUIRED_OUTPUTS, run_v1_3
+from src.research.historical_s_aplus_replay_v1_3 import (
+    GUARDRAILS,
+    REQUIRED_OUTPUTS,
+    frozen_2026_signal_reproduction,
+    frozen_2026_short_reproduction,
+    run_v1_3,
+)
 
 
 _CACHE: dict[str, Path] = {}
@@ -252,3 +258,37 @@ def test_45_production_rejection_passes_and_required_outputs_exist(tmp_path: Pat
     assert prod["passed"].astype(str).str.lower().eq("true").all()
     assert set(REQUIRED_OUTPUTS).issubset({p.name for p in out.iterdir() if p.is_file()})
     assert receipt(out)["user_action_required"] is False
+
+
+def test_46_partial_artifact_recovery_remains_blocked(tmp_path: Path) -> None:
+    source = (
+        tmp_path
+        / "outputs"
+        / "research_only"
+        / "morita_2026_scanner_artifact_recovery_v1"
+        / "unit"
+        / "rank_weighted_signal_calendar_recovered.csv"
+    )
+    source.parent.mkdir(parents=True)
+    pd.DataFrame(
+        [
+            {
+                "ticker": "AMAT",
+                "rank": "S",
+                "signal_decision_date": "2026-06-25",
+                "complete_frozen_2026_source": False,
+            }
+        ]
+    ).to_csv(source, index=False)
+    rows = frozen_2026_signal_reproduction(tmp_path)
+    assert len(rows) == 3
+    assert rows["status"].str.startswith("BLOCKED_").all()
+    assert rows["complete_frozen_2026_source"].eq(False).all()
+    assert int(rows.loc[rows["rank"].eq("S"), "actual"].iloc[0]) == 1
+
+
+def test_47_missing_short_source_is_blocked_not_failed(tmp_path: Path) -> None:
+    rows = frozen_2026_short_reproduction(tmp_path)
+    assert len(rows) == 1
+    assert rows.loc[0, "status"] == "BLOCKED_FROZEN_2026_SHORT_SOURCE_MISSING"
+    assert bool(rows.loc[0, "frozen_logic_modified"]) is False
