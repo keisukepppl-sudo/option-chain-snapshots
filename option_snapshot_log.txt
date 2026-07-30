@@ -270,3 +270,11 @@
 [2026-07-29 22:28:21] MU: saved 3860 rows, spot=739.00, file=option_chain_snapshots/MU/MU_2026-07-29.csv
 [2026-07-29 22:28:23] DRAM: saved 1135 rows, spot=44.85, file=option_chain_snapshots/DRAM/DRAM_2026-07-29.csv
 [2026-07-29 22:28:23] === snapshot finished ===
+[2026-07-30 22:35:12] === snapshot started ===
+[2026-07-30 22:35:14] QQQ: saved 2802 rows, spot=683.55, file=option_chain_snapshots/QQQ/QQQ_2026-07-30.csv
+[2026-07-30 22:35:17] SPY: saved 2562 rows, spot=741.69, file=option_chain_snapshots/SPY/SPY_2026-07-30.csv
+[2026-07-30 22:35:18] SOXX: saved 1777 rows, spot=504.53, file=option_chain_snapshots/SOXX/SOXX_2026-07-30.csv
+[2026-07-30 22:35:20] SMH: saved 2037 rows, spot=538.90, file=option_chain_snapshots/SMH/SMH_2026-07-30.csv
+[2026-07-30 22:35:23] MU: saved 3958 rows, spot=874.66, file=option_chain_snapshots/MU/MU_2026-07-30.csv
+[2026-07-30 22:35:24] DRAM: saved 1138 rows, spot=52.34, file=option_chain_snapshots/DRAM/DRAM_2026-07-30.csv
+[2026-07-30 22:35:24] === snapshot finished ===
