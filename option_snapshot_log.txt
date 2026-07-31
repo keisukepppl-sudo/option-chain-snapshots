@@ -278,3 +278,11 @@
 [2026-07-30 22:35:23] MU: saved 3958 rows, spot=874.66, file=option_chain_snapshots/MU/MU_2026-07-30.csv
 [2026-07-30 22:35:24] DRAM: saved 1138 rows, spot=52.34, file=option_chain_snapshots/DRAM/DRAM_2026-07-30.csv
 [2026-07-30 22:35:24] === snapshot finished ===
+[2026-07-31 22:32:05] === snapshot started ===
+[2026-07-31 22:32:05] QQQ: ERROR Too Many Requests. Rate limited. Try after a while.
+[2026-07-31 22:32:07] SPY: saved 2807 rows, spot=747.03, file=option_chain_snapshots/SPY/SPY_2026-07-31.csv
+[2026-07-31 22:32:08] SOXX: saved 1763 rows, spot=504.89, file=option_chain_snapshots/SOXX/SOXX_2026-07-31.csv
+[2026-07-31 22:32:10] SMH: saved 2036 rows, spot=540.53, file=option_chain_snapshots/SMH/SMH_2026-07-31.csv
+[2026-07-31 22:32:12] MU: saved 3846 rows, spot=823.03, file=option_chain_snapshots/MU/MU_2026-07-31.csv
+[2026-07-31 22:32:13] DRAM: saved 1116 rows, spot=50.37, file=option_chain_snapshots/DRAM/DRAM_2026-07-31.csv
+[2026-07-31 22:32:13] === snapshot finished ===
