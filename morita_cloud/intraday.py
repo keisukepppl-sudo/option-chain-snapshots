@@ -6,6 +6,8 @@ from typing import Any
 
 import pandas as pd
 
+from scanner_notify import expected_cumulative_volume_fraction
+
 
 def _normalize_cutoff(cutoff_et: pd.Timestamp) -> pd.Timestamp:
     cutoff = pd.Timestamp(cutoff_et)
@@ -44,6 +46,7 @@ def snapshot_from_frame(frame: pd.DataFrame, cutoff_et: pd.Timestamp) -> dict[st
 
     latest = session.iloc[-1]
     volume = session["Volume"].fillna(0).astype(float)
+    recent_closes = session["Close"].dropna().astype(float).tail(2)
     total_volume = float(volume.sum())
     vwap = (
         float((session["Close"].astype(float) * volume).sum() / total_volume)
@@ -74,6 +77,9 @@ def snapshot_from_frame(frame: pd.DataFrame, cutoff_et: pd.Timestamp) -> dict[st
         "latest_price_date": cutoff.date().isoformat(),
         "latest_price_time": latest_ts.isoformat(),
         "session_fraction": session_fraction,
+        "expected_volume_fraction": expected_cumulative_volume_fraction(cutoff),
+        "confirmation_bar_count": int(len(recent_closes)),
+        "recent_close_min": float(recent_closes.min()) if not recent_closes.empty else math.nan,
         "decision_cutoff_et": cutoff.isoformat(),
     }
 

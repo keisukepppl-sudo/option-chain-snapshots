@@ -39,6 +39,14 @@ def test_checkpoint_notifications_include_only_unexcluded_s_and_a() -> None:
     assert selected["ticker"].tolist() == ["SNEW", "SNOON", "ANOON"]
 
 
+def test_checkpoint_notifications_exclude_noneligible_shadow_candidate() -> None:
+    candidates = sample_candidates()
+    candidates["notification_eligible"] = True
+    candidates.loc[candidates["ticker"] == "SNEW", "notification_eligible"] = False
+    selected = checkpoint_candidates(candidates)
+    assert selected["ticker"].tolist() == ["SNOON", "ANOON"]
+
+
 def test_wake_only_for_current_s_absent_from_noon_execution_and_not_sent() -> None:
     state = {
         "noon_snapshot_complete": True,

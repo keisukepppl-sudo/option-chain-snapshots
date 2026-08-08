@@ -107,6 +107,8 @@ def build_precompute(
     market_caps = sn.fetch_market_caps(list(histories))
     thresholds = sn.thresholds_from_config(config)
     results = scan_universe(histories, benchmark, market_caps=market_caps, thresholds=thresholds)
+    for key, value in sn.benchmark_regime_fields(benchmark).items():
+        results[key] = value
     prod = sn.production_config(config)
     rs_min = float(prod.get("rs_min", 98))
     rs_scores = pd.to_numeric(results.get("standard_rs_score"), errors="coerce")

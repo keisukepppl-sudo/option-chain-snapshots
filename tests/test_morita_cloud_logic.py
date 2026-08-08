@@ -67,6 +67,14 @@ def test_checkpoint_filters_to_unexcluded_s_and_a() -> None:
     assert selected["ticker"].tolist() == ["SNEW", "SBASE", "ABASE"]
 
 
+def test_checkpoint_excludes_noneligible_shadow_candidate() -> None:
+    candidates = sample_candidates()
+    candidates["notification_eligible"] = True
+    candidates.loc[candidates["ticker"] == "SNEW", "notification_eligible"] = False
+    selected = checkpoint_candidates(candidates)
+    assert selected["ticker"].tolist() == ["SBASE", "ABASE"]
+
+
 def test_wake_only_for_current_s_absent_from_final_baseline_and_unsent() -> None:
     state = default_state("2026-07-10")
     state["noon_snapshot_complete"] = True
@@ -102,3 +110,6 @@ def test_snapshot_excludes_bar_starting_at_decision_cutoff() -> None:
     assert snapshot is not None
     assert snapshot["latest_price"] == 101.0
     assert snapshot["intraday_volume"] == 1000.0
+    assert snapshot["expected_volume_fraction"] == 0.17
+    assert snapshot["confirmation_bar_count"] == 1
+    assert snapshot["recent_close_min"] == 101.0

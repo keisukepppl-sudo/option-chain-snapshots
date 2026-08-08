@@ -77,6 +77,33 @@ def production_config(config: dict[str, Any]) -> dict[str, Any]:
     return notify.get("production", {}) or notify.get("production_momentum", {}) or {}
 
 
+def strict_notification_config(config: dict[str, Any]) -> dict[str, Any]:
+    raw = production_config(config).get("strict_notification_gate", {}) or {}
+    return dict(raw) if isinstance(raw, dict) else {}
+
+
+def benchmark_regime_fields(benchmark_history: pd.DataFrame) -> dict[str, Any]:
+    raw_close = (
+        benchmark_history["Close"]
+        if isinstance(benchmark_history, pd.DataFrame) and "Close" in benchmark_history.columns
+        else pd.Series(dtype="float64")
+    )
+    close = pd.to_numeric(raw_close, errors="coerce").dropna()
+    if len(close) < 20:
+        return {
+            "qqq_close": math.nan,
+            "qqq_20ema": math.nan,
+            "qqq_above_20ema": False,
+        }
+    qqq_close = float(close.iloc[-1])
+    qqq_20ema = float(close.ewm(span=20, adjust=False).mean().iloc[-1])
+    return {
+        "qqq_close": qqq_close,
+        "qqq_20ema": qqq_20ema,
+        "qqq_above_20ema": bool(qqq_close > qqq_20ema),
+    }
+
+
 def thresholds_from_config(config: dict[str, Any]) -> Thresholds:
     raw = dict(asdict(DEFAULT_THRESHOLDS))
     raw.update(config.get("thresholds", {}))
@@ -215,6 +242,44 @@ def session_fraction_from_timestamp(timestamp: pd.Timestamp) -> float:
     return float(max(0.05, min(1.0, (ts - start).total_seconds() / (end - start).total_seconds())))
 
 
+def expected_cumulative_volume_fraction(timestamp: pd.Timestamp) -> float:
+    """Approximate the regular-session cumulative volume curve.
+
+    The old scanner divided volume by elapsed clock time. That materially
+    overstates relative volume near the open because U.S. equity volume is
+    U-shaped. This fixed, monotone profile keeps candidate generation
+    deterministic while making the actionable-notification RVOL comparable
+    across decision times.
+    """
+
+    ts = pd.Timestamp(timestamp)
+    ts = ts.tz_localize("America/New_York") if ts.tzinfo is None else ts.tz_convert("America/New_York")
+    start = ts.normalize() + pd.Timedelta(hours=9, minutes=30)
+    minutes = float((ts - start).total_seconds() / 60.0)
+    profile = [
+        (0.0, 0.0),
+        (5.0, 0.05),
+        (30.0, 0.17),
+        (60.0, 0.26),
+        (90.0, 0.34),
+        (150.0, 0.47),
+        (210.0, 0.59),
+        (270.0, 0.72),
+        (330.0, 0.85),
+        (390.0, 1.0),
+    ]
+    if minutes <= 0:
+        return 0.05
+    if minutes >= 390:
+        return 1.0
+    for (left_minute, left_fraction), (right_minute, right_fraction) in zip(profile, profile[1:]):
+        if left_minute <= minutes <= right_minute:
+            width = right_minute - left_minute
+            weight = (minutes - left_minute) / width if width else 0.0
+            return float(left_fraction + weight * (right_fraction - left_fraction))
+    return 1.0
+
+
 def fetch_intraday_snapshots(tickers: list[str], interval: str = "5m") -> dict[str, dict[str, Any]]:
     import yfinance as yf
 
@@ -251,6 +316,8 @@ def fetch_intraday_snapshots(tickers: list[str], interval: str = "5m") -> dict[s
             latest = today.iloc[-1]
             today_volume = today["Volume"].fillna(0)
             vwap_denominator = float(today_volume.sum())
+            recent_closes = today["Close"].dropna().astype(float).tail(2)
+            completed_through = latest_ts + pd.Timedelta(minutes=5)
             intraday_vwap = (
                 float((today["Close"].astype(float) * today_volume).sum() / vwap_denominator)
                 if vwap_denominator > 0
@@ -265,6 +332,9 @@ def fetch_intraday_snapshots(tickers: list[str], interval: str = "5m") -> dict[s
                 "latest_price_date": latest_ts.date().isoformat(),
                 "latest_price_time": latest_ts.isoformat(),
                 "session_fraction": session_fraction_from_timestamp(latest_ts),
+                "expected_volume_fraction": expected_cumulative_volume_fraction(completed_through),
+                "confirmation_bar_count": int(len(recent_closes)),
+                "recent_close_min": float(recent_closes.min()) if not recent_closes.empty else math.nan,
             }
         time.sleep(0.2)
     return snapshots
@@ -320,7 +390,11 @@ def format_pct(value: Any) -> str:
     return f"{float(value) * 100:.1f}%"
 
 
-def breakout_metrics(history: pd.DataFrame, intraday: dict[str, Any] | None = None) -> dict[str, Any]:
+def breakout_metrics(
+    history: pd.DataFrame,
+    intraday: dict[str, Any] | None = None,
+    strict_lookback_days: int = 65,
+) -> dict[str, Any]:
     df = history.copy().dropna(subset=["Close"])
     if len(df) < 51:
         raise ValueError("not enough price bars")
@@ -334,10 +408,37 @@ def breakout_metrics(history: pd.DataFrame, intraday: dict[str, Any] | None = No
     open_price = float(intraday["intraday_open"]) if intraday and pd.notna(intraday.get("intraday_open")) else float(df["Open"].iloc[-1])
     prev_close = float(historical["Close"].iloc[-1]) if intraday else float(df["Close"].iloc[-2])
     prior20_high = float(historical["High"].iloc[-20:].max()) if intraday else float(df["High"].iloc[-21:-1].max())
+    if intraday:
+        prior_strict_high = (
+            float(historical["High"].iloc[-strict_lookback_days:].max())
+            if len(historical) >= strict_lookback_days
+            else math.nan
+        )
+    else:
+        strict_window = df["High"].iloc[-strict_lookback_days - 1 : -1]
+        prior_strict_high = float(strict_window.max()) if len(strict_window) >= strict_lookback_days else math.nan
     avg_volume_50d = float(historical["Volume"].iloc[-50:].mean())
     volume = float(intraday["intraday_volume"]) if intraday and pd.notna(intraday.get("intraday_volume")) else float(df["Volume"].iloc[-1])
     fraction = float(intraday.get("session_fraction", 1.0)) if intraday else 1.0
     pace = volume / (avg_volume_50d * fraction) if avg_volume_50d and fraction > 0 else math.nan
+    expected_fraction = float(intraday.get("expected_volume_fraction", 1.0)) if intraday else 1.0
+    tod_volume_multiple = (
+        volume / (avg_volume_50d * expected_fraction)
+        if avg_volume_50d and expected_fraction > 0
+        else math.nan
+    )
+    raw_confirmation_bars = intraday.get("confirmation_bar_count", 0) if intraday else 0
+    confirmation_bar_count = (
+        int(float(raw_confirmation_bars))
+        if raw_confirmation_bars is not None and pd.notna(raw_confirmation_bars)
+        else 0
+    )
+    raw_recent_close_min = intraday.get("recent_close_min", math.nan) if intraday else math.nan
+    recent_close_min = (
+        float(raw_recent_close_min)
+        if raw_recent_close_min is not None and pd.notna(raw_recent_close_min)
+        else math.nan
+    )
     gap_pct = open_price / prev_close - 1.0 if prev_close > 0 else math.nan
     return {
         "latest_price": latest_price,
@@ -346,6 +447,8 @@ def breakout_metrics(history: pd.DataFrame, intraday: dict[str, Any] | None = No
         "intraday_open": open_price,
         "intraday_vwap": intraday.get("intraday_vwap") if intraday else math.nan,
         "prior_20d_high": prior20_high,
+        "prior_65d_high": prior_strict_high,
+        "strict_breakout_lookback_days": strict_lookback_days,
         "breakout_price": latest_price,
         "breakout_date": intraday.get("latest_price_date") if intraday else pd.Timestamp(df.index[-1]).date().isoformat(),
         "gap_pct": gap_pct,
@@ -353,8 +456,19 @@ def breakout_metrics(history: pd.DataFrame, intraday: dict[str, Any] | None = No
         "volume": volume,
         "avg_volume_50d": avg_volume_50d,
         "volume_multiple": pace if intraday else volume / avg_volume_50d if avg_volume_50d else math.nan,
+        "time_adjusted_volume_multiple": tod_volume_multiple,
+        "expected_volume_fraction": expected_fraction,
+        "confirmation_bar_count": confirmation_bar_count,
+        "recent_close_min": recent_close_min,
         "latest_price_time": intraday.get("latest_price_time") if intraday else "",
         "breakout20": bool(latest_price > prior20_high),
+        "breakout65": bool(pd.notna(prior_strict_high) and latest_price > prior_strict_high),
+        "confirmed_breakout65": bool(
+            pd.notna(prior_strict_high)
+            and confirmation_bar_count >= 2
+            and pd.notna(recent_close_min)
+            and recent_close_min > prior_strict_high
+        ),
     }
 
 
@@ -487,9 +601,11 @@ def risk_flags(row: dict[str, Any], config: dict[str, Any]) -> str:
 
 def select_candidates(results: pd.DataFrame, histories: dict[str, pd.DataFrame], config: dict[str, Any], metadata: dict[str, dict[str, str]], intraday: dict[str, dict[str, Any]]) -> pd.DataFrame:
     prod = production_config(config)
+    strict = strict_notification_config(config)
     rows: list[dict[str, Any]] = []
     rs_min = float(prod.get("rs_min", 98))
     volume_min = float(prod.get("s_volume_multiple_min", prod.get("volume_multiple_min", 1.2)))
+    strict_lookback_days = int(strict.get("breakout_lookback_days", 65))
     for _, base in results.iterrows():
         ticker = str(base.get("ticker", "")).upper()
         if ticker not in histories:
@@ -498,7 +614,11 @@ def select_candidates(results: pd.DataFrame, histories: dict[str, pd.DataFrame],
         if not pd.notna(rs) or rs < rs_min:
             continue
         try:
-            metrics = breakout_metrics(histories[ticker], intraday.get(ticker))
+            metrics = breakout_metrics(
+                histories[ticker],
+                intraday.get(ticker),
+                strict_lookback_days=strict_lookback_days,
+            )
         except Exception:
             continue
         if not metrics["breakout20"] or not pd.notna(metrics.get("volume_multiple")) or float(metrics["volume_multiple"]) < volume_min:
@@ -815,6 +935,8 @@ def run(config: dict[str, Any], outdir: Path, period: str) -> tuple[pd.DataFrame
     market_caps = fetch_market_caps(list(histories))
     thresholds = thresholds_from_config(config)
     results = scan_universe(histories, benchmark, market_caps=market_caps, thresholds=thresholds)
+    for key, value in benchmark_regime_fields(benchmark).items():
+        results[key] = value
     if notify.get("mode") == "production_momentum":
         metadata = load_company_metadata(cache_path)
         prod = production_config(config)

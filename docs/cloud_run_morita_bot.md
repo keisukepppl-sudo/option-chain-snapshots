@@ -22,6 +22,8 @@ The user-facing checkpoint slots are fixed in `Asia/Tokyo`, so they do not move 
 
 Each checkpoint uses only complete 5-minute bars whose start timestamp is strictly before the decision cutoff. The 22:30 slot intentionally executes at 22:35 JST so the first regular-session 5-minute bar is complete and the notification remains within the accepted five-minute delay.
 
+Candidate notifications fail closed unless the row is S/A and passes the shared strict gate: prior 65-session high, time-of-day adjusted RVOL >= 1.5x, two completed 5-minute closes above the pivot, price above VWAP/open and within 1% of the session high, and QQQ above its 20-day EMA. The 22:35 run therefore remains a status checkpoint but cannot emit an actionable candidate from only one completed bar. Failed rows remain in scan output with `notification_gate_reasons` for calibration.
+
 During U.S. standard time, the fixed 22:30 and 23:00 JST slots occur before the NYSE regular session opens. The service still sends an explicit heartbeat stating that S/A cannot yet be evaluated, rather than failing silently or reporting a false zero-candidate scan.
 
 Cloud Storage uses separate `shadow` and `live` state paths. Shadow testing therefore does not suppress the next live notification.
