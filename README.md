@@ -107,21 +107,29 @@ notify:
   mode: production_momentum
 ```
 
-S-grade notification means the symbol is worth checking for a 60DTE ATM/+20%
-call vertical during the intraday checks:
+The scanner first records broad research candidates using:
 
 - Universe: Russell1000 via current iShares IWB holdings
 - Standard RS > 98
 - Intraday latest price > prior 20-day High
 - Intraday volume pace >= 1.2x versus the 50-day average daily volume pace
-- Option Liquidity: liquid by the configured option-chain heuristic
 
-A-grade notification is a watch candidate:
+Those broad candidates are shadow/research rows, not automatically actionable
+notifications. Discord and Pushover candidate notifications require S or A rank
+and every `strict_notification_gate` condition:
 
-- Standard RS > 98
-- Intraday latest price > prior 20-day High
-- Intraday volume pace >= 1.2x
-- Option Liquidity weak, unavailable, or not yet checked
+- latest price above the prior 65-session high
+- time-of-day adjusted RVOL >= 1.5x, using a U-shaped regular-session volume curve
+- the two most recent completed 5-minute bars both closed above the 65-session pivot
+- price above VWAP and at or above the session open
+- price within 1% of the intraday high
+- QQQ above its 20-day EMA
+
+A missing input fails closed. A candidate that misses any strict condition is
+kept in the daily/excluded CSV with `notification_gate_reasons`, but it is not
+sent. The configured 50% final-conversion value is an operating calibration
+target, not a guarantee; the intended measurement is whether an actionable
+intraday notification remains S/A at the final pre-close scan.
 
 Market cap is not an exclusion filter in `production_momentum` mode. It is
 displayed as a bucket and quality note because Phase 11 out-of-sample validation
@@ -196,8 +204,10 @@ GitHub Actions runs the production momentum checks at:
 
 GitHub Actions cron uses UTC.
 
-Intraday checks use latest intraday price and intraday volume pace, not daily
-close.
+Intraday checks use latest intraday price and completed 5-minute bars, not daily
+close. At 10:00 ET the strict RVOL denominator assumes about 17% of normal daily
+volume has traded; the legacy linear clock-time denominator was only about 7.7%
+and could materially overstate opening RVOL.
 
 ### Production momentum alert scoring
 
@@ -206,11 +216,11 @@ notification rank uses:
 
 ```text
 production_live_score = conviction_score - day10_subscore
-production_adjusted_score = production_live_score - 5 if volume_multiple < 1.5 else production_live_score
+production_adjusted_score = production_live_score - 5 if time_adjusted_volume_multiple < 1.5 else production_live_score
 ```
 
 If `conviction_score` is not present, the bot reconstructs `production_live_score` from
-scan-time information only: RS, volume multiple, accumulation, 20-day breakout
+scan-time information only: RS, time-adjusted volume multiple, accumulation, 20-day breakout
 excess, sector/theme proxy, and market-cap bucket. The notification layer
 checks for forbidden columns such as `day10`, `day20`, `future`, `exit_pnl`,
 and `trade_max_drawdown`, and prints diagnostics for any detected leakage.
@@ -229,6 +239,7 @@ Hard notification exclusions:
 - gap >= 10%
 - production_adjusted_score < 25
 - price < 5
+- any failed `strict_notification_gate` condition
 
 Every scan candidate is still saved to research logs:
 
@@ -239,16 +250,15 @@ Every scan candidate is still saved to research logs:
 
 ### Pushover alerts
 
-Pushover is an optional additional channel. Discord behavior is unchanged.
-The current production schedule is:
+Pushover is an optional additional channel. Candidate payloads use the same
+strict S/A eligibility as Discord. The current production schedule is:
 
-- 22:30 JST (`30 13 * * 1-5` UTC): Discord plus Pushover normal priority `0`
-  for S/A/B/C candidates.
-- 23:00 JST (`0 14 * * 1-5` UTC): Discord plus Pushover priority `1` if any
-  S/A/B exists; priority `0` if only C exists.
-- 04:15 / 04:25 / 04:35 JST (`15/25/35 19 * * 1-5` UTC): S/A/B trigger Pushover Emergency
-  priority `2`; C remains normal priority `0`; excluded/D candidates are log
-  only.
+- Fixed-JST Cloud Run checkpoints send S/A status; the first actionable signal
+  needs two completed 5-minute bars.
+- 15:15-15:40 ET wake checks send Emergency only for a strict-gate S that was
+  absent from the 24:00 JST execution baseline.
+- The 10:15 JST final-status GitHub workflow runs Tuesday-Saturday UTC/JST so
+  Friday's U.S. session is included.
 
 Emergency payload uses `priority=2`, `retry=60`, `expire=600`, and
 `sound=siren`.

@@ -119,6 +119,8 @@ def _eligible(candidates: pd.DataFrame) -> pd.DataFrame:
     frame = candidates.copy()
     if "exclusion_reason" in frame.columns:
         frame = frame[frame["exclusion_reason"].fillna("") == ""]
+    if "notification_eligible" in frame.columns:
+        frame = frame[frame["notification_eligible"].fillna(False).astype(bool)]
     return frame
 
 
@@ -174,7 +176,7 @@ def _build_message(candidates: pd.DataFrame, csv_path: Path, schedule_utc: str, 
 
     sections = [
         title,
-        "RS98 + 20-day breakout + volume pace. Future information is not used.",
+        "Strict gate: RS98 + 65-day breakout + time-adjusted RVOL + completed-bar confirmation.",
     ]
     shown = 0
     for rank in ["S", "A"]:

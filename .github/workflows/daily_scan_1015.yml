@@ -2,8 +2,9 @@ name: Russell1000 Scanner 10:15 JST Status
 
 on:
   schedule:
-    # GitHub Actions cron uses UTC. 10:15 JST = 01:15 UTC.
-    - cron: "15 1 * * 1-5"
+    # GitHub Actions cron uses UTC. 10:15 JST after a Mon-Fri U.S. session
+    # falls on Tue-Sat in Japan.
+    - cron: "15 1 * * 2-6"
   workflow_dispatch:
 
 jobs:

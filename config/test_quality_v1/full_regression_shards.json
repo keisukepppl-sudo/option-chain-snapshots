@@ -65,6 +65,7 @@
         "tests/test_market_environment_score_v0.py",
         "tests/test_morita_cloud_logic.py",
         "tests/test_notifications.py",
+        "tests/test_strict_notification_gate.py",
         "tests/test_phase1_5f_cta_vol_interpretation.py",
         "tests/test_production_scanner_entry_et_slots.py",
         "tests/test_regression_ci_quality_gate_v1.py"
