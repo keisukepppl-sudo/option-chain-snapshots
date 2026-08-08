@@ -1,0 +1,115 @@
+name: Deploy Morita Bot to Cloud Run
+
+on:
+  workflow_run:
+    workflows:
+      - CI
+    types:
+      - completed
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: morita-bot-cloud-run-production
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    if: >-
+      (github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main') ||
+      (github.event_name == 'workflow_run' &&
+       github.event.workflow_run.conclusion == 'success' &&
+       github.event.workflow_run.event == 'push' &&
+       github.event.workflow_run.head_branch == 'main')
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      id-token: write
+    env:
+      PROJECT_ID: ${{ vars.GCP_PROJECT_ID }}
+      WIF_PROVIDER: ${{ vars.GCP_WIF_PROVIDER }}
+      DEPLOY_SERVICE_ACCOUNT: ${{ vars.GCP_DEPLOY_SERVICE_ACCOUNT }}
+      REGION: us-central1
+      ARTIFACT_REPOSITORY: morita-bot
+      SERVICE: morita-bot-tick
+
+    steps:
+      - name: Select tested revision
+        id: revision
+        env:
+          WORKFLOW_RUN_SHA: ${{ github.event.workflow_run.head_sha }}
+          DISPATCH_SHA: ${{ github.sha }}
+        run: |
+          if [[ -n "${WORKFLOW_RUN_SHA}" ]]; then
+            echo "sha=${WORKFLOW_RUN_SHA}" >> "${GITHUB_OUTPUT}"
+          else
+            echo "sha=${DISPATCH_SHA}" >> "${GITHUB_OUTPUT}"
+          fi
+
+      - name: Checkout tested revision
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ steps.revision.outputs.sha }}
+
+      - name: Validate deployment variables
+        run: |
+          test -n "${PROJECT_ID}"
+          test -n "${WIF_PROVIDER}"
+          test -n "${DEPLOY_SERVICE_ACCOUNT}"
+
+      - name: Build container
+        env:
+          DEPLOY_SHA: ${{ steps.revision.outputs.sha }}
+        run: |
+          IMAGE="${REGION}-docker.pkg.dev/${PROJECT_ID}/${ARTIFACT_REPOSITORY}/${SERVICE}:${DEPLOY_SHA}"
+          echo "IMAGE=${IMAGE}" >> "${GITHUB_ENV}"
+          docker build --tag "${IMAGE}" .
+
+      - name: Authenticate to Google Cloud
+        uses: google-github-actions/auth@v3
+        with:
+          project_id: ${{ env.PROJECT_ID }}
+          workload_identity_provider: ${{ env.WIF_PROVIDER }}
+          service_account: ${{ env.DEPLOY_SERVICE_ACCOUNT }}
+
+      - name: Set up Google Cloud CLI
+        uses: google-github-actions/setup-gcloud@v3
+        with:
+          project_id: ${{ env.PROJECT_ID }}
+
+      - name: Push container
+        run: |
+          gcloud auth configure-docker "${REGION}-docker.pkg.dev" --quiet
+          docker push "${IMAGE}"
+
+      - name: Update Cloud Run image
+        run: |
+          gcloud run services update "${SERVICE}" \
+            --project="${PROJECT_ID}" \
+            --region="${REGION}" \
+            --image="${IMAGE}" \
+            --quiet
+
+      - name: Verify ready revision
+        run: |
+          DEPLOYED_IMAGE="$(gcloud run services describe "${SERVICE}" \
+            --project="${PROJECT_ID}" \
+            --region="${REGION}" \
+            --format='value(spec.template.spec.containers[0].image)')"
+          READY_REVISION="$(gcloud run services describe "${SERVICE}" \
+            --project="${PROJECT_ID}" \
+            --region="${REGION}" \
+            --format='value(status.latestReadyRevisionName)')"
+
+          test "${DEPLOYED_IMAGE}" = "${IMAGE}"
+          test -n "${READY_REVISION}"
+
+          {
+            echo "### Cloud Run deployment"
+            echo "- Service: \`${SERVICE}\`"
+            echo "- Revision: \`${READY_REVISION}\`"
+            echo "- Image: \`${DEPLOYED_IMAGE}\`"
+          } >> "${GITHUB_STEP_SUMMARY}"

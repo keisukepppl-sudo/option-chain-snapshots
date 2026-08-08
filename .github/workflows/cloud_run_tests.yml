@@ -8,6 +8,7 @@ on:
       - "Dockerfile"
       - "requirements-cloudrun.txt"
       - "deploy/bootstrap_gcp.sh"
+      - ".github/workflows/deploy_cloud_run.yml"
       - "tests/test_morita_cloud_logic.py"
       - ".github/workflows/cloud_run_tests.yml"
   push:
@@ -19,6 +20,7 @@ on:
       - "Dockerfile"
       - "requirements-cloudrun.txt"
       - "deploy/bootstrap_gcp.sh"
+      - ".github/workflows/deploy_cloud_run.yml"
       - "tests/test_morita_cloud_logic.py"
       - ".github/workflows/cloud_run_tests.yml"
 
