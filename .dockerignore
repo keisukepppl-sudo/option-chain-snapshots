@@ -12,3 +12,4 @@ scanner_alerts
 option_chain_snapshots
 outputs
 .scanner_state
+gha-creds-*.json
