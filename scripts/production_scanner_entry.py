@@ -59,12 +59,7 @@ def _production_live_score(row: dict[str, Any]) -> float:
         return max(0.0, conviction - day10_subscore)
 
     rs = _safe_float(row.get("standard_rs_score", row.get("rs")), 0.0)
-    adjusted_volume = _safe_float(row.get("time_adjusted_volume_multiple"), math.nan)
-    volume = (
-        adjusted_volume
-        if pd.notna(adjusted_volume)
-        else _safe_float(row.get("volume_multiple"), 0.0)
-    )
+    volume = _safe_float(row.get("volume_multiple"), 0.0)
     price = _safe_float(row.get("latest_price", row.get("close")), math.nan)
     prior_high = _safe_float(row.get("prior_20d_high"), math.nan)
     accumulation = _safe_float(row.get("accumulation_score"), math.nan)
@@ -155,61 +150,6 @@ def _exclusion_reason(row: dict[str, Any]) -> str:
     return ""
 
 
-def _strict_notification_gate(row: dict[str, Any], config: dict[str, Any]) -> tuple[bool, list[str]]:
-    gate = sn.strict_notification_config(config)
-    if not bool(gate.get("enabled", False)):
-        return True, []
-
-    reasons: list[str] = []
-    actionable_ranks = {str(rank) for rank in gate.get("actionable_ranks", ["S", "A"])}
-    rank = str(row.get("alert_rank", ""))
-    if rank not in actionable_ranks:
-        reasons.append("rank_below_actionable")
-
-    breakout65 = row.get("breakout65", False)
-    if breakout65 is None or pd.isna(breakout65) or not bool(breakout65):
-        reasons.append("not_above_prior_65d_high")
-
-    min_tod_volume = float(gate.get("min_time_adjusted_volume_multiple", 1.5))
-    tod_volume = _safe_float(row.get("time_adjusted_volume_multiple"), math.nan)
-    if not pd.notna(tod_volume) or tod_volume < min_tod_volume:
-        reasons.append("time_adjusted_volume_below_min")
-
-    min_bars = int(gate.get("min_confirmation_bars", 2))
-    confirmation_bars = int(_safe_float(row.get("confirmation_bar_count"), 0))
-    prior_high = _safe_float(row.get("prior_65d_high"), math.nan)
-    recent_close_min = _safe_float(row.get("recent_close_min"), math.nan)
-    if (
-        confirmation_bars < min_bars
-        or not pd.notna(prior_high)
-        or not pd.notna(recent_close_min)
-        or recent_close_min <= prior_high
-    ):
-        reasons.append("insufficient_completed_bar_confirmation")
-
-    if bool(gate.get("require_above_vwap", True)) and not sn.price_above_vwap(row):
-        reasons.append("below_or_missing_vwap")
-    if bool(gate.get("require_not_fading_from_open", True)) and not sn.not_fading_from_open(row):
-        reasons.append("below_or_missing_open")
-    if bool(gate.get("require_near_intraday_high", True)):
-        max_distance = float(gate.get("max_distance_to_intraday_high", 0.01))
-        intraday_high = _safe_float(row.get("intraday_high"), math.nan)
-        latest_price = _safe_float(row.get("latest_price", row.get("close")), math.nan)
-        if (
-            not pd.notna(intraday_high)
-            or not pd.notna(latest_price)
-            or intraday_high <= 0
-            or (intraday_high - latest_price) / intraday_high > max_distance
-        ):
-            reasons.append("too_far_below_intraday_high")
-    if bool(gate.get("require_qqq_above_20ema", True)):
-        qqq_above = row.get("qqq_above_20ema", False)
-        if qqq_above is None or pd.isna(qqq_above) or not bool(qqq_above):
-            reasons.append("qqq_not_above_20ema")
-
-    return not reasons, reasons
-
-
 def _catalyst_routing_config() -> dict[str, Any]:
     path = Path(os.environ.get("SCANNER_CONFIG_PATH", "config.yaml"))
     try:
@@ -297,32 +237,19 @@ def _record_emergency(candidates: pd.DataFrame, status: Any, sent: bool) -> None
 def _visible(candidates: pd.DataFrame) -> pd.DataFrame:
     if candidates.empty:
         return candidates
-    visible = candidates[
-        (candidates["exclusion_reason"].fillna("") == "")
-        & candidates["alert_rank"].isin(["S", "A"])
-    ].copy()
-    if "notification_eligible" in visible.columns:
-        visible = visible[visible["notification_eligible"].fillna(False).astype(bool)]
-    return visible
+    return candidates[(candidates["exclusion_reason"].fillna("") == "") & candidates["alert_rank"].isin(["S", "A", "B", "C"])].copy()
 
 
 def _patched_select_candidates(*args: Any, **kwargs: Any) -> pd.DataFrame:
     out = ORIGINAL_SELECT_CANDIDATES(*args, **kwargs)
     if out.empty:
         return out
-    config = kwargs.get("config")
-    if config is None and len(args) >= 3:
-        config = args[2]
-    config = config if isinstance(config, dict) else {}
     routing_config = _catalyst_routing_config()
     rows = []
     for _, original in out.iterrows():
         row = original.to_dict()
         live = _production_live_score(row)
-        scoring_volume = _safe_float(row.get("time_adjusted_volume_multiple"), math.nan)
-        if not pd.notna(scoring_volume):
-            scoring_volume = _safe_float(row.get("volume_multiple"), 0)
-        penalty = -5.0 if scoring_volume < 1.5 else 0.0
+        penalty = -5.0 if _safe_float(row.get("volume_multiple"), 0) < 1.5 else 0.0
         adjusted = max(0.0, live + penalty)
         rank = _rank(adjusted)
         row["production_live_score"] = live
@@ -335,24 +262,17 @@ def _patched_select_candidates(*args: Any, **kwargs: Any) -> pd.DataFrame:
         row["raw_suggested_size"] = _size(rank)
         row["conviction_tier"] = f"{rank} Tier"
         row["exclusion_reason"] = _exclusion_reason(row)
-        notification_eligible, gate_reasons = _strict_notification_gate(row, config)
-        notification_eligible = bool(notification_eligible and row["exclusion_reason"] == "")
-        row["notification_eligible"] = notification_eligible
-        row["notification_gate_version"] = str(
-            sn.strict_notification_config(config).get("version", "strict_v1")
-        )
-        row["notification_gate_reasons"] = "|".join(gate_reasons)
         row["option_liquidity_warning"] = "" if bool(row.get("option_liquidity_ok", False)) else str(row.get("option_liquidity_reason", "Option liquidity warning"))
 
-        if notification_eligible:
+        if row["exclusion_reason"] == "" and rank in {"S", "A", "B"}:
             row.update(catalyst_route_for(str(row.get("ticker", "")), routing_config))
         else:
-            reason = row["exclusion_reason"] or row["notification_gate_reasons"] or f"rank_{rank}_not_actionable"
+            reason = row["exclusion_reason"] or f"rank_{rank}_not_actionable"
             row.update(_not_evaluated_catalyst(reason))
 
         row["suggested_size"] = (
             "WATCH_ONLY"
-            if not notification_eligible or row.get("action_route") == "NEWS_SPIKE_WATCH_ONLY"
+            if row.get("action_route") == "NEWS_SPIKE_WATCH_ONLY"
             else row["raw_suggested_size"]
         )
         rows.append(row)
@@ -374,15 +294,7 @@ def _patched_save_candidates(candidates: pd.DataFrame, outdir: Path) -> Path:
     if candidates.empty:
         candidates.to_csv(excluded, index=False)
     else:
-        notification_eligible = candidates.get(
-            "notification_eligible",
-            pd.Series(False, index=candidates.index, dtype="bool"),
-        ).fillna(False).astype(bool)
-        candidates[
-            (candidates["exclusion_reason"].fillna("") != "")
-            | (candidates["alert_rank"] == "D")
-            | (~notification_eligible)
-        ].to_csv(excluded, index=False)
+        candidates[(candidates["exclusion_reason"].fillna("") != "") | (candidates["alert_rank"] == "D")].to_csv(excluded, index=False)
     return legacy
 
 
@@ -398,7 +310,6 @@ def _patched_schedule_kind(schedule_utc: str) -> str:
 
 def _patched_candidate_block(row: pd.Series) -> str:
     price = row.get("latest_price", row.get("close", math.nan))
-    confirmation_bars = int(_safe_float(row.get("confirmation_bar_count"), 0))
     action = row.get("action_route") or (
         "WAKE_AND_CHECK" if row.get("alert_rank") in {"S", "A", "B"} else "DISCORD_ONLY"
     )
@@ -416,16 +327,11 @@ def _patched_candidate_block(row: pd.Series) -> str:
         f"volume penalty: {float(row.get('volume_penalty', 0)):.0f} / suggested size: {row.get('suggested_size', 'N/A')} "
         f"(raw: {row.get('raw_suggested_size', 'N/A')})\n"
         f"gap: {sn.format_pct(row.get('gap_pct'))} / volume: {float(row.get('volume_multiple', 0)):.2f}x / price: {float(price):.2f}\n"
-        f"strict_volume: {float(row.get('time_adjusted_volume_multiple', math.nan)):.2f}x / "
-        f"prior_65d_high: {float(row.get('prior_65d_high', math.nan)):.2f} / "
-        f"confirmation_bars: {confirmation_bars}\n"
         f"sector: {row.get('sector_proxy', 'N/A')} / theme: {row.get('theme', 'N/A')}\n"
         f"{catalyst_line}"
         f"{headline_line}"
         f"option_liquidity_warning: {row.get('option_liquidity_warning', '') or 'None'}\n"
         f"exclusion_reason: {row.get('exclusion_reason', '') or 'None'}\n"
-        f"notification_eligible: {bool(row.get('notification_eligible', False))} / "
-        f"gate_reasons: {row.get('notification_gate_reasons', '') or 'None'}\n"
         f"action: {action} / reason: {row.get('action_reason', '') or 'None'}\n"
         f"scan_time_jst: {pd.Timestamp.now(tz='Asia/Tokyo').isoformat()}\n"
         "--------------------------------"
@@ -443,7 +349,7 @@ def _patched_build_message(candidates: pd.DataFrame, csv_path: Path, schedule_ut
     }.get(_patched_schedule_kind(schedule_utc), "Production Momentum Alert")
     sections = [
         title,
-        "Actionable gate: RS98 + 65-day breakout + time-adjusted RVOL + 2 completed bars + VWAP/open/high + QQQ regime.",
+        "RS98 + 20-day breakout + volume pace. Candidate discovery only.",
         "NEWS_SPIKE_WATCH_ONLY = contract/partnership/customer-win/order headline; no immediate call entry.",
     ]
     shown = 0
@@ -473,8 +379,7 @@ def _patched_select_pushover_candidates(candidates: pd.DataFrame, schedule_utc: 
     )
     base = candidates[
         (candidates["exclusion_reason"].fillna("") == "")
-        & candidates["alert_rank"].isin(["S", "A"])
-        & candidates.get("notification_eligible", pd.Series(False, index=candidates.index)).fillna(False).astype(bool)
+        & candidates["alert_rank"].isin(["S", "A", "B"])
         & (
             (routes != "NEWS_SPIKE_WATCH_ONLY")
             | (not bool(routing.get("suppress_pushover_emergency", True)))

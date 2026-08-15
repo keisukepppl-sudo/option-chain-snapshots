@@ -48,22 +48,6 @@ notify:
       lookback_hours: 48
       max_news_items: 8
       suppress_pushover_emergency: true
-    strict_notification_gate:
-      enabled: true
-      version: strict_v1
-      actionable_ranks:
-        - S
-        - A
-      breakout_lookback_days: 20
-      min_time_adjusted_volume_multiple: 1.5
-      min_confirmation_bars: 2
-      require_above_vwap: true
-      require_not_fading_from_open: true
-      require_near_intraday_high: true
-      max_distance_to_intraday_high: 0.01
-      require_qqq_above_20ema: true
-      target_final_conversion_rate: 0.50
-      measurement: "actionable intraday notification remains S/A at the last pre-close scan"
     exit_rules:
       profit_take: 1.25
       time_stop_days: 10

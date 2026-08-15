@@ -42,7 +42,7 @@ REAL_SEND_DISCORD_ALERT = entry.sn.send_discord_alert
 REAL_PUSHOVER_ENABLED = entry.sn.pushover_enabled
 REAL_SEND_PUSHOVER_EMERGENCY = entry.REAL_SEND_PUSHOVER_EMERGENCY
 REAL_SAVE_CANDIDATES = entry.sn.save_candidates
-EMERGENCY_RANKS = ["S", "A"]
+EMERGENCY_RANKS = ["S", "A", "B", "C"]
 EMERGENCY_RANK_SET = set(EMERGENCY_RANKS)
 SCAN_CONTEXT: dict[str, Any] = {
     "candidates_total": 0,
@@ -169,7 +169,7 @@ def _logged_save_candidates(candidates: pd.DataFrame, outdir: Path) -> Path:
         }
     )
     print(f"candidates count: {len(candidates)}", flush=True)
-    print(f"notifiable S/A candidates count: {notifiable_count}", flush=True)
+    print(f"notifiable S/A/B/C candidates count: {notifiable_count}", flush=True)
     print(f"rank counts: {_format_rank_counts(rank_counts)}", flush=True)
     if notifiable_count == 0:
         print("No breakout candidates found", flush=True)
@@ -180,22 +180,14 @@ def _select_sabcd_pushover_candidates(candidates: pd.DataFrame, schedule_utc: st
     if schedule_utc not in PRE_CLOSE_CRONS or candidates.empty:
         print("Pushover skipped: not pre-close schedule or no scanner candidates", flush=True)
         return candidates.iloc[0:0].copy()
-    notification_eligible = candidates.get(
-        "notification_eligible",
-        pd.Series(False, index=candidates.index, dtype="bool"),
-    ).fillna(False).astype(bool)
-    base = candidates[
-        (candidates["exclusion_reason"].fillna("") == "")
-        & candidates["alert_rank"].isin(["S", "A"])
-        & notification_eligible
-    ].copy()
+    base = candidates[(candidates["exclusion_reason"].fillna("") == "") & candidates["alert_rank"].isin(EMERGENCY_RANKS)].copy()
     if base.empty:
-        print("Pushover skipped: no strict-gate S/A candidates", flush=True)
+        print("Pushover skipped: no S/A/B/C candidates", flush=True)
     state_path = entry._state_path(Path("scanner_alerts") / entry.sn.today_str() / "russell1000_momentum_candidates.csv")
     state = entry._load_state(state_path)
     sendable = pd.DataFrame([row for _, row in base.iterrows() if entry._needs_emergency(row, state)])
     if not base.empty and sendable.empty:
-        print("Pushover skipped: duplicate S/A emergency candidates already sent", flush=True)
+        print("Pushover skipped: duplicate S/A/B/C emergency candidates already sent", flush=True)
     entry.EMERGENCY_CONTEXT.clear()
     entry.EMERGENCY_CONTEXT.update({"state_path": state_path, "state": state, "candidates": sendable})
     return sendable
@@ -255,8 +247,6 @@ def _rank_counts(candidates: pd.DataFrame) -> dict[str, int]:
         frame = frame[frame["exclusion_reason"].fillna("") == ""]
     elif "excluded" in frame.columns:
         frame = frame[~frame["excluded"].astype(bool)]
-    if "notification_eligible" in frame.columns:
-        frame = frame[frame["notification_eligible"].fillna(False).astype(bool)]
     values = frame[rank_col].value_counts(dropna=False).to_dict()
     for rank in EMERGENCY_RANKS:
         counts[rank] = int(values.get(rank, 0))
@@ -284,7 +274,7 @@ def _completion_message(status: str = "SUCCESS") -> str:
     candidates = int(SCAN_CONTEXT.get("notifiable_candidates", 0))
     schedule_utc = str(SCAN_CONTEXT.get("schedule_utc", ""))
     scheduled_scan_jst = _scheduled_scan_jst(schedule_utc)
-    today_line = "No strict-gate S/A candidates found." if candidates == 0 else "Strict-gate S/A candidates found. See Discord/CSV for details."
+    today_line = "No S/A/B/C candidates found." if candidates == 0 else "S/A/B/C candidates found. See Discord/CSV for details."
     delayed = _delay_notice(schedule_utc)
     prefix = f"{delayed}\n" if delayed else ""
     return (
