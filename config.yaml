@@ -54,7 +54,7 @@ notify:
       actionable_ranks:
         - S
         - A
-      breakout_lookback_days: 65
+      breakout_lookback_days: 20
       min_time_adjusted_volume_multiple: 1.5
       min_confirmation_bars: 2
       require_above_vwap: true
