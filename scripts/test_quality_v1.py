@@ -180,3 +180,4 @@ def cleanup_temp_root(path: Path) -> None:
     if resolved == parent or not resolved.name.startswith("p15e"):
         raise ValueError(f"unsafe_temp_cleanup:{resolved}")
     shutil.rmtree(resolved, ignore_errors=True)
+
