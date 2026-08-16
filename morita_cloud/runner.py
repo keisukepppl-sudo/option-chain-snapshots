@@ -28,6 +28,10 @@ from morita_cloud.logic import (
     ticker_lists,
     trading_date_et,
 )
+from morita_cloud.notification_cooldown import (
+    filter_recently_notified,
+    recently_notified_tickers_gcs,
+)
 from morita_cloud.notifications import (
     checkpoint_message,
     full_discord_message,
@@ -172,24 +176,39 @@ class TickRunner:
         diagnostics: dict[str, Any],
         output_name: str,
     ) -> TickResult:
+        blocked_tickers = recently_notified_tickers_gcs(self.store, date_et, self.mode, state)
+        notification_candidates = filter_recently_notified(candidates, blocked_tickers)
+        raw_visible = checkpoint_candidates(candidates)
+        notified_visible = checkpoint_candidates(notification_candidates)
+        raw_visible_tickers = set(raw_visible["ticker"].astype(str).tolist()) if not raw_visible.empty else set()
+        notified_visible_tickers = set(notified_visible["ticker"].astype(str).tolist()) if not notified_visible.empty else set()
+        cooldown_suppressed = sorted(raw_visible_tickers - notified_visible_tickers)
+
         notification = send_notification(
-            checkpoint_message(action, candidates, cutoff, diagnostics),
+            checkpoint_message(action, notification_candidates, cutoff, diagnostics),
             title=f"Morita Bot {action} JST",
             priority=0 if action == "22:30" else 1,
             discord_message=full_discord_message(
                 f"{action} JST S+A Check",
-                checkpoint_candidates(candidates),
+                notified_visible,
                 cutoff,
             ),
             dry_run=self.dry_run,
         )
+        # Keep the raw checkpoint set for the 24:00 execution baseline. The
+        # cooldown changes notification delivery only, not signal generation or
+        # internal candidate state.
         s_tickers, a_tickers = ticker_lists(candidates)
+        notified_s_tickers, notified_a_tickers = ticker_lists(notification_candidates)
         state.setdefault("slots", {})[action] = {
             "completed": True,
             "completed_at_et": timestamp.isoformat(),
             "decision_cutoff_et": cutoff.isoformat(),
             "s_tickers": s_tickers,
             "a_tickers": a_tickers,
+            "notified_s_tickers": notified_s_tickers,
+            "notified_a_tickers": notified_a_tickers,
+            "notification_cooldown_suppressed_tickers": cooldown_suppressed,
             "notification": notification,
             "output": output_name,
             "market_not_open": bool(diagnostics.get("market_not_open")),
@@ -205,6 +224,9 @@ class TickRunner:
             {
                 "s_tickers": s_tickers,
                 "a_tickers": a_tickers,
+                "notified_s_tickers": notified_s_tickers,
+                "notified_a_tickers": notified_a_tickers,
+                "notification_cooldown_suppressed_tickers": cooldown_suppressed,
                 "notification": notification,
                 "output": output_name,
                 "diagnostics": diagnostics,
@@ -223,13 +245,28 @@ class TickRunner:
         diagnostics: dict[str, Any],
         output_name: str,
     ) -> TickResult:
-        late = new_late_s_candidates(candidates, state)
+        raw_late = new_late_s_candidates(candidates, state)
+        blocked_tickers = recently_notified_tickers_gcs(self.store, date_et, self.mode, state)
+        late = filter_recently_notified(raw_late, blocked_tickers)
+        raw_late_tickers = set(raw_late["ticker"].astype(str).tolist()) if not raw_late.empty else set()
+        late_tickers = set(late["ticker"].astype(str).tolist()) if not late.empty else set()
+        cooldown_suppressed = sorted(raw_late_tickers - late_tickers)
+
         state["last_wake_scan_at_et"] = timestamp.isoformat()
         state["last_wake_cutoff_et"] = cutoff.isoformat()
         state["last_wake_output"] = output_name
         if late.empty:
             self.store.write_json(state_name, state, generation=generation)
-            return TickResult("ok_no_new_s", "WAKE", date_et, {"output": output_name, "diagnostics": diagnostics})
+            return TickResult(
+                "ok_no_new_s",
+                "WAKE",
+                date_et,
+                {
+                    "output": output_name,
+                    "diagnostics": diagnostics,
+                    "notification_cooldown_suppressed_tickers": cooldown_suppressed,
+                },
+            )
 
         notification = send_notification(
             wake_message(late, state, cutoff),
@@ -258,6 +295,7 @@ class TickRunner:
             date_et,
             {
                 "tickers": sorted(late["ticker"].astype(str).unique().tolist()),
+                "notification_cooldown_suppressed_tickers": cooldown_suppressed,
                 "notification": notification,
                 "output": output_name,
                 "diagnostics": diagnostics,

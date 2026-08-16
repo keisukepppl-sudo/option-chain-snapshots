@@ -8,6 +8,10 @@ from typing import Any
 import pandas as pd
 
 import scripts.production_scanner_entry_0430 as legacy
+from morita_cloud.notification_cooldown import (
+    filter_recently_notified,
+    recently_notified_tickers_files,
+)
 
 entry = legacy.entry
 
@@ -47,7 +51,7 @@ CRON_RUNS: dict[str, tuple[str, str, bool]] = {
 }
 
 CAPTURE: dict[str, Any] = {"candidates": pd.DataFrame(), "csv_path": None}
-RUN_CONTEXT: dict[str, Any] = {"slot": None, "state": {}, "fallback": False}
+RUN_CONTEXT: dict[str, Any] = {"slot": None, "state": {}, "fallback": False, "cooldown_blocked": set()}
 
 
 def now_et() -> pd.Timestamp:
@@ -119,6 +123,8 @@ def _eligible(candidates: pd.DataFrame) -> pd.DataFrame:
     frame = candidates.copy()
     if "exclusion_reason" in frame.columns:
         frame = frame[frame["exclusion_reason"].fillna("") == ""]
+    if "notification_eligible" in frame.columns:
+        frame = frame[frame["notification_eligible"].fillna(False).astype(bool)]
     return frame
 
 
@@ -162,11 +168,12 @@ def _build_message(candidates: pd.DataFrame, csv_path: Path, schedule_utc: str, 
     slot = str(RUN_CONTEXT.get("slot") or "")
     state = RUN_CONTEXT.get("state") or {}
     visible = notification_candidates(candidates, slot, state)
+    visible = filter_recently_notified(visible, RUN_CONTEXT.get("cooldown_blocked", set()))
 
     if slot in CHECKPOINT_SLOTS:
         title = f"{slot} ET S+A Breakout Check"
         if visible.empty:
-            return f"{title}\n\nNo S/A candidates.\nCSV: `{csv_path}`"
+            return f"{title}\n\nNo new S/A candidates after notification cooldown.\nCSV: `{csv_path}`"
     else:
         title = "Post-Noon New S Wake Check"
         if visible.empty:
@@ -174,7 +181,7 @@ def _build_message(candidates: pd.DataFrame, csv_path: Path, schedule_utc: str, 
 
     sections = [
         title,
-        "RS98 + 20-day breakout + volume pace. Future information is not used.",
+        "RS98 + 20-day breakout + volume pace. Candidate discovery only.",
     ]
     shown = 0
     for rank in ["S", "A"]:
@@ -272,7 +279,19 @@ def main() -> None:
 
     path = state_path()
     state = load_state(path)
-    RUN_CONTEXT.update({"slot": slot, "state": state, "fallback": fallback})
+    blocked_tickers = recently_notified_tickers_files(
+        STATE_DIR,
+        trading_date_et(),
+        state,
+    )
+    RUN_CONTEXT.update(
+        {
+            "slot": slot,
+            "state": state,
+            "fallback": fallback,
+            "cooldown_blocked": blocked_tickers,
+        }
+    )
 
     if slot in CHECKPOINT_SLOTS and bool(state.get("slots", {}).get(slot, {}).get("completed")):
         print(f"Checkpoint {slot} ET already completed; duplicate/fallback suppressed", flush=True)
@@ -285,32 +304,52 @@ def main() -> None:
     _require_pushover()
     if slot in CHECKPOINT_SLOTS:
         priority = 0 if slot == "10:00" else 1
+        raw_s_tickers, raw_a_tickers = _ticker_lists(candidates)
+        notification_frame = filter_recently_notified(candidates, blocked_tickers)
+        notified_s_tickers, notified_a_tickers = _ticker_lists(notification_frame)
+        raw_visible = set(raw_s_tickers + raw_a_tickers)
+        notified_visible = set(notified_s_tickers + notified_a_tickers)
+        cooldown_suppressed = sorted(raw_visible - notified_visible)
         result = legacy.REAL_SEND_PUSHOVER_MESSAGE(
-            _checkpoint_pushover_message(slot, candidates),
+            _checkpoint_pushover_message(slot, notification_frame),
             title=f"Morita Bot {slot} ET",
             priority=priority,
         )
-        s_tickers, a_tickers = _ticker_lists(candidates)
         state.setdefault("slots", {})[slot] = {
             "completed": True,
             "completed_at_et": now_et().isoformat(),
-            "s_tickers": s_tickers,
-            "a_tickers": a_tickers,
+            "s_tickers": raw_s_tickers,
+            "a_tickers": raw_a_tickers,
+            "notified_s_tickers": notified_s_tickers,
+            "notified_a_tickers": notified_a_tickers,
+            "notification_cooldown_suppressed_tickers": cooldown_suppressed,
             "pushover_status": result.get("status_code"),
             "fallback_run": bool(fallback),
         }
         if slot == "12:00":
             state["noon_snapshot_complete"] = True
-            state["noon_execution_tickers"] = sorted(set(s_tickers + a_tickers))
+            state["noon_execution_tickers"] = sorted(set(raw_s_tickers + raw_a_tickers))
         save_state(path, state)
-        print(f"Checkpoint {slot} ET recorded: S={s_tickers} A={a_tickers}", flush=True)
+        print(
+            f"Checkpoint {slot} ET recorded: raw_S={raw_s_tickers} raw_A={raw_a_tickers} "
+            f"notified_S={notified_s_tickers} notified_A={notified_a_tickers} "
+            f"cooldown_suppressed={cooldown_suppressed}",
+            flush=True,
+        )
         return
 
-    new_s = wake_candidates(candidates, state)
+    raw_new_s = wake_candidates(candidates, state)
+    new_s = filter_recently_notified(raw_new_s, blocked_tickers)
+    raw_new_tickers = set(raw_new_s["ticker"].astype(str).tolist()) if not raw_new_s.empty else set()
+    new_tickers = set(new_s["ticker"].astype(str).tolist()) if not new_s.empty else set()
+    cooldown_suppressed = sorted(raw_new_tickers - new_tickers)
     state["last_wake_scan_at_et"] = now_et().isoformat()
     if new_s.empty:
         save_state(path, state)
-        print("No post-noon new S candidates; no wake notification", flush=True)
+        print(
+            f"No post-noon new S candidates; no wake notification; cooldown_suppressed={cooldown_suppressed}",
+            flush=True,
+        )
         return
 
     result = legacy.REAL_SEND_PUSHOVER_MESSAGE(
@@ -331,7 +370,10 @@ def main() -> None:
             "pushover_status": result.get("status_code"),
         }
     save_state(path, state)
-    print(f"Emergency sent for post-noon new S: {sorted(sent_map)}", flush=True)
+    print(
+        f"Emergency sent for post-noon new S: {sorted(new_tickers)}; cooldown_suppressed={cooldown_suppressed}",
+        flush=True,
+    )
 
 
 if __name__ == "__main__":
