@@ -129,7 +129,6 @@ def collect_coverage(registry: dict[str, Any], python_executable: str = sys.exec
         "canonical": {
             "command": canonical_result.command,
             "returncode": canonical_result.returncode,
-            "stdout": canonical_result.stdout,
             "stderr": canonical_result.stderr,
         }
     }
@@ -138,7 +137,7 @@ def collect_coverage(registry: dict[str, Any], python_executable: str = sys.exec
     for shard in registry["shards"]:
         shard_id = str(shard["shard_id"])
         nodes, result = collect_nodes_for_targets(python_executable, [str(target) for target in shard["pytest_targets"]])
-        command_results[shard_id] = {"command": result.command, "returncode": result.returncode, "stdout": result.stdout, "stderr": result.stderr}
+        command_results[shard_id] = {"command": result.command, "returncode": result.returncode, "stderr": result.stderr}
         if result.returncode != 0:
             return {"coverage_equal": False, "collection_failed": shard_id, "command_results": command_results}
         shard_nodes[shard_id] = nodes
