@@ -1,5 +1,5 @@
 {
-  "registry_version": "full_regression_shards_v1_0_1",
+  "registry_version": "full_regression_shards_v1_0_2",
   "purpose": "Deterministic pytest full-regression coverage shards. No deselection, ignore, xfail, allow-failure, or market-data access.",
   "canonical_collection_command": [
     "python",
@@ -64,6 +64,7 @@
         "tests/test_market_bomb_vol_control_research_v1.py",
         "tests/test_market_environment_score_v0.py",
         "tests/test_morita_cloud_logic.py",
+        "tests/test_notification_cooldown.py",
         "tests/test_notifications.py",
         "tests/test_strict_notification_gate.py",
         "tests/test_phase1_5f_cta_vol_interpretation.py",
