@@ -10,6 +10,7 @@ on:
       - "deploy/bootstrap_gcp.sh"
       - ".github/workflows/deploy_cloud_run.yml"
       - "tests/test_morita_cloud_logic.py"
+      - "tests/test_notification_cooldown.py"
       - ".github/workflows/cloud_run_tests.yml"
   push:
     branches:
@@ -22,6 +23,7 @@ on:
       - "deploy/bootstrap_gcp.sh"
       - ".github/workflows/deploy_cloud_run.yml"
       - "tests/test_morita_cloud_logic.py"
+      - "tests/test_notification_cooldown.py"
       - ".github/workflows/cloud_run_tests.yml"
 
 jobs:
@@ -42,7 +44,7 @@ jobs:
         run: python -m compileall -q morita_cloud cloud_run_app.py scripts/production_scanner_entry_et_slots.py
 
       - name: Run Cloud Run logic tests
-        run: python -m pytest -vv tests/test_morita_cloud_logic.py
+        run: python -m pytest -vv tests/test_morita_cloud_logic.py tests/test_notification_cooldown.py
 
       - name: Run GitHub fallback tests
         run: python -m pytest -vv tests/test_production_scanner_entry_et_slots.py
