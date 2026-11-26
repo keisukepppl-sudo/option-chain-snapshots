@@ -1,0 +1,7 @@
+date,ticker,spot,snapshot_file,prev_file,net_gex,gex_regime,gamma_flip_approx,call_gex_wall,put_gex_wall,call_oi_wall,put_oi_wall
+2026-11-26,SPY,716.7000122070312,option_chain_snapshots/SPY/SPY_2026-11-26.csv,option_chain_snapshots/SPY/SPY_2026-11-25.csv,-6172041438.832493,NEGATIVE_GEX,,720.0,700.0,800.0,700.0
+2026-11-26,QQQ,633.9299926757812,option_chain_snapshots/QQQ/QQQ_2026-11-26.csv,option_chain_snapshots/QQQ/QQQ_2026-11-25.csv,-2617254430.7621818,NEGATIVE_GEX,,680.0,640.0,700.0,550.0
+2026-11-26,SOXX,127.9800033569336,option_chain_snapshots/SOXX/SOXX_2026-11-26.csv,option_chain_snapshots/SOXX/SOXX_2026-11-25.csv,-61245689.13853432,NEGATIVE_GEX,,155.0,130.0,170.0,110.0
+2026-11-26,SMH,422.4599914550781,option_chain_snapshots/SMH/SMH_2026-11-26.csv,option_chain_snapshots/SMH/SMH_2026-11-25.csv,-183543074.25657505,NEGATIVE_GEX,105.0,425.0,420.0,500.0,340.0
+2026-11-26,MU,601.25,option_chain_snapshots/MU/MU_2026-11-26.csv,option_chain_snapshots/MU/MU_2026-11-25.csv,-130979577.2532602,NEGATIVE_GEX,15.0,630.0,600.0,900.0,400.0
+2026-11-26,DRAM,34.83000183105469,option_chain_snapshots/DRAM/DRAM_2026-11-26.csv,option_chain_snapshots/DRAM/DRAM_2026-11-25.csv,-6276962.3663909715,NEGATIVE_GEX,,36.0,40.0,60.0,40.0
